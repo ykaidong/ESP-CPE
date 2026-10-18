@@ -1,0 +1,229 @@
+# 运行时工作流程与等待点
+
+> 适用固件：ESP32-S3 / 16MB Flash / 双 OTA / `iot_usbh_cdc` 3.1.1 + `iot_usbh_ecm` 0.4.2
+>
+> 代码位置：`main/main.c`（启动流程与链路管理器）、`main/Kconfig.projbuild`（全部超时/次数阈值）、
+> `components/cpe_core/`（配置、认证、状态、启动计数）
+
+## 1. 设计原则
+
+1. **AP/Web 先行**：SoftAP 和 Web 管理面不依赖 4G 链路，先启动；4G 由后台任务管理。
+   没插模组、没 SIM、拿不到 IP 时，用户仍然可以连 AP 进入后台查看状态、改配置、恢复出厂。
+2. **USB Host 只安装一次**：运行期不再反复拆装 USB Host 栈（审计 P0-2 的整栈重试链已移除）。
+3. **分层恢复、有界重试**：从轻到重逐级升级，每一级都有次数/时间上限，失败后停在 FAULT 而不是无限循环。
+4. **两类失败不重启整机**：
+   - "总线上没有已枚举设备"（模组没插/枚举失败）：只做 USB 层恢复，最后 FAULT；
+   - "link up 但拿不到 IP"（无 SIM / PDP 未激活 / DHCP 未就绪）：只等 DHCP，最后 FAULT。
+   只有"模组已枚举、ECM 链路始终起不来"才允许受控重启，且重启次数受 NVS 启动计数限制。
+
+## 2. 启动阶段（`app_main`）
+
+```
+上电
+ │
+ ├─ 1. nvs_flash_init()
+ │       损坏（NO_FREE_PAGES / NEW_VERSION）时擦除重试一次
+ │
+ ├─ 2. esp_netif_init() + esp_event_loop_create_default()
+ │
+ ├─ 3. cpe_core_init()
+ │       ├─ cpe_config_init()   读取/生成配置：AP SSID、AP 口令、管理员口令（每台唯一随机）
+ │       ├─ cpe_auth_init()     PBKDF2 口令哈希、会话表
+ │       ├─ cpe_status_init()   状态快照
+ │       └─ 启动计数 NVS +1    （cpe_sys/boot_cnt，显示在 Web“启动计数”）
+ │       任一步失败：打印错误后进入空闲降级（10s 循环），不 abort、不重启
+ │
+ ├─ 4. 注册事件处理
+ │       IOT_ETH_EVENT（link up/down）、IP_EVENT_ETH_GOT_IP / LOST_IP
+ │
+ ├─ 5. app_wifi_start()        SoftAP 先起（WPA2，配置来自 cpe_core）
+ ├─ 6. modem_http_start()      Web 管理面（会话 + CSRF 认证）
+ │
+ ├─ 7. （可选）模组 RESET 脉冲  仅当配置了 CPE_MODULE_RESET_GPIO
+ │       保证外部供电的模组从干净 USB 状态开始枚举
+ │
+ └─ 8. 创建 cpe_link 任务       后台链路管理器（见第 3、4 节）
+```
+
+启动失败的降级策略：
+
+| 失败点 | 行为 |
+| --- | --- |
+| NVS 初始化失败 | 打印 `FATAL`，10s 循环空转（可通过串口诊断） |
+| 网络栈 / 事件循环失败 | 同上 |
+| `cpe_core_init` 失败 | 擦除 NVS 后重试一次；仍失败则空闲降级 |
+| SoftAP 启动失败 | 记录错误，继续启动 Web 和链路管理器 |
+| Web 启动失败 | 记录错误，继续启动链路管理器（AP 仍可连） |
+| `cpe_link` 任务创建失败 | 记录错误，保持 AP-only 模式，不重启 |
+
+## 3. 链路状态机
+
+状态定义在 `components/cpe_core/include/cpe_status.h`，Web“运行状态”显示的就是它：
+
+| 状态 | 含义 | 进入条件 |
+| --- | --- | --- |
+| `BOOT` | 启动/恢复中 | 初始状态；重枚举、重建 ECM 时回到此状态 |
+| `USB_WAIT` | 等待 USB 模组 | 没有 link、也没有已枚举设备 |
+| `LINK_WAIT` | 已枚举，等待 link / IP | 模组已出现，但 link 未 up，或 link up 但没拿到 IP |
+| `ONLINE` | 在线 | `link_up && got_ip` |
+| `FAULT` | 可恢复故障，AP/Web 仍可用 | 某一级恢复次数耗尽，后台继续重试 |
+
+```
+            ┌──────────────┐
+            │     BOOT     │
+            └──────┬───────┘
+                   │ 安装 USB Host/CDC、创建 ECM/netif
+        ┌──────────┴──────────┐
+        │                     │
+   无 USB 设备            模组已枚举
+        │                     │
+   ┌────▼─────┐          ┌────▼─────┐
+   │ USB_WAIT │          │LINK_WAIT │
+   └────┬─────┘          └────┬─────┘
+        │ 恢复成功             │ link up + got IP
+        └──────────┬───────────┘
+                   │
+             ┌─────▼─────┐
+             │  ONLINE   │ ── 连续 120s → 清零启动计数
+             └─────┬─────┘
+                   │ link down / 重建 ECM
+             ┌─────▼─────┐
+             │   FAULT   │  AP/Web 保持可用，后台继续重试
+             └───────────┘
+```
+
+## 4. 链路管理器循环（`link_manager_task`）
+
+任务优先级 6、栈 4KB，主循环每 **500ms** 执行一次：
+
+```
+for (;;) {
+    1. 若 CDC/USB Host 未安装 → usb_cdc_install()（只装一次）
+    2. 若 ECM 未就绪     → ecm_bring_up()
+                           创建 ECM 驱动 → 创建 netif + glue → 启动驱动
+                           （link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
+    3. 读取状态快照，计算 link/IP 变化
+    4. 分三种情况处理：
+       a. link up && got_ip  → ONLINE
+       b. link up && !got_ip → 等待 DHCP（见 5.2）
+       c. !link_up           → 等待枚举（见 5.1）
+}
+```
+
+### 4.1 ONLINE 时做什么
+
+- 把 ECM netif 设为默认网卡（`esp_netif_set_default_netif`）；
+- 开启 NAPT（`ip_napt_enable`），AP 客户端才能通过 4G 上网；
+- 把模组上报的 DNS 下发给 SoftAP 的 DHCP 服务，客户端无需手动配置 DNS；
+- 记录 `online_start_us`；连续在线满 `CPE_HEALTHY_CLEAR_SECONDS`（120s）后：
+  - NVS `cpe_sys/boot_cnt` 清零；
+  - 状态快照同步为 0（Web“启动计数”立即变 0）；
+  - 打印 `Healthy for 120 s, boot counter cleared`。
+
+### 4.2 启动计数（boot counter）的作用
+
+- 每次开机先 +1；
+- 它同时是"允许自动重启的次数上限"：只有"已枚举但 ECM 卡死"才会触发受控重启，
+  且要求 `boot_cnt < CPE_MAX_REBOOTS`（默认 3）；
+- 在线满 120s 清零，保证：
+  - 正常工作不会因为历史计数而失去重启额度；
+  - 真正崩溃/重启循环在 3 次后停下，停在 FAULT，避免无限重启（AP/Web 仍可进）。
+
+## 5. 恢复策略与等待点
+
+### 5.1 没有 USB link（`!link_up`）
+
+等待 `CPE_LINK_TIMEOUT_MS`（默认 **30s**）后判定失败。若此时**没有任何已枚举设备**：
+
+| 顺序 | 动作 | 条件 |
+| --- | --- | --- |
+| ① | 脉冲模组 `RESET_N`（`CPE_MODULE_RESET_GPIO`） | 硬件已接线（推荐） |
+| ② | USB 根端口 VBUS 掉电再上电（`CPE_USB_PORT_POWER_CYCLE`） | 仅对总线供电、能感知 VBUS 的模组有效 |
+| ③ | 重启 USB Host 栈：卸载 host/CDC → 500ms → 重新安装，强制一次全新枚举 | 纯软件兜底 |
+
+最多尝试 `CPE_USB_ENUM_RESET_ATTEMPTS`（默认 **3**）次；仍失败则：
+
+- 状态 → `FAULT`（"no USB modem, AP/Web still available"）；
+- 退避 `CPE_RECOVERY_RETRY_MS`（默认 **60s**）后重置尝试次数、重新开始；
+- **绝不重启整机**（可能是用户根本没插模组）。
+
+> 已知硬件限制：外部独立供电的模组在 ESP32 复位后可能保留旧 USB 状态，导致
+> `CHECK_SHORT_DEV_DESC FAILED`。软件最后兜底是 USB Host 栈重启；产品硬件应提供
+> `RESET_N`→GPIO 或受控 5V 供电。
+
+### 5.2 link up 但没有 IP
+
+**不要立即拆 ECM**：拆 ECM 会把模组 USB 接口复位，而模组重新附着网络、重建 PDP、
+启动 DHCP 服务器往往需要几十秒，短窗口会导致"重建—超时—再重建"的循环。
+
+等待 `CPE_IP_TIMEOUT_MS`（默认 **90s**）后：
+
+| 步骤 | 动作 | 次数 |
+| --- | --- | --- |
+| ① | 保持 ECM/USB 会话，只重启 DHCP 客户端（stop → 300ms → start），再给一个 90s 窗口 | `CPE_IP_DHCP_RESTARTS`，默认 **2** 次 |
+| ② | DHCP 重试耗尽 → 拆 ECM 重建，退避 60s 后重新建链 | 循环 |
+| ③ | 仍失败 | 保持 `FAULT`，后台继续重试，**绝不重启整机** |
+
+日志会明确打印 DHCP 客户端状态（`ESP_NETIF_DHCP_STARTED` 等），便于区分
+"DHCP 客户端没跑起来"和"客户端在跑但模组不回包"。
+
+### 5.3 已枚举但 ECM 链路始终起不来
+
+这是唯一会主动重启整机的场景：
+
+- 每 `CPE_MAX_RECOVERY_ATTEMPTS`（默认 **3**）轮失败后，读取 NVS 启动计数；
+- 若 `boot_cnt < CPE_MAX_REBOOTS`（默认 **3**）→ 受控 `esp_restart()`：
+  `ECM link stuck, controlled reboot N/3`；
+- 否则 → `FAULT`（"ECM link stuck, AP/Web still available"），后台继续重试。
+
+### 5.4 全部等待点一览
+
+| 等待点 | Kconfig | 默认值 | 为什么 |
+| --- | --- | --- | --- |
+| 等 USB 枚举/端口就绪 | 事件驱动 | — | USB Host 事件到达才继续；由 30s link 超时兜底 |
+| 等 link up | `CPE_LINK_TIMEOUT_MS` | 30s | 正常枚举+ECM 配置几秒内完成，30s 覆盖模组上电慢的情况 |
+| 等 IP（DHCP） | `CPE_IP_TIMEOUT_MS` | 90s | 模组 USB 复位后重新附着网络、重建 PDP、启动 DHCP 需要时间 |
+| 无 IP 时重启 DHCP 客户端 | `CPE_IP_DHCP_RESTARTS` | 2 次 | 只重启 DHCP，不破坏 USB/ECM 会话 |
+| 恢复退避（ECM 重建/无设备） | `CPE_RECOVERY_RETRY_MS` | 60s | 避免高频拆装 USB 驱动，给模组重新初始化时间 |
+| 无设备时的恢复次数 | `CPE_USB_ENUM_RESET_ATTEMPTS` | 3 | 覆盖模组 RESET、VBUS、USB 栈重启三种手段 |
+| ECM 卡死判定轮数 | `CPE_MAX_RECOVERY_ATTEMPTS` | 3 | 多次 ECM 重建无效后才考虑重启整机 |
+| 受控重启上限 | `CPE_MAX_REBOOTS` | 3 | 用 NVS 启动计数防止无限重启 |
+| 健康清零时间 | `CPE_HEALTHY_CLEAR_SECONDS` | 120s | 排除"刚拿到 IP 就掉线"，并重置重启额度 |
+| 主循环节拍 | 固定 500ms | — | 及时响应 link/IP 事件，又不空耗 CPU |
+
+> 全部参数可在 `idf.py menuconfig → CPE Application Configuration` 中调整；
+> 修改 Kconfig 后如果 `sdkconfig` 未自动重生成，先执行 `idf.py reconfigure` 再构建。
+
+## 6. 关键日志解读
+
+| 日志 | 含义 |
+| --- | --- |
+| `USB CDC driver installed` | USB Host + CDC 驱动安装成功（每次启动只装一次） |
+| `Replaying the CONNECTED event for 1 existing device(s)` | 驱动重建/重装后，把已枚举设备的连接事件补发给上层 |
+| `ECM interface found: VID: ..., PID: ..., IFNUM: 4` | ECM 描述符解析成功（VID/PID/控制接口号） |
+| `USB ECM interface configured` | 数据接口 alternate setting、端点配置完成 |
+| `4G link up` | ECM 上报网络连接（USB 链路层就绪，**不代表有 IP**） |
+| `4G WAN IP: 192.168.x.x` | DHCP 拿到 IP |
+| `CPE online (WAN IP ...)` | 进入 ONLINE，此时 NAPT/DNS 已配置 |
+| `Link up but no IP after 90000 ms (attempt N)` | 90s 内没拿到 IP，准备重启 DHCP 客户端 |
+| `Restarting the DHCP client (status N, ...)` | 只重启 DHCP；`status 2` = DHCP 客户端正在运行 |
+| `DHCP client retries exhausted, rebuilding the ECM driver` | DHCP 重试耗尽，开始拆 ECM 重建 |
+| `No USB link after 30000 ms (attempt N)` | 30s 内没有 USB link |
+| `Restarting the USB host stack to force a clean re-enumeration` | 无设备时触发软件兜底：重启 USB Host 栈 |
+| `Healthy for 120 s, boot counter cleared` | 已连续在线 120s，启动计数清零（正常健康标志） |
+| `ECM link stuck, controlled reboot N/3` | 已枚举但 ECM 卡死，触发有界受控重启 |
+| `no USB modem, AP/Web still available` | 无设备，进入 FAULT，AP/Web 保持可用 |
+
+## 7. 与 AP/Web 管理面的关系
+
+- SoftAP 与 Web 在 4G 之前启动，任何链路状态下都可访问 `http://192.168.4.1`；
+- Web 状态页每 5s 轮询一次 `/status`；客户端列表在页签激活时每 4s 轮询；
+- 只有 `ONLINE` 状态下 NAPT 才开启，此时 AP 客户端才能访问外网；
+- 认证：会话 Cookie（`CPE_SID`）+ CSRF 双提交；首次登录强制修改管理员口令；
+  登出/改密会使会话失效；恢复出厂保留本机 AP 凭据。
+
+## 8. 相关文档
+
+- 阶段计划与审计条目映射：[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
+- 上板验收清单：[PHASE1_TEST_PLAN.md](PHASE1_TEST_PLAN.md)
+- 构建与登录流程：[../README.md](../README.md)

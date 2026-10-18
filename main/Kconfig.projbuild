@@ -64,11 +64,26 @@ menu "CPE Application Configuration"
 
     config CPE_IP_TIMEOUT_MS
         int "Timeout waiting for an IP address after link up (ms)"
-        default 20000
+        default 90000
+        range 10000 300000
         help
-            A link up without an IP usually means no SIM / PDP not activated.
-            The device MUST stay reachable through SoftAP/Web in that case; no
-            automatic reboot is performed.
+            A link up without an IP usually means no SIM / PDP not activated,
+            but right after a USB re-enumeration the modem may still be
+            re-attaching to the network and can take tens of seconds before its
+            DHCP server answers. Keep this generous: the device MUST stay
+            reachable through SoftAP/Web in that case; no automatic reboot is
+            performed.
+
+    config CPE_IP_DHCP_RESTARTS
+        int "DHCP-client restarts before rebuilding the ECM driver"
+        default 2
+        range 0 10
+        help
+            When the link is up but no IP arrives, keep the ECM/USB session
+            alive and only restart the DHCP client this many times first.
+            Tearing the ECM driver down resets the modem USB interface, which
+            gives the DHCP server a much shorter window on the next attempt.
+            0 keeps the old behaviour (rebuild ECM on the first timeout).
 
     config CPE_MAX_RECOVERY_ATTEMPTS
         int "ECM soft-recovery attempts before escalating"

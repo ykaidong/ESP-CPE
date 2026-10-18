@@ -63,7 +63,8 @@ app_main
 ```
 
 恢复策略细节与阈值见 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) 3.3 节，可通过
-`menuconfig → CPE Application Configuration` 调整。
+`menuconfig → CPE Application Configuration` 调整。完整的启动流程、链路状态机、每个等待点/超时
+以及常见日志含义见 [docs/RUNTIME_FLOW.md](docs/RUNTIME_FLOW.md)。
 
 ## 4. 构建与烧录
 
@@ -134,7 +135,7 @@ components/cpe_core/  配置存储/校验、随机凭据、会话认证、状态
 components/web_wifi/  SoftAP + Web 管理面（SPIFFS 前端）
 components/iot_usbh_cdc/  USB Host CDC 驱动本地 fork（已打补丁）
 components/iot_usbh_ecm/  USB Host ECM 驱动本地 fork（已打补丁）
-docs/                 实施计划与设计说明
+docs/                 实施计划、运行时流程、上板验收清单
 partitions_16m_ota.csv
 ```
 

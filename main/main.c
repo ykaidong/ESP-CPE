@@ -292,6 +292,32 @@ static esp_err_t ecm_bring_up(void)
     return ESP_OK;
 }
 
+/* Restart the DHCP client on the ECM netif without touching the USB/ECM
+ * session. Tearing the ECM driver down resets the modem USB interface and its
+ * DHCP server only gets CPE_IP_TIMEOUT_MS to answer after every rebuild. When
+ * the modem is still re-attaching to the network (a USB reset makes it drop
+ * and re-establish PDP), that window is far too short and the link manager can
+ * trap itself in a rebuild loop. Keep the interface up and retry DHCP first. */
+static void dhcp_client_restart(void)
+{
+    if (s_ecm.netif == NULL) {
+        return;
+    }
+    esp_netif_dhcp_status_t status = ESP_NETIF_DHCP_INIT;
+    esp_err_t err = esp_netif_dhcpc_get_status(s_ecm.netif, &status);
+    ESP_LOGW(TAG, "Restarting the DHCP client (status %d, %s)",
+             (int)status, esp_err_to_name(err));
+    err = esp_netif_dhcpc_stop(s_ecm.netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGW(TAG, "esp_netif_dhcpc_stop failed: %s", esp_err_to_name(err));
+    }
+    vTaskDelay(pdMS_TO_TICKS(300));
+    err = esp_netif_dhcpc_start(s_ecm.netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+        ESP_LOGW(TAG, "esp_netif_dhcpc_start failed: %s", esp_err_to_name(err));
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 /* Events                                                                   */
 /* ------------------------------------------------------------------------- */
@@ -495,6 +521,7 @@ static void link_manager_task(void *arg)
     (void)arg;
     uint32_t recover_attempts = 0;
     uint32_t enum_reset_attempts = 0;
+    uint32_t dhcp_restarts = 0;
     int64_t wait_start_us = 0;
     int64_t online_start_us = 0;
     bool was_online = false;
@@ -536,6 +563,7 @@ static void link_manager_task(void *arg)
             wait_start_us = now;
             last_got_ip = st.got_ip;
             if (st.got_ip) {
+                dhcp_restarts = 0;
                 cpe_link_online();
             } else {
                 cpe_link_offline();
@@ -577,11 +605,29 @@ static void link_manager_task(void *arg)
                 if ((now - wait_start_us) > (int64_t)CONFIG_CPE_IP_TIMEOUT_MS * 1000LL) {
                     recover_attempts++;
                     cpe_status_set_recovery_attempts(recover_attempts);
+                    ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
+                             CONFIG_CPE_IP_TIMEOUT_MS, recover_attempts);
+
+                    if (CONFIG_CPE_IP_DHCP_RESTARTS > 0 &&
+                            dhcp_restarts < CONFIG_CPE_IP_DHCP_RESTARTS) {
+                        /* Give the modem more time to bring its DHCP server up:
+                         * keep the ECM/USB session and retry only the DHCP
+                         * client (a teardown resets the modem USB interface,
+                         * which is exactly what to avoid here). */
+                        dhcp_restarts++;
+                        cpe_status_set_error("waiting for the modem DHCP server");
+                        cpe_status_set_state(CPE_STATE_LINK_WAIT,
+                                             "waiting for IP (DHCP retry)");
+                        dhcp_client_restart();
+                        wait_start_us = now;
+                        continue;
+                    }
+
+                    dhcp_restarts = 0;
                     cpe_status_set_error("link up but no IP (SIM/PDP problem?)");
                     cpe_status_set_state(CPE_STATE_FAULT,
                                          "no IP from modem (SIM/PDP?), retrying");
-                    ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
-                             CONFIG_CPE_IP_TIMEOUT_MS, recover_attempts);
+                    ESP_LOGW(TAG, "DHCP client retries exhausted, rebuilding the ECM driver");
                     ecm_teardown();
                     wait_start_us = 0;
                     vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_RECOVERY_RETRY_MS));
@@ -591,6 +637,7 @@ static void link_manager_task(void *arg)
             } else {
                 /* No USB link at all: module missing, enumeration failed or
                  * the module dropped off the bus. */
+                dhcp_restarts = 0;
                 if (wait_start_us == 0) {
                     wait_start_us = now;
                 }

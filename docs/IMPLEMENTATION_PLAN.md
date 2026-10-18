@@ -70,13 +70,15 @@ app_main
  │    └─ cpe_status_init   （线程安全状态快照）
  ├─ app_wifi_start()       （SoftAP：来自 cpe_config，校验失败回退默认值）
  ├─ modem_http_start()     （SPIFFS + httpd：登录/状态/配置/故障页）
- └─ usb_link_task          （后台，永不阻塞主流程）
+ └─ cpe_link task          （后台链路管理器，永不阻塞主流程）
       ├─ usb_host_install（幂等、显式错误处理）
       ├─ usbh_cdc_driver_install / iot_eth_new_usb_ecm / iot_eth_install
       ├─ 事件：IOT_ETH CONNECTED/DISCONNECTED、IP_EVENT_ETH_GOT_IP
-      ├─ ONLINE：set_default_netif + ip_napt_enable
-      └─ 超时/失败：L1 ECM 重建 → L2 根端口掉电 → L3 有界受控重启 → FAULT（AP/Web 保持）
+      ├─ ONLINE：set_default_netif + ip_napt_enable + 上游 DNS 下发给 AP
+      └─ 失败：无设备 → 模组复位/VBUS/USB 栈重启；无 IP → 只重启 DHCP；ECM 卡死 → 有界重启；FAULT 保底（AP/Web 保持）
 ```
+
+> 启动各阶段的日志、状态机迁移、每个等待点的超时与原因，见 **[RUNTIME_FLOW.md](RUNTIME_FLOW.md)**。
 
 ### 3.1 共享接口契约（跨组件冻结）
 
@@ -100,14 +102,16 @@ app_main
 
 ### 3.3 恢复策略（阶段一开始执行）
 
-| 层级 | 触发 | 动作 | 失败后果 |
-| --- | --- | --- | --- |
-| L1 | link up 后 20s 无 IP；或 USB 断开 30s 未重连 | 关端口排队 → 拆 netif/glue → 重建 ECM 驱动 | 重试 3 次 |
-| L2 | L1 连续 3 次失败 **且 USB 总线上没有任何已枚举设备** | 根端口 VBUS 掉电 500ms（仅 Kconfig 开启时） | 直接进入 FAULT（AP/Web 可用），不重启整机 |
-| L3 | L1 连续 3 次失败 **且设备在总线上但 ECM 链路始终起不来** | NVS 启动计数 +1 后 `esp_restart()`；计数 ≥ 3 则不再重启 | 进入 FAULT（AP/Web 可用，后台每 60s 重试 L1） |
-| 健康 | 在线稳定 120s | 清除启动计数 | — |
+> 完整运行时流程、状态机与全部等待点见 **[RUNTIME_FLOW.md](RUNTIME_FLOW.md)**。以下为策略摘要。
 
-> 关键产品行为：**没插模组/无 SIM 永远不会导致整机重启**（重启救不了这两类故障）；只有"设备已枚举但 ECM 接口卡死"才允许有界重启。
+| 场景 | 判定 | 动作 | 失败后果 |
+| --- | --- | --- | --- |
+| 无 USB 设备 | 30s 无 link，且总线上没有已枚举设备 | 依次尝试：模组 RESET GPIO → 根端口 VBUS 掉电（Kconfig 开启时）→ 重启 USB Host 栈；最多 `CPE_USB_ENUM_RESET_ATTEMPTS`（3）次 | FAULT，退避 60s 后重试；**不重启整机** |
+| link up 无 IP | 链路已 up，90s 内 DHCP 未拿到 IP | **保持 ECM/USB 会话**，只重启 DHCP 客户端，再给 90s 窗口，最多 `CPE_IP_DHCP_RESTARTS`（2）次；仍未拿到才拆 ECM 重建 | FAULT，后台继续重试；**不重启整机** |
+| ECM 链路卡死 | 模组已枚举，但 ECM 链路在 `CPE_MAX_RECOVERY_ATTEMPTS`（3）轮内始终起不来 | 读取 NVS 启动计数，`boot_cnt < CPE_MAX_REBOOTS`（3）时 `esp_restart()` | 计数耗尽后进入 FAULT（AP/Web 可用，后台每 60s 重试） |
+| 健康 | link up + got_ip 连续 120s | 清除 NVS 启动计数并同步 Web 状态 | — |
+
+> 关键产品行为：**没插模组/无 SIM 永远不会导致整机重启**（重启救不了这两类故障）；只有"设备已枚举但 ECM 接口卡死"才允许有界重启。所有阈值见 `menuconfig → CPE Application Configuration`。
 
 ---
 
@@ -193,6 +197,7 @@ app_main
 | 2 | ESP32 运行中复位（4G 模组独立供电、不断电）→ `USBH: Dev 0 EP 0 Error` / `CHECK_SHORT_DEV_DESC FAILED`，之后无法恢复 | 模组 USB 栈未随 ESP32 复位而复位；ESP-IDF 枚举失败后不会自行重试 | 新增 `CPE_MODULE_RESET_GPIO`（启动时 + 枚举恢复时脉冲模组 RESET，需硬件接线）；无 RESET 线时按 `CPE_USB_ENUM_RESET_ATTEMPTS` 先尝试 VBUS 掉电（若启用），最后**重启 USB Host 栈**（卸载 host 撤掉总线端接让模组感知断开，再重新安装触发一次全新枚举）；二者都不可用时进入 FAULT（AP/Web 可用） |
 | 3 | Web 后台：状态页"客户端数量/已连接数/剩余连接数"一直显示 `--`；登录页图标显示为方框（iconfont 字体未随 SPIFFS 打包）；登录框偏左、页面空旷；新标签页/刷新后"退出登录"无反应 | ① 4s 轮询只在客户端页签激活时启动，初始化时不再拉取列表；② `style.css` 引用 `fonts/iconfont.*` 但 SPIFFS 无该字体；③ 旧 CSS 把登录卡绝对定位在 left:15%/top:20%；④ CSRF token 只存 sessionStorage（按标签页），新标签页取不到 → POST 403 被静默吞掉 | ① 页面加载时拉取一次客户端数量（不启动隐藏轮询）；② 登录页改用已有图片、去掉 iconfont；③ cpe.css 覆盖登录/状态页布局（居中卡片、白底分区卡片、移动端适配）；④ 服务端下发非 HttpOnly 的 `CPE_CSRF` Cookie（SameSite=Strict，双提交），登出不再强制 CSRF 且失败时前端提示；启动计数清零后同步刷新状态 |
 | 4 | 状态页排版不美观：基本状态三个点位被推到页面两端、网络详情"标签在左、值贴右边缘" | 旧布局用 `flex:1` 的占位线段把三项撑满整行；`.status-row{justify-content:space-between}` 使值总是贴右 | 基本状态改为三张等宽状态卡（图标 + 标签 + 值，间距 12px）；设备状态改为三块指标卡；网络详情改为两列键值网格，值左对齐紧跟标签；≤720px 自动单列 |
+| 5 | 复位后 ECM 枚举/配置正常、`4G link up`，但反复出现 `Link up but no IP after 20000 ms`，每轮都拆 ECM 重建 | ① 默认 IP 超时只有 20s，而模组在 USB 复位后重新附着网络（PDP/DHCP 服务器就绪）可能需要数十秒；② 超时立即 `ecm_teardown()` 会重置模组 USB 接口，下一轮又只给 20s，形成"重建—超时—再重建"循环，反而让 DHCP 永远等不到可用窗口 | `CPE_IP_TIMEOUT_MS` 默认改为 90s；新增 `CPE_IP_DHCP_RESTARTS`（默认 2）：链路保持、仅重启 DHCP 客户端并打印其状态，仍无 IP 才重建 ECM；链路断开/拿到 IP 时重置计数 |
 
 > 现场结论：对外部供电的 4G 模组，产品硬件必须提供 RESET_N→GPIO 或受控供电，否则主机复位后可能枚举失败。README 已补充接线说明。
 
