@@ -1,0 +1,31 @@
+menu "IoT USB Host CDC"
+
+    config USBH_TASK_CORE_ID
+        int "usbh CDC task core_id"
+        default 0
+        range -1 1
+        help
+            usb host CDC task to specified core
+
+    config USBH_TASK_BASE_PRIORITY
+        int "usbh CDC task base priority"
+        default 5
+        help
+            usb host CDC task base priority
+
+    config USBH_CDC_CONTROL_TRANSFER_BUFFER_SIZE
+        int "usbh CDC control transfer size"
+        default 256
+        help
+            usb host CDC control transfer buffer size
+
+    config USBH_CDC_IN_EP_RETRY_COUNT
+        int "usbh CDC IN EP retry count"
+        default 3
+        range 1 100
+        help
+            Number of consecutive IN/notification transfer retries per CDC port before the
+            polling of that port is stopped. When the retry budget is exhausted the port status
+            becomes USBH_CDC_PORT_STATUS_ERROR (see usbh_cdc_port_get_status()), and
+            usbh_cdc_port_start_data() can be used to restart the polling.
+endmenu

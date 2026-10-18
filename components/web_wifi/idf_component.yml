@@ -7,7 +7,10 @@ dependencies:
     rules:
     - if: target in [esp32p4, esp32h2]
     version: '>=0.10,<2.0'
-  idf: '>=4.4.1'
+  # Uses IDF >=5.x APIs: httpd_req_get_cookie_val,
+  # esp_netif_dhcps_get_clients_by_mac, IP_EVENT_ASSIGNED_IP_TO_CLIENT.
+  # The ESP-CPE product baseline is ESP-IDF v6.1.
+  idf: '>=6.1'
   json_parser:
     version: 1.0.3
-version: 1.0.0
+version: 1.0.1

@@ -1,12 +1,13 @@
-set(REQUIRES esp_wifi esp_eth esp_timer nvs_flash spiffs esp-tls vfs lwip esp_http_server)
+# The management web console is a mandatory part of the CPE product: it is the
+# only way to configure the device and to diagnose a dead 4G link. It is
+# therefore always compiled (there is deliberately no "enable web router"
+# switch that would produce a firmware which fails to build when disabled).
+set(PRIV_REQ esp_wifi esp_event esp_system esp_hw_support esp_timer
+             nvs_flash spiffs vfs lwip esp_http_server)
 
-if(CONFIG_EXAMPLE_ENABLE_WEB_ROUTER)
-    idf_component_register(SRC_DIRS "." "router_web"
-                    INCLUDE_DIRS "." "include" "router_web"
-                    PRIV_REQUIRES ${REQUIRES})
-    spiffs_create_partition_image(storage ./spiffs FLASH_IN_PROJECT)
-else()
-    idf_component_register(SRC_DIRS "."
-                    INCLUDE_DIRS "." "include"
-                    PRIV_REQUIRES ${REQUIRES})
-endif()
+idf_component_register(SRC_DIRS "." "router_web"
+                INCLUDE_DIRS "." "include" "router_web"
+                REQUIRES cpe_core esp_netif
+                PRIV_REQUIRES ${PRIV_REQ})
+
+spiffs_create_partition_image(storage ./spiffs FLASH_IN_PROJECT)

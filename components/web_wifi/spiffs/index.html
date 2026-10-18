@@ -4,129 +4,108 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0">
-  <title>ESP-Router</title>
+  <title>ESP-CPE 管理后台</title>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/cpe.css">
   <link rel="icon" href="./img/favicon.ico">
 </head>
 
 <body>
   <div class="home-base">
     <div class="header-base flex flex-jcb">
-        <img class="header-logo" src="./img/logoBlack.png">
-        <div class="header-menu" onclick="menuClick(this)">
-        </div>
+        <img class="header-logo" src="./img/logoBlack.png" alt="logo">
+        <div class="header-menu" id="menuBtn"></div>
     </div>
     <div class="content-base flex">
       <div class="left-base" id="leftMenu">
-<!--        <div class="left-title">系统菜单</div>-->
         <ul>
           <li>
             <a href="index.html" class="content">系统状态</a>
           </li>
-<!--          <li>-->
-<!--            <a href="">网络设置</a>-->
-<!--          </li>-->
           <li>
             <a href="wlan.html">WLAN设置</a>
           </li>
-<!--          <li>-->
-<!--            <a href="">流量统计</a>-->
-<!--          </li>-->
-<!--          <li>-->
-<!--            <a href="">系统管理</a>-->
-<!--          </li>-->
         </ul>
       </div>
       <div class="right-base">
         <div class="page-header">
-          <span class="header-title-one" onclick="networkStatus()">网络状态</span>
+          <span class="header-title-one active-title" id="tab-network">网络状态</span>
           <span>/</span>
-          <span class="header-title-two" onclick="customerList()">客户端列表</span>
+          <span class="header-title-two" id="tab-clients">客户端列表</span>
         </div>
+        <div class="status-banner" id="status-banner"></div>
         <div class="page-content" id="networkShow">
           <div class="page-title">基本状态</div>
           <div class="base-detail flex">
             <div class="base-one flex flex-v">
-              <img src="./img/xinhao.png">
+              <img src="./img/xinhao.png" alt="internet">
               <span>因特网</span>
             </div>
             <div class="base-two">
               <div class="base-line-text flex flex-jcc">
-<!--                <span>勾</span>-->
-                <span>移动数据正常</span>
+                <span id="internet-state">正在获取状态…</span>
               </div>
               <div class="base-line"></div>
             </div>
             <div class="base-three flex flex-v">
-              <img src="./img/luyouqi.png">
+              <img src="./img/luyouqi.png" alt="wifi">
               <span>我的设备</span>
             </div>
             <div class="base-two">
               <div class="base-line-text flex flex-jcc">
-<!--                <span>勾</span>-->
-                <span>2.4 GHz Wi-Fi 正常</span>
+                <span id="wifi-state">2.4 GHz Wi-Fi 正常</span>
               </div>
               <div class="base-line"></div>
             </div>
             <div class="base-five flex flex-v">
-              <img src="./img/shebei.png">
+              <img src="./img/shebei.png" alt="clients">
               <span>客户端数量</span>
+              <span class="client-count" id="client-count-top">--</span>
             </div>
           </div>
+
           <div class="page-title">设备状态</div>
           <div class="device-detail">
-              <div class="device-status-two flex flex-jcb">
-                  <div class="device-battery">
-                      <span>连续持续时间</span>
-                      <span class="device-content" id="connect-time">xxx</span>
-                  </div>
-                  <div class="device-connect-count">
-                      <span>剩余连接数</span>
-                      <span class="device-content" id="remain-count">x台</span>
-                  </div>
+            <div class="device-status-two flex flex-jcb">
+              <div class="device-battery">
+                <span>连续持续时间</span>
+                <span class="device-content" id="connect-time">--</span>
               </div>
-              <div class="device-status-one flex flex-jcb">
-<!--                  <div class="device-battery">-->
-<!--                      <span>电量情况</span>-->
-<!--                      <span class="device-content">95%</span>-->
-<!--                  </div>-->
-                  <div class="device-connect-count">
-                      <span>已连接数</span>
-                      <span class="device-content" id="connect-count">x台</span>
-                  </div>
+              <div class="device-connect-count">
+                <span>剩余连接数</span>
+                <span class="device-content" id="remain-count">--</span>
               </div>
+            </div>
+            <div class="device-status-one flex flex-jcb">
+              <div class="device-connect-count">
+                <span>已连接数</span>
+                <span class="device-content" id="connect-count">--</span>
+              </div>
+            </div>
           </div>
-<!--          <div class="page-title">实时网络状态</div>-->
-<!--          <div class="network-detail">-->
-<!--            <div class="device-status-one  flex flex-jcb">-->
-<!--              <div class="device-battery">-->
-<!--                <span>当前下载</span>-->
-<!--                <span class="device-content">xxx</span>-->
-<!--              </div>-->
-<!--              <div class="device-connect-count">-->
-<!--                <span>最快下载</span>-->
-<!--                <span class="device-content">xxx</span>-->
-<!--              </div>-->
-<!--            </div>-->
-<!--            <div class="device-status-two  flex flex-jcb">-->
-<!--              <div class="device-battery">-->
-<!--                <span>总上传量</span>-->
-<!--                <span class="device-content">xxx</span>-->
-<!--              </div>-->
-<!--              <div class="device-connect-count">-->
-<!--                <span>平均下载</span>-->
-<!--                <span class="device-content">xxx</span>-->
-<!--              </div>-->
-<!--            </div>-->
-<!--            <div class="device-status-three  flex flex-jcb">-->
-<!--              <div class="device-battery">-->
-<!--                <span>总下载量</span>-->
-<!--                <span class="device-content">xxx</span>-->
-<!--              </div>-->
-<!--            </div>-->
-<!--          </div>-->
+
+          <div class="page-title">网络详情</div>
+          <div class="status-table">
+            <div class="status-row"><span class="status-label">运行状态</span><span class="status-value" id="status-state">--</span></div>
+            <div class="status-row"><span class="status-label">USB 4G 模块</span><span class="status-value" id="status-usb">--</span></div>
+            <div class="status-row"><span class="status-label">移动数据链路</span><span class="status-value" id="status-link">--</span></div>
+            <div class="status-row"><span class="status-label">IPv4 地址</span><span class="status-value" id="status-ip">--</span></div>
+            <div class="status-row"><span class="status-label">信号强度</span><span class="status-value" id="status-rssi">--</span></div>
+            <div class="status-row"><span class="status-label">恢复尝试次数</span><span class="status-value" id="status-recovery">--</span></div>
+            <div class="status-row"><span class="status-label">启动计数</span><span class="status-value" id="status-boot">--</span></div>
+            <div class="status-row"><span class="status-label">设备名称</span><span class="status-value" id="status-device-name">--</span></div>
+            <div class="status-row"><span class="status-label">最近错误</span><span class="status-value" id="status-last-error">--</span></div>
+          </div>
+
+          <div class="page-title">系统管理</div>
+          <div class="line-base-btn flex flex-ac">
+            <button class="save-btn" type="button" id="btn-change-password">修改管理员密码</button>
+            <button class="save-btn" type="button" id="btn-logout">退出登录</button>
+            <button class="danger-btn" type="button" id="btn-factory-reset">恢复出厂设置</button>
+          </div>
         </div>
-        <div class="page-content" id="customerShow">
+
+        <div class="page-content" id="customerShow" hidden>
           <div class="page-title">在线客户端</div>
           <div class="page-detail">
             <table class="tableStyle tCenter">
@@ -146,13 +125,8 @@
       </div>
     </div>
   </div>
+  <script src="js/api.js"></script>
   <script src="js/index.js"></script>
-  <script>
-    initHash();
-    window.addEventListener('hashchange', function() {
-      initHash();
-    })
-  </script>
 </body>
 
 </html>

@@ -1,72 +1,47 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Embedded web management server for the ESP-CPE product.
+ *
+ * The management interface is protected by a cpe_core session cookie
+ * (CPE_SID, HttpOnly + SameSite=Strict) and a per-session CSRF token
+ * (X-CSRF-Token) instead of the upstream HTTP Basic credentials. All
+ * state-changing handlers additionally require a JSON content type and a
+ * same-origin (or absent) Origin/Referer header.
  */
 
 #pragma once
 
-#include <sys/queue.h>
 #include "esp_err.h"
-#include "esp_http_server.h"
-#include "app_wifi.h"
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 /**
- * @brief Structure for recording the connected sta
+ * @brief Start the SPIFFS asset mount and the HTTP management server.
  *
+ * Safe to call once during start-up. The SoftAP must be started before this
+ * call (see app_wifi_start()); the server itself only depends on lwIP and the
+ * SPIFFS partition, not on the 4G/ECM link.
+ *
+ * @return ESP_OK on success, an IDF error code otherwise.
  */
-struct modem_netif_sta_info {
-    SLIST_ENTRY(modem_netif_sta_info) field;
-    uint8_t mac[6];
-    char name[32];
-    esp_ip4_addr_t ip;
-    int64_t start_time;
-};
-
-typedef SLIST_HEAD(modem_http_list_head, modem_netif_sta_info) modem_http_list_head_t;
+esp_err_t modem_http_start(void);
 
 /**
- * @brief Deinit http server
+ * @brief Stop the HTTP server, unregister the Wi-Fi event handlers and free
+ *        the station list. The SPIFFS mount is left registered.
  *
- * @return esp_err_t
- */
-esp_err_t modem_http_deinit(httpd_handle_t server);
-
-/**
- * @brief Initialize http server
+ * Reserved for lifecycle operations that are not wired up yet (e.g. stopping
+ * the console before an OTA update or a management-plane restart). Kept and
+ * documented so the teardown path is maintained, not dead code.
  *
- * @param wifi_config wifi Configure Information
- * @return esp_err_t
+ * @return ESP_OK on success (also when the server was not running).
  */
-esp_err_t modem_http_init(modem_wifi_config_t *wifi_config);
-
-/**
- * @brief Read the stored wifi configuration information from nvs and loaded into the structure wifi_config
- *
- * @param wifi_config wifi Configure Information
- * @return esp_err_t
- */
-esp_err_t modem_http_get_nvs_wifi_config(modem_wifi_config_t *wifi_config);
-
-/**
- * @brief Print information about the nodes in the chain table
- *
- * @param head Link table header
- * @return esp_err_t
- */
-esp_err_t modem_http_print_nodes(modem_http_list_head_t *head);
-
-/**
- * @brief Get managed list information
- *
- * @return struct modem_http_list_head_t
- */
-modem_http_list_head_t *modem_http_get_stalist();
+esp_err_t modem_http_stop(void);
 
 #ifdef __cplusplus
 }

@@ -2,3 +2,7 @@ build/
 .vscode/
 .clangd
 managed_components/
+sdkconfig
+sdkconfig.old
+build_log.txt
+

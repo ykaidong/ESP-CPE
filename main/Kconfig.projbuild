@@ -1,66 +1,150 @@
-menu "Example Configuration"
+menu "CPE Application Configuration"
 
-    config ESP_IDF_VERSION
-       string
-       option env="ESP_IDF_VERSION"
-
-    config EXAMPLE_USB_ECM_IPERF
-        bool "Enable USB ECM Iperf"
-        help
-            Enable USB ECM Iperf test, which is used to test the performance of USB ECM module.
-
-    config EXAMPLE_USB_ECM_DOWNLOAD_SPEED_TEST
-        bool "Enable USB ECM Download Speed Test"
+    config CPE_ENUM_FILTER_ENABLE
+        bool "Enable USB host enumeration filter (advanced)"
         default n
+        depends on USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
         help
-            Enable USB ECM Download Speed Test, which is used to test the download speed of USB ECM module.
+            The enumeration filter callback can force the USB configuration
+            value of a device. The official example forced *every* multi
+            configuration device to configuration 2, which breaks generic ECM
+            modules. Keep this disabled unless a specific module requires it,
+            and then set the VID/PID below. Requires the local iot_usbh_cdc
+            fork with enum_filter_cb support.
 
-    config EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-        bool "Enable USB ECM Light Sleep Test"
-        default n
-        select EXAMPLE_ENABLE_AT_CMD
+            This option additionally depends on
+            "USB Host -> Enable enumeration filter callback" (usb component
+            Kconfig, CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK); enable that
+            generic hook first if a specific module needs the filter.
+
+    if CPE_ENUM_FILTER_ENABLE
+        config CPE_ECM_VID
+            hex "Target device VID (0 = any)"
+            default 0x0
+            help
+                Vendor ID of the device the filter applies to. 0 matches any.
+
+        config CPE_ECM_PID
+            hex "Target device PID (0 = any)"
+            default 0x0
+            help
+                Product ID of the device the filter applies to. 0 matches any.
+
+        config CPE_ECM_CONFIG_VALUE
+            int "Forced USB configuration value"
+            default 1
+            range 1 8
+            help
+                USB bConfigurationValue to select for the matched device.
+    endif
+
+    config CPE_USB_TASK_STACK_SIZE
+        int "USB client task stack size"
+        default 4096
+
+    config CPE_USB_TASK_PRIORITY
+        int "USB client task priority"
+        default 10
+        range 5 23
         help
-            Enable USB ECM Light Sleep Test, which is used to test USB ECM module in light sleep mode.
+            Keep this below the lwIP/Wi-Fi task priorities (18 by default).
+            The official example used configMAX_PRIORITIES-1 (24), which could
+            starve the network stack.
 
-    config EXAMPLE_MODULE_RST_GPIO_NUM
-        depends on EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-        int "USB ECM Module RST GPIO Number"
-        default 5
+    config CPE_USB_TASK_CORE_ID
+        int "USB task core id (-1 = no affinity)"
+        default -1
+
+    config CPE_LINK_TIMEOUT_MS
+        int "Timeout waiting for the USB 4G link (ms)"
+        default 30000
         help
-            Set the USB ECM module RST GPIO number.
+            If no USB link is reported within this time the link manager
+            rebuilds the ECM driver and eventually power-cycles the root port.
 
-    config EXAMPLE_MODULE_WAKEUP_GPIO_NUM
-        depends on EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-        int "USB ECM Module WAKEUP GPIO Number"
+    config CPE_IP_TIMEOUT_MS
+        int "Timeout waiting for an IP address after link up (ms)"
+        default 20000
+        help
+            A link up without an IP usually means no SIM / PDP not activated.
+            The device MUST stay reachable through SoftAP/Web in that case; no
+            automatic reboot is performed.
+
+    config CPE_MAX_RECOVERY_ATTEMPTS
+        int "ECM soft-recovery attempts before escalating"
         default 3
-        help
-            Set the USB ECM module WAKEUP GPIO number.
+        range 1 10
 
-    config EXAMPLE_MODULE_WAKEUP_LEVEL
-        depends on EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-        int "USB ECM Module WAKEUP Level"
+    config CPE_RECOVERY_RETRY_MS
+        int "Delay between recovery attempts (ms)"
+        default 60000
+        range 5000 600000
+
+    config CPE_MAX_REBOOTS
+        int "Maximum consecutive controlled reboots before staying in fault mode"
+        default 3
+        range 0 10
+        help
+            The boot counter is persisted in NVS and cleared after the device
+            has been online for CPE_HEALTHY_CLEAR_SECONDS, so a panic loop can
+            never restart forever. 0 disables controlled reboots.
+
+    config CPE_HEALTHY_CLEAR_SECONDS
+        int "Uptime required to clear the boot counter (seconds)"
+        default 120
+        range 10 3600
+
+    config CPE_USB_PORT_POWER_CYCLE
+        bool "Power-cycle the USB root port during recovery"
+        default n
+        help
+            Toggles VBUS of the USB host root port to force re-enumeration.
+            Only useful when the module is bus powered; with an externally
+            powered module VBUS toggle may not produce a disconnect.
+
+    config CPE_MODULE_RESET_GPIO
+        int "4G module RESET GPIO number (-1 = not connected)"
+        default -1
+        help
+            When the 4G module is powered independently from the ESP32 (its
+            USB VBUS does not drop when the ESP32 resets), the module USB
+            stack may stay in a stale state and enumeration fails with
+            "CHECK_SHORT_DEV_DESC FAILED". Connect the module RESET_N pin to a
+            free GPIO and set it here: the firmware will pulse the module
+            reset at boot and during USB enumeration recovery, which makes the
+            module enumerate from a clean state. Set to -1 when the pin is not
+            wired (default).
+
+    config CPE_MODULE_RESET_ACTIVE_LEVEL
+        depends on CPE_MODULE_RESET_GPIO >= 0
+        int "Module RESET active level (0 = active low, 1 = active high)"
         default 0
         range 0 1
-        help
-            Set the USB ECM module WAKEUP level.
 
-    config EXAMPLE_ENABLE_AT_CMD
-        bool "Enable USB ECM AT Command"
-        default n
-        help
-            Enable USB ECM AT Command.
+    config CPE_MODULE_RESET_HOLD_MS
+        depends on CPE_MODULE_RESET_GPIO >= 0
+        int "Module RESET pulse width (ms)"
+        default 200
+        range 50 2000
 
-    config EXAMPLE_AT_INTERFACE_NUM
-        depends on EXAMPLE_ENABLE_AT_CMD
-        int "USB ECM AT Interface Number"
-        default 2
+    config CPE_MODULE_BOOT_DELAY_MS
+        depends on CPE_MODULE_RESET_GPIO >= 0
+        int "Delay after releasing the module reset before USB enumeration (ms)"
+        default 1500
+        range 200 10000
         help
-            Set the USB ECM AT interface number.
+            Give the module time to boot its USB stack after the reset pulse
+            is released.
 
-    config EXAMPLE_USE_USB_HOST_FULLSPEED
-        bool "Use USB Host Full Speed"
-        depends on IDF_TARGET_ESP32P4 && ESP_IDF_VERSION >= 5.5
-        default n
+    config CPE_USB_ENUM_RESET_ATTEMPTS
+        int "USB modem reset attempts before giving up"
+        default 3
+        range 0 10
         help
-            By default, USB Host High Speed is used. Enable this option to use USB Host Full Speed instead.
+            How many recovery attempts are made when no USB device is
+            enumerated. Each attempt uses the module reset GPIO when configured,
+            otherwise a root-port VBUS cycle when CPE_USB_PORT_POWER_CYCLE is
+            enabled, and finally a full USB host stack restart (bus release +
+            fresh enumeration). Set to 0 to disable this recovery entirely.
+
 endmenu

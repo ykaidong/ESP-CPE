@@ -1,23 +1,100 @@
-| Supported Targets | ESP32-P4 | ESP32-S2 | ESP32-S3 | ESP32-S31 |
-| ----------------- | -------- | -------- | -------- | --------- |
+# ESP-CPE — 4G USB ECM CPE 产品基座（ESP32-S3）
 
-# USB Host ECM Example
+基于 Espressif 官方示例 `usb_ecm_4g_module` 重构的 4G CPE 产品固件：4G 模组通过 USB ECM 提供 WAN，
+ESP32-S3 同时提供 SoftAP + NAPT + Web 管理面。本仓库是**重新开始的产品化基线**，按审计报告分阶段实施，
+设计依据与进度见 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)。
 
-This example demonstrates how to use [iot_usbh_ecm](https://components.espressif.com/components/espressif/iot_usbh_ecm) to connect to 4G module with ECM protocol.
+| 目标芯片 | Flash | 4G 模组 | ESP-IDF |
+| --- | --- | --- | --- |
+| ESP32-S3 | 16MB（双 OTA + 1MB SPIFFS） | 通用 USB ECM 模组（无 AT 依赖） | v6.1 |
 
-Supported devices refer to https://docs.espressif.com/projects/esp-iot-solution/zh_CN/latest/usb/usb_host/usb_ecm.html
+## 1. 与官方示例的关键差异
 
-For devices where ECM is not on the default configuration descriptor 1, please enable `CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` in menuconfig, such as CH397A.
+| 方面 | 官方示例 | 本产品基线 |
+| --- | --- | --- |
+| 启动顺序 | 等到 4G 拿到 IP 后才启动 AP/Web；无网络即永久卡死 | **AP/Web 先行**，4G 链路由后台任务管理；无 SIM/无 IP 仍可进后台排障 |
+| 默认安全 | 开放 AP，管理员固定 `esp32/12345678`，HTTP Basic | **WPA2 + 每台唯一随机口令**；管理员口令首启随机、首次登录强制修改；会话 Cookie + CSRF |
+| USB 恢复 | 无；偶发枚举失败只能重插 | 枚举事件补发 + ECM 重建 + 可选端口掉电 + **有界受控重启**；"link up 无 IP"永不重启 |
+| 配置校验 | 任意参数直写 NVS，`channel:"999"` 会变砖 | 服务端强校验、失败回滚、启动时非法值回退默认 |
+| 分区 | 单 factory，无 OTA | 16MB + `ota_0`/`ota_1` 双分区（OTA 接口在阶段三接入） |
+| 驱动 | registry 版本存在 UAF/double free/TX 令牌丢失 | 本地 fork（`components/iot_usbh_*`）逐条修补，见各组件 CHANGELOG |
 
-## Usage
+## 2. 首次启动与登录
 
-**Hardware wiring**
+首次上电（或恢复出厂后）会自动生成每台设备唯一的随机凭据，并**仅通过串口打印一次**：
+
+```
+W (xxxx) cpe_config: ==================================================
+W (xxxx) cpe_config:   Device initial credentials (printed once)
+W (xxxx) cpe_config:   SoftAP SSID     : ESP-CPE-XXXX
+W (xxxx) cpe_config:   SoftAP password : ************
+W (xxxx) cpe_config:   Admin user      : admin
+W (xxxx) cpe_config:   Admin password  : ************ (must be changed on first login)
+W (xxxx) cpe_config:   Web console     : http://192.168.4.1
+W (xxxx) cpe_config: ==================================================
+```
+
+步骤：
+
+1. 连接 `ESP-CPE-XXXX`（WPA2，口令见串口输出）；
+2. 浏览器打开 `http://192.168.4.1`，用户名 `admin`，初始口令**与 SoftAP 口令相同**；
+3. 首次登录会被强制要求设置新的管理员口令；
+4. 之后可在 Web 后台修改 AP SSID/口令/信道、查看 4G 状态与客户端列表、恢复出厂。
+
+> 恢复出厂会保留本机唯一的 SoftAP SSID/口令（避免复位后连不上 AP），其余配置回默认，
+> 管理员口令重置为 AP 口令并再次要求首次登录修改。
+
+> 安全说明：固定凭据已彻底移除；管理面默认仅 HTTP，但只开放给 SoftAP 网段并要求会话 + CSRF。
+> HTTPS/证书与 Secure Boot/Flash 加密属于阶段三内容。
+
+## 3. 架构
+
+```text
+app_main
+ ├─ nvs / netif / event loop / cpe_core（配置、认证、状态、启动计数）
+ ├─ app_wifi_start()        SoftAP（WPA2，配置来自 cpe_core）
+ ├─ modem_http_start()      Web 管理面（登录/状态/配置/恢复出厂）
+ └─ cpe_link task
+      ├─ usbh_cdc_driver_install()（USB Host 由 CDC 组件安装一次，永不在运行时拆栈）
+      ├─ iot_eth_new_usb_ecm()/install/start
+      ├─ 事件：link up/down、WAN IP
+      ├─ ONLINE：默认路由 + NAPT + 上游 DNS 下发给 AP 客户端
+      └─ 失败：ECM 重建 → 根端口掉电（可选）→ NVS 计数受控重启 → 保底 FAULT（AP/Web 保持）
+```
+
+恢复策略细节与阈值见 [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) 3.3 节，可通过
+`menuconfig → CPE Application Configuration` 调整。
+
+## 4. 构建与烧录
+
+本机 ESP-IDF v6.1 环境：
+
+```powershell
+# 1) 激活 ESP-IDF（EIM 安装方式）
+& 'C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1'
+cd C:\Users\fytech\Desktop\usb_ecm_4g_module
+
+# 2) 配置目标（首次）并构建
+idf.py set-target esp32s3
+idf.py build
+
+# 3) 烧录 + 串口监视
+idf.py -p COMx flash monitor
+```
+
+要点：
+
+- Flash 必须 ≥16MB（分区表 `partitions_16m_ota.csv`：nvs/otadata/phy_init/ota_0 3M/ota_1 3M/storage 1M）；
+- `sdkconfig` 不入库，所有非默认项在 `sdkconfig.defaults` / `sdkconfig.defaults.esp32s3` 中维护；
+- 本地 fork 的 `iot_usbh_cdc` / `iot_usbh_ecm` 通过 `main/idf_component.yml` 的 `override_path` 覆盖 registry 版本。
+
+## 5. 硬件接线
 
 ```
 ┌─────────────┐          ┌─────────────────┐
 │             ┼──────────┼5V               │
 │  4G Module  ┼──────────┼GND              │
-│             │          │    ESP32-xx     │
+│             │          │    ESP32-S3     │
 │             │          │                 │
 │             ┼──────────┼USB D+           │
 │             ┼──────────┼USB D-           │
@@ -26,54 +103,41 @@ For devices where ECM is not on the default configuration descriptor 1, please e
                          └─────────────────┘
 ```
 
-Once connected to the 4G module and successfully obtains an IP address, the Wi-Fi hotspot sharing network will be enabled.
+USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地与 ESP32-S3 共地。
 
-**USB Host Interface Selection (ESP32-P4 only):**
+**重要（4G 模组复位线）**：如果模组独立供电（ESP32 复位时模组不断电），ESP32 重启后模组 USB
+状态可能残留，枚举会报 `CHECK_SHORT_DEV_DESC FAILED`（实机已复现）。产品上请把模组的
+`RESET_N` 接到一个空闲 GPIO（例如 GPIO5，按你的板子实际接线），并在
+`CPE Application Configuration → 4G module RESET GPIO number` 中填写该 GPIO（默认 `-1` 未接）。
+配置后固件会在启动时以及 USB 枚举恢复时自动脉冲模组复位，使枚举从干净状态开始。
+若无法改硬件，可尝试开启 `CPE_USB_PORT_POWER_CYCLE`（根端口 VBUS 掉电，仅对能感知 VBUS 的模组有效），
+或让模组供电由 ESP32 控制。两者都不可用时，固件仍会在"总线上没有已枚举设备"时自动**重启 USB Host 栈**
+（卸载 host 撤掉总线端接，让模组感知断开，再重新安装触发一次全新枚举，次数由
+`CPE_USB_ENUM_RESET_ATTEMPTS` 限制），这是纯软件的最后兜底。
 
-For ESP32-P4, by default the USB Host uses High Speed (HS) interface. If you want to use Full Speed (FS) interface via GPIO26/27, you can enable `Example Configuration → Use USB Host Full Speed` in menuconfig. This will configure the USB Host to use FS_PHY2 (D+ on GPIO27, D- on GPIO26) instead of the default HS interface.
+特定模组若 ECM 不在配置 1，可开启 `CPE Application Configuration → Enable USB host enumeration filter`
+并填写 VID/PID/配置号（默认关闭，避免官方示例"强制所有设备用配置 2"的缺陷）。
 
-**Wi‑Fi name and password:**
+## 6. 阶段状态
 
-You can modify Wi‑Fi configuration in `menuconfig` under `4G Modem WiFi Config`.
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| Phase 1 | 阻断 P0/P1 + 产品骨架（安全默认值、AP/Web 先行、USB 恢复根修、配置校验、16MB OTA 分区） | 构建通过，上板验收中 |
+| Phase 2 | 驱动与 Web 全面加固、iperf/AT/network_test 诊断功能按需启用与修复 | 待开始 |
+| Phase 3 | OTA 升级/回滚、Secure Boot/加密、长稳测试、出厂流程 | 待开始 |
 
-1. Default Wi‑Fi name: `ESP-USB-4G`
-2. No password by default
-
-## Enable AT commands
-
-Users can Enable AT commands by setting `Example Configuration → USB ECM AT Command` in menuconfig. Then, enter the correct interface number, recompile, and run the program. It will periodically print the module's signal quality.
-
-## Enable Download Speed Test
-
-Users can enable download speed test by setting `Example Configuration → USB ECM Download Speed Test` in menuconfig. After enabling this option and successfully obtaining an IP address, the program will automatically test the download speed by downloading a test file from a remote server.
-
-## Example Output
+## 7. 目录
 
 ```
-I (505) iot_usbh_ecm: USB ECM network interface init success
-I (511) iot_eth.netif_glue: ethernet attached to netif
-I (517) ECM_4G_MODULE: IOT_ETH_EVENT_START
-I (545469) ECM_4G_MODULE: USB device configuration value set to 1
-I (545471) USBH_CDC: New device connected, address: 1
-I (545471) iot_usbh_ecm: ECM interface found: VID: 19D1, PID: 1003, IFNUM: 0
-I (545478) cdc_descriptor: Found NOTIF endpoint: 1
-I (545483) cdc_descriptor: Found OUT endpoint: 1
-I (545489) cdc_descriptor: Found IN endpoint: 2
-I (545495) iot_usbh_ecm: Parsed MAC address: 20:89:84:6A:96:AA
-I (545500) iot_usbh_ecm: Setting ETHERNET packet filter
-I (545507) iot_usbh_ecm: Setting interface alternate setting to 1
-I (545589) iot_usbh_ecm: Notify - network connection changed: Connected
-I (545589) iot_eth: Ethernet link up
-I (545590) ECM_4G_MODULE: IOT_ETH_EVENT_CONNECTED
-I (545595) iot_eth.netif_glue: Set MAC Address: 20:89:84:6A:96:AA
-I (545621) iot_usbh_ecm: Notify - link speeds: 425984 kbps ↑, 425984 kbps ↓
-I (546605) ECM_4G_MODULE: GOT_IP
-I (546605) iot_eth.netif_glue: netif "eth" Got IP Address
-I (546605) iot_eth.netif_glue: ~~~~~~~~~~~
-I (546608) iot_eth.netif_glue: ETHIP:192.168.10.2
-I (546614) iot_eth.netif_glue: ETHMASK:255.255.255.0
-I (546619) iot_eth.netif_glue: ETHGW:192.168.10.1
-I (546625) iot_eth.netif_glue: Main DNS: 192.168.10.3
-I (546630) iot_eth.netif_glue: Backup DNS: 192.168.10.4
-I (546636) iot_eth.netif_glue: ~~~~~~~~~~~
+main/                 应用入口、CPE 恢复策略、Kconfig
+components/cpe_core/  配置存储/校验、随机凭据、会话认证、状态、启动计数
+components/web_wifi/  SoftAP + Web 管理面（SPIFFS 前端）
+components/iot_usbh_cdc/  USB Host CDC 驱动本地 fork（已打补丁）
+components/iot_usbh_ecm/  USB Host ECM 驱动本地 fork（已打补丁）
+docs/                 实施计划与设计说明
+partitions_16m_ota.csv
 ```
+
+## 8. 许可
+
+保留上游 Espressif 示例与组件的 Apache-2.0 许可；本地修改记录在各组件的 CHANGELOG.md。

@@ -1,18 +1,11 @@
 dependencies:
-  cmd_system:
-    path: ${IDF_PATH}/examples/system/console/advanced/components/cmd_system
-  esp-qa/ping-cmd:
-    version: ~1.0.0
   espressif/iot_eth:
     version: '*'
-  espressif/iperf-cmd:
-    version: ~0.1.1
+  # Local forks (patched) of the USB CDC/ECM drivers live in components/ and
+  # override the registry versions. See components/iot_usbh_cdc and
+  # components/iot_usbh_ecm (CHANGELOG.md documents every local patch).
   iot_usbh_ecm:
-    version: '*'
-  modem_at:
-    version: '*'
-  network_test:
-    version: '*'
-  web_wifi:
-    version: '*'
-version: 0.1.0
+    override_path: ../components/iot_usbh_ecm
+  espressif/iot_usbh_cdc:
+    override_path: ../components/iot_usbh_cdc
+version: 1.0.0

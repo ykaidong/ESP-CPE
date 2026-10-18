@@ -1,248 +1,361 @@
-// const baseurl = 'http://192.168.4.1'
-const baseurl = window.location.origin
-console.log(baseurl)
-const CONSTANT = {
-    wlanName: '',
-    GET_STATION_URL: `${baseurl}/system/station_state`,
-    POST_CHANGENAME_URL: `${baseurl}/system/station_state/change_name`,
-    POST_DELETEDEVICE_URL: `${baseurl}/system/station_state/delete_device`,
-}
+/*
+ * System status / online client list page for the ESP-CPE management console.
+ *
+ * All values coming from the device (station host names, IP addresses, error
+ * strings, ...) are rendered with textContent or value assignment only - never
+ * with innerHTML - so a stored host name cannot inject markup (audit P1-16).
+ */
+'use strict';
 
-var getListTime = ''
-var per = []
+(function () {
+    var STATION_URL = '/system/station_state';
+    var CHANGE_NAME_URL = '/system/station_state/change_name';
+    var DELETE_DEVICE_URL = '/system/station_state/delete_device';
 
-var Ajax = {
-    get: function(url,callback){
-        // XMLHttpRequest对象用于在后台与服务器交换数据
-        console.log('4567890')
-        var xhr = new XMLHttpRequest();
-        xhr.open('GET', url,false);
-        xhr.setRequestHeader('Content-Type','application/json')
-        // xhr.setRequestHeader('Authorization', 'Basic ZXNwMzI6MTIzNDU2Nzg=')
-        xhr.onreadystatechange = function(){
-            if(xhr.readyState === 4){
-                if(xhr.status === 200 || xhr.status === 304){
-                    console.log(xhr.responseText);
-                    callback(xhr.responseText);
-                } else {
-                    console.log(xhr.responseText);
-                }
-            }
-        }
-        xhr.send();
-    },
-    put: function(url, data, callback) {
-        var xhr=new XMLHttpRequest();
-        xhr.open('put', url,true);
-        xhr.setRequestHeader('Content-Type','application/json');
-        xhr.onreadystatechange=function(){
-            if(xhr.readyState === 4){
-                if(xhr.status === 200 || xhr.status === 304){
-                    console.log(xhr.responseText);
-                    callback(xhr.responseText);
-                } else {
-                    console.log(xhr.responseText);
-                }
-            }
-        }
-        xhr.send(JSON.stringify(data));
-    },
-    post: function(url, data, callback){
-        var xhr=new XMLHttpRequest();
-        xhr.open('POST', url,true);
-        // 添加http头，发送信息至服务器时内容编码类型
-        xhr.setRequestHeader('Content-Type','application/json');
-        xhr.onreadystatechange=function(){
-            if (xhr.readyState === 4){
-                if (xhr.status === 200 || xhr.status === 304){
-                    callback(xhr.responseText);
-                }
-            }
-        }
-        xhr.send(JSON.stringify(data));
-    }
-}
+    var stationList = [];
+    var stationTimer = null;
+    var statusTimer = null;
+    /* While a host name is being edited the periodic refresh must not rebuild
+     * the table, otherwise the input is wiped every 4 s. */
+    var stationEditing = false;
 
-function networkStatus() {
-    var baseArray1 = document.getElementsByClassName('header-title-one')
-    var base1 = baseArray1[0]
-    base1.style.color = '#000'
-    base1.style.cursor = 'auto'
-    var baseArray = document.getElementsByClassName('header-title-two')
-    var base = baseArray[0]
-    base.style.color = '#888888'
-    base.style.cursor = 'pointer'
-    var baseShow = document.getElementById('networkShow')
-    baseShow.style.display = 'block'
-    var highShow = document.getElementById('customerShow')
-    highShow.style.display = 'none'
-}
-
-function customerList() {
-    console.log('点击客户端列表')
-    var base1 = document.querySelector('.header-title-one')
-    base1.style.color = '#888888'
-    base1.style.cursor = 'pointer'
-    var base = document.querySelector('.header-title-two')
-    base.style.color = '#000'
-    base.style.cursor = 'auto'
-    var baseShow = document.getElementById('networkShow')
-    baseShow.style.display = 'none'
-    var highShow = document.getElementById('customerShow')
-    highShow.style.display = 'block'
-}
-
-function deviceStatusUpdate (nowTime, list) {
-    console.log('device Status Update')
-    var connectTime = document.getElementById('connect-time')
-    var remainCount = document.getElementById('remain-count')
-    var connectCount = document.getElementById('connect-count')
-
-    var online_time = nowTime / 1000000;
-    var h = Math.floor(online_time / 3600 );
-    var m = Math.floor((online_time /60 % 60));
-    var s = Math.floor((online_time % 60));
-
-    console.log('list: ', list)
-    connectTime.innerHTML = h +'小时'+ m +'分钟'+ s +'秒'
-    remainCount.innerHTML = 10 - list.length + '台'
-    connectCount.innerHTML = list.length + '台'
-
-}
-
-function createList (list) {
-    var html = []
-    var tbody = document.getElementById('tbody')
-    for(var i = 0;i < list.length; i++){ //遍历一下json数据
-        console.log('name: ', list[i].name_str)
-        console.log('mac: ', list[i].mac_str)
-        console.log('ip:', list[i].ip_str)
-        //<td><div data-mac="${list[i].mac_str}" data-value="${list[i].isNetwork}" class="switch-wrap"></div></td>
-        var tr = `<tr><td><input value="${list[i].name_str}" disabled class="list-name" data-index="${i}" id="row + ${i}" /></td><td>${list[i].mac_str}</td><td>${list[i].ip_str}</td><td>${list[i].connectTime}</td><td><div class="flex flex-jcc"><input class="edit-btn" type="button" id="edit + ${i}" data-id="row + ${i}" value="编辑" /><div class="edit-line"></div><input class="del-btn" type="button" data-index="${i}" id="dle + ${i}" value="删除"/></div></td></tr>`
-        html.push(tr)
-    }
-    tbody.innerHTML = html.join('')
-}
-
-function listDataDelete (index) {
-    var deleteDeviceDic = per[index]
-
-    console.log('deleteDeviceDic body: ' + JSON.stringify(deleteDeviceDic))
-    Ajax.post(CONSTANT.POST_DELETEDEVICE_URL, deleteDeviceDic, function (res) {
-        console.log('listDataDelete block: ' + res)
-    })
-}
-
-function editNameUpdate (index, value) {
-    var stationDic = per[index]
-    stationDic['name_str'] = value
-
-    console.log('stationDic body: ' + JSON.stringify(stationDic))
-    Ajax.post(CONSTANT.POST_CHANGENAME_URL, stationDic, function (res) {
-        console.log('editNameUpdate block: ' + res)
-    })
-}
-
-function updateRouterList () {
-    getListTime = setTimeout(updateRouterList,4000)
-    Ajax.get(CONSTANT.GET_STATION_URL, function (res) {
-        res = JSON.parse(res)
-        console.log('获取基本信息： ', res)
-        console.log('获取基本信息： ', res.station_list)
-        per = res.station_list
-        deviceStatusUpdate(res.now_time, res.station_list)
-        for (var i = 0; i < per.length; i++) {
-            var stationDic = per[i]
-            var online_time = (res.now_time - stationDic.online_time_s)/1000000
-            var h = Math.floor(online_time / 3600 )
-            var m = Math.floor((online_time /60 % 60))
-            var s = Math.floor((online_time % 60))
-            let connectTime = h + '小时' + m + '分钟' + s + '秒'
-            stationDic['connectTime'] = connectTime
-            per.splice(i, 1, stationDic)
-        }
-        console.log('页面上要显示的信息： ', per)
-
-        createList(per)
-    })
-}
-
-function menuClick (e) {
-    console.log('e: ', e.classList)
-    var menuView = document.getElementById('leftMenu')
-    if (e.classList.contains('delMenu')) {
-        menuView.style.display = 'none'
-        e.classList.remove('delMenu')
-    } else {
-        e.classList.add('delMenu')
-        menuView.style.display = 'block'
+    function byId(id) {
+        return document.getElementById(id);
     }
 
-}
+    function setText(id, text) {
+        var node = byId(id);
+        if (node) {
+            node.textContent = text;
+        }
+    }
 
-function initHash () {
-    console.log('页面第一次加载')
+    function pad2(value) {
+        return value < 10 ? '0' + value : String(value);
+    }
 
-    var highShow = document.getElementById('customerShow')
-    highShow.style.display = 'none'
+    function formatDuration(totalSeconds) {
+        var seconds = Math.max(0, Math.floor(totalSeconds));
+        var hours = Math.floor(seconds / 3600);
+        var minutes = Math.floor((seconds % 3600) / 60);
+        var rest = seconds % 60;
+        if (hours > 0) {
+            return hours + '小时' + minutes + '分钟' + rest + '秒';
+        }
+        if (minutes > 0) {
+            return minutes + '分钟' + rest + '秒';
+        }
+        return rest + '秒';
+    }
 
-    updateRouterList()
-    var dom = document.querySelector('table')
-    dom.addEventListener('click', function(e) {
-        // if (e.target.className === 'switch-wrap') {
-        //     console.log(e.target.getAttribute('data-mac'))
-        //     if (e.target.getAttribute('data-value') === 'true') {
-        //         e.target.setAttribute('data-value', false)
-        //     } else {
-        //         e.target.setAttribute('data-value', true)
-        //     }
-        // }
-        if (e.target.className === 'edit-btn') {
-            console.log('editBtn')
-            clearInterval(getListTime)
-            var inputId = e.target.getAttribute('id')
-            var inputDataId = e.target.getAttribute('data-id')
-            var editBtn = document.getElementById(inputId)
-            var listName = document.getElementById(inputDataId)
-            // var listName = document.getElementById('list-name-id')
-            if (editBtn.value === '编辑') {
-                console.log('editBtn bianji')
-                listName.disabled = ''
-                listName.style.border = '1px solid #CCCCCC'
-                editBtn.value = '确认'
+    function makeButton(label, className, index) {
+        var button = document.createElement('input');
+        button.type = 'button';
+        button.value = label;
+        button.className = className;
+        button.setAttribute('data-index', String(index));
+        return button;
+    }
+
+    function makeCell(text) {
+        var cell = document.createElement('td');
+        cell.textContent = text;
+        return cell;
+    }
+
+    function renderStationRow(station, index, nowTime) {
+        var row = document.createElement('tr');
+
+        var nameCell = document.createElement('td');
+        var nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.className = 'list-name';
+        nameInput.disabled = true;
+        nameInput.maxLength = 32;
+        /* value assignment (not innerHTML) keeps host names inert. */
+        nameInput.value = typeof station.name_str === 'string' ? station.name_str : '';
+        nameCell.appendChild(nameInput);
+        row.appendChild(nameCell);
+
+        row.appendChild(makeCell(typeof station.mac_str === 'string' ? station.mac_str : ''));
+        row.appendChild(makeCell(typeof station.ip_str === 'string' ? station.ip_str : ''));
+
+        var onlineSeconds = (nowTime - Number(station.online_time_s)) / 1000000;
+        row.appendChild(makeCell(formatDuration(onlineSeconds)));
+
+        var actionCell = document.createElement('td');
+        var actionWrap = document.createElement('div');
+        actionWrap.className = 'flex flex-jcc';
+
+        var editButton = makeButton('编辑', 'edit-btn', index);
+        var deleteButton = makeButton('删除', 'del-btn', index);
+
+        editButton.addEventListener('click', function () {
+            if (editButton.value === '编辑') {
+                stationEditing = true;
+                if (stationTimer) {
+                    clearTimeout(stationTimer);
+                    stationTimer = null;
+                }
+                nameInput.disabled = false;
+                nameInput.focus();
+                editButton.value = '确认';
             } else {
-                console.log('editBtn queren')
-                listName.disabled = 'disabled'
-                listName.style.border = '0'
-                editBtn.value = '编辑'
-                console.log('listName: ' + listName.value)
-                console.log('listName: ' + listName.getAttribute('data-index'))
-                editNameUpdate(listName.getAttribute('data-index'), listName.value)
-                updateRouterList()
+                renameStation(index, nameInput.value, nameInput, editButton);
             }
+        });
+
+        deleteButton.addEventListener('click', function () {
+            if (window.confirm('确定要断开并删除该客户端吗？')) {
+                deleteStation(index);
+            }
+        });
+
+        actionWrap.appendChild(editButton);
+        var divider = document.createElement('div');
+        divider.className = 'edit-line';
+        actionWrap.appendChild(divider);
+        actionWrap.appendChild(deleteButton);
+        actionCell.appendChild(actionWrap);
+        row.appendChild(actionCell);
+
+        return row;
+    }
+
+    function updateStationCounts(data) {
+        var list = Array.isArray(data.station_list) ? data.station_list : [];
+        var maxSta = Number(data.max_sta) || 10;
+        setText('connect-count', list.length + '台');
+        setText('remain-count', Math.max(0, maxSta - list.length) + '台');
+        setText('client-count-top', list.length + '台');
+        return list;
+    }
+
+    function renderStationList(data) {
+        if (stationEditing) {
+            /* Do not destroy the row the administrator is editing. */
+            return;
         }
+        var body = byId('tbody');
+        if (!body) {
+            return;
+        }
+        while (body.firstChild) {
+            body.removeChild(body.firstChild);
+        }
+        stationList = updateStationCounts(data);
+        var nowTime = Number(data.now_time) || Date.now() * 1000;
 
-        if (e.target.className === 'del-btn') {
-            clearInterval(getListTime)
-            console.log('删除')
-            var deleteId = e.target.getAttribute('id')
-            var deleteBtn = document.getElementById(deleteId)
-            var target = e.target
-            console.log(target.parentNode.parentNode.parentNode)
-            console.log('delete index: ' + deleteBtn.getAttribute('data-index'))
+        stationList.forEach(function (station, index) {
+            body.appendChild(renderStationRow(station, index, nowTime));
+        });
+    }
 
-            var msg = '您确定要删除这条数据吗？'
-            if (confirm(msg) === true) {
-                if (e.target.className === 'del-btn') {
-                    tbody.removeChild(target.parentNode.parentNode.parentNode)
-                    listDataDelete(deleteBtn.getAttribute('data-index'))
-                }
-                updateRouterList()
+    /* Fetch the counts once at page load so the network tab shows meaningful
+     * client numbers without starting the (hidden-tab) polling. */
+    function loadStationCounts() {
+        CPE.getJson(STATION_URL).then(function (data) {
+            updateStationCounts(data);
+        }).catch(function () {
+            /* 401 already redirected to the login page. */
+        });
+    }
+
+    function refreshStations() {
+        if (stationTimer) {
+            clearTimeout(stationTimer);
+            stationTimer = null;
+        }
+        if (stationEditing) {
+            stationTimer = setTimeout(refreshStations, 4000);
+            return;
+        }
+        CPE.getJson(STATION_URL).then(function (data) {
+            renderStationList(data);
+        }).catch(function () {
+            /* 401 already redirected to the login page. */
+        }).then(function () {
+            stationTimer = setTimeout(refreshStations, 4000);
+        });
+    }
+
+    function renameStation(index, name, input, button) {
+        var station = stationList[index];
+        if (!station) {
+            return;
+        }
+        if (name.length === 0 || name.length > 32) {
+            window.alert('主机名长度必须为 1~32 个字符');
+            return;
+        }
+        button.disabled = true;
+        CPE.postJson(CHANGE_NAME_URL, {
+            name_str: name,
+            mac_str: station.mac_str
+        }).then(function () {
+            input.disabled = true;
+            input.value = name;
+            button.value = '编辑';
+        }).catch(function (error) {
+            window.alert(CPE.errorText(error));
+        }).then(function () {
+            stationEditing = false;
+            button.disabled = false;
+            refreshStations();
+        });
+    }
+
+    function deleteStation(index) {
+        var station = stationList[index];
+        if (!station) {
+            return;
+        }
+        stationEditing = false;
+        CPE.postJson(DELETE_DEVICE_URL, {
+            mac_str: station.mac_str
+        }).then(function () {
+            refreshStations();
+        }).catch(function (error) {
+            window.alert(CPE.errorText(error));
+            refreshStations();
+        });
+    }
+
+    function renderStatus(status) {
+        setText('status-state', status.state_text || '未知');
+        setText('status-usb', status.usb_connected ? '已连接' : '未连接');
+        setText('status-link', status.link_up ? '已连接' : '未连接');
+        setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
+        setText('status-rssi', status.rssi_valid ? (status.rssi + ' dBm') : '未知');
+        setText('status-recovery', String(status.recovery_attempts || 0));
+        setText('status-boot', String(status.boot_count || 0));
+        setText('status-device-name', status.device_name || '-');
+        setText('status-last-error', status.last_error || '无');
+        setText('connect-time', formatDuration(Number(status.uptime_s) || 0));
+
+        setText('internet-state', status.link_up
+            ? '移动数据已连接'
+            : (status.usb_connected ? '正在获取网络…' : '未检测到 4G 模块'));
+
+        var apSsid = status.ap && typeof status.ap.ssid === 'string' ? status.ap.ssid : '';
+        setText('wifi-state', apSsid ? ('2.4 GHz Wi-Fi 正常（' + apSsid + '）') : '2.4 GHz Wi-Fi 正常');
+
+        var banner = byId('status-banner');
+        if (banner) {
+            if (status.state === 4) {
+                banner.textContent = '当前处于故障状态：4G 链路未就绪，系统会自动重试。' +
+                    '您仍可以通过本页面修改 WLAN 配置或恢复出厂设置。';
+                banner.className = 'status-banner status-banner-warn';
+            } else if (!status.link_up) {
+                banner.textContent = '正在等待 4G 网络就绪，本页面在链路恢复前仍可正常使用。';
+                banner.className = 'status-banner status-banner-info';
             } else {
-                console.log('取消删除数据')
-                updateRouterList()
+                banner.textContent = '';
+                banner.className = 'status-banner';
             }
         }
-    })
-    // createList(per)
-}
+    }
+
+    function refreshStatus() {
+        if (statusTimer) {
+            clearTimeout(statusTimer);
+            statusTimer = null;
+        }
+        CPE.getStatus().then(function (status) {
+            renderStatus(status);
+        }).catch(function () {
+            /* 401 already redirected. */
+        }).then(function () {
+            statusTimer = setTimeout(refreshStatus, 5000);
+        });
+    }
+
+    function switchTab(showNetwork) {
+        var networkPanel = byId('networkShow');
+        var clientPanel = byId('customerShow');
+        var networkTab = byId('tab-network');
+        var clientTab = byId('tab-clients');
+        if (!networkPanel || !clientPanel || !networkTab || !clientTab) {
+            return;
+        }
+        networkPanel.style.display = showNetwork ? 'block' : 'none';
+        clientPanel.style.display = showNetwork ? 'none' : 'block';
+        networkTab.className = showNetwork ? 'header-title-one active-title' : 'header-title-one';
+        clientTab.className = showNetwork ? 'header-title-two' : 'header-title-two active-title';
+        if (showNetwork) {
+            /* Leaving the client tab abandons a pending edit and stops polling. */
+            stationEditing = false;
+            if (stationTimer) {
+                clearTimeout(stationTimer);
+                stationTimer = null;
+            }
+        } else {
+            refreshStations();
+        }
+    }
+
+    function bindMenu() {
+        var menuButton = byId('menuBtn');
+        var menu = byId('leftMenu');
+        if (!menuButton || !menu) {
+            return;
+        }
+        menuButton.addEventListener('click', function () {
+            var hidden = menu.style.display === 'none';
+            menu.style.display = hidden ? 'block' : 'none';
+        });
+    }
+
+    function bindActions() {
+        var changePassword = byId('btn-change-password');
+        if (changePassword) {
+            changePassword.addEventListener('click', function () {
+                CPE.openPasswordModal(false).catch(function () {});
+            });
+        }
+        var logout = byId('btn-logout');
+        if (logout) {
+            logout.addEventListener('click', function () {
+                CPE.logout().catch(function (error) {
+                    /* Never fail silently: the user must know whether they are
+                     * still logged in. */
+                    window.alert(CPE.errorText(error));
+                });
+            });
+        }
+        var factoryReset = byId('btn-factory-reset');
+        if (factoryReset) {
+            factoryReset.addEventListener('click', function () {
+                CPE.factoryReset().catch(function () {});
+            });
+        }
+    }
+
+    function init() {
+        bindMenu();
+        bindActions();
+        var networkTab = byId('tab-network');
+        var clientTab = byId('tab-clients');
+        if (networkTab) {
+            networkTab.addEventListener('click', function () {
+                switchTab(true);
+            });
+        }
+        if (clientTab) {
+            clientTab.addEventListener('click', function () {
+                switchTab(false);
+            });
+        }
+
+        CPE.bootstrap().then(function (status) {
+            renderStatus(status);
+            switchTab(true);
+            loadStationCounts();
+            refreshStatus();
+        }).catch(function () {
+            /* Forced password change already redirected to the login page. */
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+}());

@@ -1,0 +1,35 @@
+menu "CPE Core Configuration"
+
+    config CPE_AP_SSID_PREFIX
+        string "Default SoftAP SSID prefix"
+        default "ESP-CPE"
+        help
+            The default SoftAP SSID is "<prefix>-XXXX" where XXXX are the last
+            two bytes of the device MAC address.
+
+    config CPE_AP_CHANNEL_DEFAULT
+        int "Default SoftAP channel"
+        default 6
+        range 1 13
+
+    config CPE_MAX_STA_DEFAULT
+        int "Default maximal STA connections"
+        default 8
+        range 1 10
+
+    config CPE_ADMIN_USERNAME
+        string "Default administrator user name"
+        default "admin"
+
+    config CPE_DEVICE_NAME
+        string "Default device name"
+        default "ESP-CPE"
+
+    config CPE_FACTORY_RESET_GPIO
+        int "Factory reset button GPIO (-1 to disable)"
+        default -1
+        help
+            GPIO connected to a button to GND. Hold for CPE_FACTORY_RESET_HOLD_MS
+            at boot to restore factory settings. Implemented in a later phase.
+
+endmenu

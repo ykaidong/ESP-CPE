@@ -1,179 +1,424 @@
 /*
- * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * SoftAP start-up / runtime reconfiguration for the ESP-CPE product.
+ *
+ * Security notes (audit P0-3 / P1-13 / P1-15):
+ *  - No credential is compiled in: SSID and WPA2 password come from
+ *    cpe_config (per-device random credential generated on first boot).
+ *  - The AP is always WPA2-PSK, an empty password can never downgrade the AP
+ *    to WIFI_AUTH_OPEN.
+ *  - No password is ever printed. Only the SSID (public by definition) is
+ *    logged.
+ *  - All IDF calls are checked, never wrapped in ESP_ERROR_CHECK, so an
+ *    invalid stored value results in a returned error instead of abort().
+ *  - DNS and NAPT are deliberately not configured here: main/ applies the
+ *    upstream DNS and enables NAPT once the 4G link is online.
  */
 
 #include <string.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/event_groups.h"
-#include "sdkconfig.h"
-#include "rom/ets_sys.h"
-#include "esp_system.h"
-#include "esp_wifi.h"
-#include "esp_netif.h"
+
 #include "esp_event.h"
 #include "esp_log.h"
-#include "nvs_flash.h"
-#include "lwip/err.h"
-#include "lwip/sys.h"
+#include "esp_mac.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
 #include "lwip/ip_addr.h"
-#include "lwip/opt.h"
-#include "lwip/err.h"
-#include "lwip/sys.h"
-#include "lwip/lwip_napt.h"
-#include "dhcpserver/dhcpserver.h"
+
+#include "cpe_config.h"
 #include "app_wifi.h"
 
-/* The examples use WiFi configuration that you can set via 'make menuconfig'.
+static const char *TAG = "app_wifi";
 
-   If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
-*/
-#define EXAMPLE_ESP_MAXIMUM_RETRY  CONFIG_ESP_MAXIMUM_RETRY
-#define EXAMPLE_IP_ADDR            CONFIG_SERVER_IP
+/* Bounded STA reconnect attempts (STA is only enabled when a STA SSID is
+ * configured in cpe_config; the product WAN is the USB ECM link). */
+#define APP_WIFI_STA_RETRY_MAX      CONFIG_ESP_MAXIMUM_RETRY
 
-static const char *TAG = "app wifi";
+#define APP_WIFI_BW_20              WIFI_BW20
+#define APP_WIFI_BW_40              WIFI_BW40
 
-static int s_retry_num = 0;
-static esp_netif_t *wifi_ap_netif = NULL;
-static esp_netif_t *wifi_sta_netif = NULL;
+static bool s_wifi_inited;
+static bool s_wifi_started;
+static bool s_handlers_registered;
+static int s_sta_retry;
+static esp_netif_t *s_ap_netif;
+static esp_netif_t *s_sta_netif;
 
-static void event_handler(void* arg, esp_event_base_t event_base,
-                          int32_t event_id, void* event_data)
+/* ------------------------------------------------------------------------- */
+/* Helpers                                                                   */
+/* ------------------------------------------------------------------------- */
+
+static wifi_bandwidth_t to_bandwidth(uint8_t bandwidth)
 {
-    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
-            esp_wifi_connect();
-            s_retry_num++;
-            ESP_LOGI(TAG, "retry to connect to the AP");
+    return (bandwidth == CPE_BANDWIDTH_40) ? APP_WIFI_BW_40 : APP_WIFI_BW_20;
+}
+
+/**
+ * @brief Validate a cpe_config_t AP section and translate it into a
+ *        wifi_ap_config_t. Returns ESP_ERR_INVALID_ARG on any bad value.
+ */
+static esp_err_t build_ap_config(const cpe_config_t *cfg, wifi_config_t *out)
+{
+    if (cfg == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (cpe_config_validate_ap_ssid(cfg->ap_ssid) != ESP_OK ||
+            cpe_config_validate_wifi_password(cfg->ap_password) != ESP_OK ||
+            cpe_config_validate_channel(cfg->ap_channel) != ESP_OK ||
+            cpe_config_validate_bandwidth(cfg->ap_bandwidth) != ESP_OK ||
+            cpe_config_validate_max_sta(cfg->max_sta) != ESP_OK) {
+        ESP_LOGE(TAG, "Refusing invalid AP configuration");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    size_t ssid_len = strlen(cfg->ap_ssid);
+    /* ssid[] is not NUL terminated when the SSID is exactly 32 bytes, so copy
+     * explicitly and set ssid_len (do not rely on strlcpy here). */
+    memcpy(out->ap.ssid, cfg->ap_ssid, ssid_len);
+    out->ap.ssid_len = (uint8_t)ssid_len;
+    memcpy(out->ap.password, cfg->ap_password, strlen(cfg->ap_password));
+    /* Never allow an open AP: cpe_config guarantees 8..63 printable bytes. */
+    out->ap.authmode = WIFI_AUTH_WPA2_PSK;
+    out->ap.channel = cfg->ap_channel;
+    out->ap.ssid_hidden = cfg->ap_hidden ? 1 : 0;
+    out->ap.max_connection = cfg->max_sta;
+    return ESP_OK;
+}
+
+static esp_err_t build_sta_config(const cpe_config_t *cfg, wifi_config_t *out)
+{
+    if (cfg == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    size_t ssid_len = strlen(cfg->sta_ssid);
+    if (ssid_len == 0 || ssid_len > CPE_SSID_MAX_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(out, 0, sizeof(*out));
+    memcpy(out->sta.ssid, cfg->sta_ssid, ssid_len);
+
+    size_t pass_len = strlen(cfg->sta_password);
+    if (pass_len == 0) {
+        out->sta.threshold.authmode = WIFI_AUTH_OPEN;
+    } else if (pass_len >= CPE_WIFI_PASS_MIN_LEN && pass_len <= CPE_WIFI_PASS_MAX_LEN) {
+        memcpy(out->sta.password, cfg->sta_password, pass_len);
+        out->sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
+/**
+ * @brief Apply an optional non-default AP IPv4 address (CONFIG_SERVER_IP).
+ *
+ * The default 192.168.4.1 is already configured by esp_netif, so the DHCP
+ * server is untouched in the common case. Errors are returned instead of being
+ * turned into aborts.
+ */
+static esp_err_t ap_apply_static_ip(esp_netif_t *ap_netif)
+{
+    if (strcmp(CONFIG_SERVER_IP, "192.168.4.1") == 0) {
+        return ESP_OK;
+    }
+
+    esp_netif_ip_info_t ip = { 0 };
+    ip.ip.addr = ipaddr_addr(CONFIG_SERVER_IP);
+    if (ip.ip.addr == IPADDR_NONE || ip.ip.addr == 0) {
+        ESP_LOGE(TAG, "CONFIG_SERVER_IP \"%s\" is not a valid IPv4 address", CONFIG_SERVER_IP);
+        return ESP_ERR_INVALID_ARG;
+    }
+    ip.gw.addr = ip.ip.addr;
+    ip.netmask.addr = ipaddr_addr("255.255.255.0");
+
+    esp_err_t err = esp_netif_dhcps_stop(ap_netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGE(TAG, "Failed to stop AP DHCP server: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = esp_netif_set_ip_info(ap_netif, &ip);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set AP IP info: %s", esp_err_to_name(err));
+        (void)esp_netif_dhcps_start(ap_netif);
+        return err;
+    }
+    err = esp_netif_dhcps_start(ap_netif);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restart AP DHCP server: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "AP IP address set to %s", CONFIG_SERVER_IP);
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Wi-Fi events                                                              */
+/* ------------------------------------------------------------------------- */
+
+static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
+                                   int32_t event_id, void *event_data)
+{
+    (void)arg;
+
+    if (event_base == WIFI_EVENT) {
+        switch (event_id) {
+        case WIFI_EVENT_STA_START:
+            if (esp_wifi_connect() != ESP_OK) {
+                ESP_LOGW(TAG, "STA connect request failed");
+            }
+            break;
+        case WIFI_EVENT_STA_DISCONNECTED:
+            if (s_sta_retry < APP_WIFI_STA_RETRY_MAX) {
+                s_sta_retry++;
+                ESP_LOGW(TAG, "STA disconnected, retry %d/%d", s_sta_retry, APP_WIFI_STA_RETRY_MAX);
+                if (esp_wifi_connect() != ESP_OK) {
+                    ESP_LOGW(TAG, "STA reconnect request failed");
+                }
+            } else {
+                ESP_LOGW(TAG, "STA reconnect attempts exhausted");
+            }
+            break;
+        case WIFI_EVENT_AP_STACONNECTED: {
+            wifi_event_ap_staconnected_t *event = (wifi_event_ap_staconnected_t *)event_data;
+            ESP_LOGI(TAG, "Station " MACSTR " joined, AID=%d", MAC2STR(event->mac), event->aid);
+            break;
         }
-        ESP_LOGI(TAG, "connect to the AP fail");
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STACONNECTED) {
-        wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
-        ESP_LOGI(TAG, "station "MACSTR" join, AID=%d",
-                 MAC2STR(event->mac), event->aid);
-
-        esp_netif_ip_info_t ip;
-        esp_netif_get_ip_info(wifi_ap_netif, &ip);
-        ip_napt_enable(ip.ip.addr, true);
-        ESP_LOGI(TAG, "ip_napt_enable");
-    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_STADISCONNECTED) {
-        wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
-        ESP_LOGI(TAG, "station "MACSTR" leave, AID=%d",
-                 MAC2STR(event->mac), event->aid);
+        case WIFI_EVENT_AP_STADISCONNECTED: {
+            wifi_event_ap_stadisconnected_t *event = (wifi_event_ap_stadisconnected_t *)event_data;
+            ESP_LOGI(TAG, "Station " MACSTR " left, AID=%d", MAC2STR(event->mac), event->aid);
+            break;
+        }
+        default:
+            break;
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "got ip:" IPSTR, IP2STR(&event->ip_info.ip));
-        s_retry_num = 0;
+        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+        ESP_LOGI(TAG, "STA got IP " IPSTR, IP2STR(&event->ip_info.ip));
+        s_sta_retry = 0;
     }
 }
 
-void wifi_init_softap(esp_netif_t *wifi_netif, const modem_wifi_config_t *config)
+/* ------------------------------------------------------------------------- */
+/* Public API                                                                */
+/* ------------------------------------------------------------------------- */
+
+esp_err_t app_wifi_start(void)
 {
-    if (strcmp(EXAMPLE_IP_ADDR, "192.168.4.1")) {
-        esp_netif_ip_info_t ip;
-        memset(&ip, 0, sizeof(esp_netif_ip_info_t));
-        ip.ip.addr = ipaddr_addr(EXAMPLE_IP_ADDR);
-        ip.gw.addr = ipaddr_addr(EXAMPLE_IP_ADDR);
-        ip.netmask.addr = ipaddr_addr("255.255.255.0");
-        ESP_ERROR_CHECK(esp_netif_dhcps_stop(wifi_netif));
-        ESP_ERROR_CHECK(esp_netif_set_ip_info(wifi_netif, &ip));
-        ESP_ERROR_CHECK(esp_netif_dhcps_start(wifi_netif));
+    if (s_wifi_started) {
+        return ESP_OK;
     }
-    // Configure DNS server to 8.8.8.8
-    esp_netif_dns_info_t dns;
-    dns.ip.u_addr.ip4.addr = ipaddr_addr("8.8.8.8");
-    dns.ip.type = IPADDR_TYPE_V4;
-    dhcps_offer_t dhcps_dns_value = OFFER_DNS;
-    ESP_ERROR_CHECK(esp_netif_dhcps_stop(wifi_netif));
-    ESP_ERROR_CHECK(esp_netif_dhcps_option(wifi_netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dhcps_dns_value, sizeof(dhcps_dns_value)));
-    ESP_ERROR_CHECK(esp_netif_set_dns_info(wifi_netif, ESP_NETIF_DNS_MAIN, &dns));
-    ESP_ERROR_CHECK(esp_netif_dhcps_start(wifi_netif));
-    wifi_config_t wifi_config;
-    memset(&wifi_config, 0, sizeof(wifi_config_t));
-    snprintf((char*)wifi_config.ap.ssid, 32, "%s", config->ap_ssid);
-    wifi_config.ap.ssid_len = strlen((char*)wifi_config.ap.ssid);
-    snprintf((char*)wifi_config.ap.password, 64, "%s", config->ap_password);
-    wifi_config.ap.max_connection = config->max_connection;
-    wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
-    if (strlen(config->ap_password) == 0) {
-        wifi_config.ap.authmode = WIFI_AUTH_OPEN;
+
+    cpe_config_t cfg;
+    esp_err_t err = cpe_config_get(&cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read CPE configuration: %s", esp_err_to_name(err));
+        return err;
     }
-    wifi_config.ap.channel = config->channel;
 
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
+    wifi_config_t ap_cfg;
+    err = build_ap_config(&cfg, &ap_cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
 
-    ESP_LOGI(TAG, "wifi_init_softap finished.SSID:%s password:%s",
-             config->ap_ssid, config->ap_password);
+    wifi_config_t sta_cfg = { 0 };
+    bool has_sta = cfg.sta_ssid[0] != '\0';
+    if (has_sta && build_sta_config(&cfg, &sta_cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "Ignoring invalid STA configuration, starting AP only");
+        has_sta = false;
+    }
+
+    s_ap_netif = esp_netif_create_default_wifi_ap();
+    if (s_ap_netif == NULL) {
+        ESP_LOGE(TAG, "Failed to create AP netif");
+        return ESP_ERR_NO_MEM;
+    }
+    if (has_sta) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+        if (s_sta_netif == NULL) {
+            ESP_LOGE(TAG, "Failed to create STA netif");
+            err = ESP_ERR_NO_MEM;
+            goto fail_netif;
+        }
+    }
+
+    err = ap_apply_static_ip(s_ap_netif);
+    if (err != ESP_OK) {
+        goto fail_netif;
+    }
+
+    wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    err = esp_wifi_init(&init_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
+        goto fail_netif;
+    }
+    s_wifi_inited = true;
+
+    err = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, app_wifi_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register Wi-Fi event handler: %s", esp_err_to_name(err));
+        goto fail_wifi;
+    }
+    s_handlers_registered = true;
+    err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, app_wifi_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register IP event handler: %s", esp_err_to_name(err));
+        goto fail_wifi;
+    }
+
+    wifi_mode_t mode = has_sta ? WIFI_MODE_APSTA : WIFI_MODE_AP;
+    err = esp_wifi_set_mode(mode);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
+        goto fail_wifi;
+    }
+
+    /* cpe_config is the single source of truth: do not let the Wi-Fi driver
+     * keep a second plaintext copy of the credentials in NVS. */
+    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_storage failed: %s", esp_err_to_name(err));
+        goto fail_wifi;
+    }
+
+    err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply AP configuration: %s", esp_err_to_name(err));
+        goto fail_wifi;
+    }
+    if (has_sta) {
+        err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to apply STA configuration: %s", esp_err_to_name(err));
+        }
+    }
+
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
+        goto fail_wifi;
+    }
+
+    /* Bandwidth is a per-interface setting, not part of wifi_ap_config_t. */
+    esp_err_t bw_err = esp_wifi_set_bandwidth(WIFI_IF_AP, to_bandwidth(cfg.ap_bandwidth));
+    if (bw_err != ESP_OK) {
+        /* Non fatal: the AP keeps running with its previous bandwidth. */
+        ESP_LOGW(TAG, "Failed to set AP bandwidth: %s", esp_err_to_name(bw_err));
+    }
+
+    s_wifi_started = true;
+    ESP_LOGI(TAG, "SoftAP started: SSID \"%s\", channel %u, %u MHz, WPA2-PSK, hidden=%d, max_sta=%u",
+             cfg.ap_ssid, (unsigned)cfg.ap_channel, (unsigned)cfg.ap_bandwidth,
+             cfg.ap_hidden ? 1 : 0, (unsigned)cfg.max_sta);
+    return ESP_OK;
+
+fail_wifi:
+    if (s_handlers_registered) {
+        (void)esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, app_wifi_event_handler);
+        (void)esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, app_wifi_event_handler);
+        s_handlers_registered = false;
+    }
+    if (s_wifi_inited) {
+        (void)esp_wifi_deinit();
+        s_wifi_inited = false;
+    }
+fail_netif:
+    if (s_sta_netif != NULL) {
+        esp_netif_destroy(s_sta_netif);
+        s_sta_netif = NULL;
+    }
+    if (s_ap_netif != NULL) {
+        esp_netif_destroy(s_ap_netif);
+        s_ap_netif = NULL;
+    }
+    return err;
 }
 
-void wifi_init_sta(esp_netif_t *wifi_netif, const modem_wifi_config_t *config)
+esp_err_t app_wifi_apply(const cpe_config_t *cfg)
 {
-    wifi_config_t wifi_config;
-    memset(&wifi_config, 0, sizeof(wifi_config_t));
-    snprintf((char*)wifi_config.sta.ssid, 32, "%s", config->sta_ssid);
-    snprintf((char*)wifi_config.sta.password, 64, "%s", config->sta_password);
-
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
-
-    ESP_LOGI(TAG, "wifi_init_sta finished.");
-    ESP_LOGI(TAG, "connect to ap SSID:%s password:%s",
-             config->sta_ssid, config->sta_password);
-}
-
-void app_wifi_main(const modem_wifi_config_t *config)
-{
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+    if (cfg == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
-    ESP_ERROR_CHECK(ret);
-
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    if (config->mode == WIFI_MODE_APSTA) {
-        mode = WIFI_MODE_APSTA;
-        wifi_ap_netif = esp_netif_create_default_wifi_ap();
-        wifi_sta_netif = esp_netif_create_default_wifi_sta();
-    } else if (config->mode == WIFI_MODE_AP) {
-        mode = WIFI_MODE_AP;
-        wifi_ap_netif = esp_netif_create_default_wifi_ap();
-    } else if (config->mode == WIFI_MODE_STA) {
-        mode = WIFI_MODE_STA;
-        wifi_sta_netif = esp_netif_create_default_wifi_sta();
+    if (!s_wifi_started) {
+        ESP_LOGE(TAG, "Cannot apply AP configuration before app_wifi_start()");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    if (mode == WIFI_MODE_NULL) {
-        ESP_LOGW(TAG, "Neither AP or STA have been configured. WiFi will be off.");
-        return;
+    wifi_config_t new_cfg;
+    esp_err_t err = build_ap_config(cfg, &new_cfg);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
-    ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
-    if (mode & WIFI_MODE_AP) {
-        wifi_init_softap(wifi_ap_netif, config);
+    /* Keep the currently effective configuration so a failed apply can be
+     * rolled back (the caller persists the new configuration only after this
+     * function returned ESP_OK). */
+    cpe_config_t prev;
+    err = cpe_config_get(&prev);
+    if (err != ESP_OK) {
+        return err;
+    }
+    wifi_config_t prev_cfg;
+    if (build_ap_config(&prev, &prev_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "Current AP configuration is invalid, cannot roll back safely");
+        return ESP_ERR_INVALID_STATE;
+    }
+    wifi_bandwidth_t prev_bw = to_bandwidth(prev.ap_bandwidth);
+    wifi_bandwidth_t new_bw = to_bandwidth(cfg->ap_bandwidth);
+
+    err = esp_wifi_set_config(WIFI_IF_AP, &new_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply new AP configuration: %s", esp_err_to_name(err));
+        return err;
     }
 
-    if (mode & WIFI_MODE_STA) {
-        wifi_init_sta(wifi_sta_netif, config);
+    /* A running AP needs esp_wifi_set_channel() for the channel change to take
+     * effect; the channel field of wifi_ap_config_t is only applied on start. */
+    if (cfg->ap_channel != prev.ap_channel) {
+        esp_err_t ch_err = esp_wifi_set_channel(cfg->ap_channel, WIFI_SECOND_CHAN_NONE);
+        if (ch_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to apply new AP channel: %s", esp_err_to_name(ch_err));
+            if (esp_wifi_set_config(WIFI_IF_AP, &prev_cfg) != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to restore previous AP configuration");
+            }
+            return ch_err;
+        }
     }
-    ESP_ERROR_CHECK(esp_wifi_start());
-}
 
-esp_netif_t *app_wifi_get_sta_netif(void)
-{
-    return wifi_sta_netif;
+    if (new_bw != prev_bw) {
+        esp_err_t bw_err = esp_wifi_set_bandwidth(WIFI_IF_AP, new_bw);
+        if (bw_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to apply new AP bandwidth: %s", esp_err_to_name(bw_err));
+            /* Roll back both the bandwidth and the AP configuration. */
+            (void)esp_wifi_set_bandwidth(WIFI_IF_AP, prev_bw);
+            esp_err_t restore_err = esp_wifi_set_config(WIFI_IF_AP, &prev_cfg);
+            if (restore_err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to restore previous AP configuration: %s",
+                         esp_err_to_name(restore_err));
+            }
+            if (cfg->ap_channel != prev.ap_channel) {
+                (void)esp_wifi_set_channel(prev.ap_channel, WIFI_SECOND_CHAN_NONE);
+            }
+            return bw_err;
+        }
+    }
+
+    ESP_LOGI(TAG, "SoftAP configuration applied: SSID \"%s\", channel %u, %u MHz, hidden=%d, max_sta=%u",
+             cfg->ap_ssid, (unsigned)cfg->ap_channel, (unsigned)cfg->ap_bandwidth,
+             cfg->ap_hidden ? 1 : 0, (unsigned)cfg->max_sta);
+    return ESP_OK;
 }
 
 esp_netif_t *app_wifi_get_ap_netif(void)
 {
-    return wifi_ap_netif;
+    return s_ap_netif;
 }

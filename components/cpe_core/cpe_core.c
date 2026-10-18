@@ -1,0 +1,40 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "esp_log.h"
+#include "cpe_core.h"
+
+static const char *TAG = "cpe_core";
+
+esp_err_t cpe_core_init(void)
+{
+    static bool s_core_inited = false;
+    if (s_core_inited) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = cpe_config_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "cpe_config_init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = cpe_auth_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "cpe_auth_init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    cpe_status_init();
+
+    uint32_t boot_count = cpe_boot_count_increment();
+    cpe_status_set_boot_count(boot_count);
+
+    ESP_LOGI(TAG, "CPE core initialized (boot count %u, first boot %d)",
+             boot_count, cpe_config_first_boot());
+    s_core_inited = true;
+    return ESP_OK;
+}

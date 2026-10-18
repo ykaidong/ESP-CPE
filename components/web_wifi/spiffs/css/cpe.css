@@ -1,0 +1,443 @@
+/*
+ * ESP-CPE management console additions.
+ *
+ * Kept in a separate stylesheet so the vendor style.css stays untouched.
+ * All selectors are served from SPIFFS and allowed by the
+ * "style-src 'self'" Content-Security-Policy.
+ */
+
+.active-title {
+    color: #000 !important;
+    cursor: auto !important;
+}
+
+/* Panels are hidden by class (not inline style) so the CSP can stay strict. */
+.hidden-panel {
+    display: none;
+}
+
+.status-banner {
+    display: none;
+    margin: 10px 20px 0 20px;
+    padding: 10px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.status-banner-warn {
+    display: block;
+    color: #8a4b00;
+    background-color: #fff7e6;
+    border: 1px solid #ffd591;
+}
+
+.status-banner-info {
+    display: block;
+    color: #0c4a6e;
+    background-color: #e6f4ff;
+    border: 1px solid #91caff;
+}
+
+.status-table {
+    width: 100%;
+    padding: 0 20px;
+    box-sizing: border-box;
+}
+
+.status-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #eeeeee;
+    font-size: 14px;
+}
+
+.status-label {
+    color: #666666;
+}
+
+.status-value {
+    color: #000000;
+    word-break: break-all;
+    text-align: right;
+    max-width: 60%;
+}
+
+.wlan-msg {
+    margin: 10px 20px 0 20px;
+    font-size: 13px;
+    min-height: 18px;
+}
+
+.wlan-msg-ok {
+    color: #237804;
+}
+
+.wlan-msg-error {
+    color: #cf1322;
+}
+
+.login-error {
+    color: #cf1322;
+    font-size: 13px;
+    text-align: center;
+    min-height: 18px;
+    margin-top: 10px;
+}
+
+.danger-btn {
+    height: 36px;
+    padding: 0 18px;
+    margin-left: 10px;
+    border: 1px solid #cf1322;
+    border-radius: 4px;
+    background-color: #fff1f0;
+    color: #cf1322;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.danger-btn:hover {
+    background-color: #ffccc7;
+}
+
+.modal-overlay {
+    position: fixed;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9999;
+    background-color: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-panel {
+    width: 360px;
+    max-width: 90%;
+    padding: 22px;
+    border-radius: 6px;
+    background-color: #ffffff;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.modal-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #000000;
+    margin-bottom: 8px;
+}
+
+.modal-hint {
+    font-size: 13px;
+    color: #666666;
+    line-height: 1.5;
+    margin-bottom: 14px;
+}
+
+.modal-input {
+    display: block;
+    width: 100%;
+    height: 38px;
+    box-sizing: border-box;
+    margin-bottom: 10px;
+    padding: 0 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.modal-error {
+    color: #cf1322;
+    font-size: 13px;
+    min-height: 18px;
+    margin-bottom: 8px;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.modal-actions .save-btn {
+    margin-left: 10px;
+}
+
+.cancel-btn {
+    height: 36px;
+    padding: 0 18px;
+    margin-left: 10px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    background-color: #ffffff;
+    color: #333333;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.cancel-btn:hover {
+    border-color: #1890ff;
+    color: #1890ff;
+}
+
+/* Login page form spacing (login.html now uses a <form> element). */
+.login-content form {
+    width: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Layout polish (the vendor stylesheet was built around the old demo pages and
+ * positioned the login card with absolute coordinates; the icon font it
+ * references is not shipped in SPIFFS). These overrides only touch layout.
+ * ------------------------------------------------------------------------- */
+
+/* --- login page: centered, self-contained card --- */
+.login-base {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: calc(100% - 80px);
+    padding: 24px 16px;
+    box-sizing: border-box;
+}
+
+.login-content {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: 380px;
+    max-width: 92%;
+    height: auto;
+    min-height: 0;
+    margin: 0;
+    padding: 32px 28px 26px;
+    box-sizing: border-box;
+    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.97);
+    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.16);
+}
+
+.login-router-img {
+    width: 46px;
+    height: 46px;
+    display: block;
+    margin: 0 auto 10px;
+}
+
+.login-title {
+    text-align: center;
+    font-size: 19px;
+    font-weight: 600;
+    margin-bottom: 18px;
+}
+
+.login-content .password-base {
+    width: 100%;
+    margin-bottom: 12px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    background-color: #ffffff;
+    overflow: hidden;
+}
+
+.login-content .pwd-two {
+    flex: 1;
+    width: 100%;
+    height: 40px;
+    padding: 0 12px;
+    box-sizing: border-box;
+    border: 0;
+    outline: none;
+    font-size: 14px;
+    background: transparent;
+}
+
+.login-content .password-base:focus-within {
+    border-color: #1890ff;
+    box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.15);
+}
+
+.login-btn {
+    margin-top: 6px;
+}
+
+.login-btn .save-btn {
+    width: 100%;
+}
+
+/* --- index / wlan pages: card sections, consistent spacing --- */
+.page-content {
+    margin: 16px 20px 24px;
+    padding: 6px 22px 22px;
+    background-color: #ffffff;
+    border: 1px solid #e8e8e8;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.page-title {
+    margin: 18px 0 10px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #1f1f1f;
+}
+
+.page-title:first-child {
+    margin-top: 12px;
+}
+
+.base-detail {
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 16px;
+    background-color: #fafafa;
+    border-radius: 6px;
+}
+
+.base-detail .base-one,
+.base-detail .base-three,
+.base-detail .base-five {
+    width: 90px;
+    align-items: center;
+    gap: 6px;
+}
+
+.base-detail img {
+    width: 34px;
+    height: 34px;
+    object-fit: contain;
+}
+
+.base-detail .base-two {
+    flex: 1;
+    min-width: 160px;
+}
+
+.base-detail .base-line {
+    margin-top: 8px;
+}
+
+.client-count {
+    font-size: 13px;
+    color: #1890ff;
+    font-weight: 600;
+}
+
+.device-detail {
+    padding: 14px 16px;
+    background-color: #fafafa;
+    border-radius: 6px;
+}
+
+.device-status-two,
+.device-status-one {
+    flex-wrap: wrap;
+    gap: 8px 24px;
+}
+
+.device-battery,
+.device-connect-count {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+
+.device-content {
+    color: #1890ff;
+    font-weight: 600;
+}
+
+.status-table {
+    padding: 0;
+}
+
+.status-row {
+    padding: 9px 4px;
+}
+
+.status-row:last-child {
+    border-bottom: 0;
+}
+
+.line-base-btn {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 12px;
+}
+
+.line-base-btn .save-btn,
+.line-base-btn .danger-btn {
+    min-width: 120px;
+}
+
+.line-base {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.line-base .title {
+    width: 110px;
+    font-size: 14px;
+    color: #555555;
+}
+
+.line-base .content {
+    min-width: 220px;
+    height: 34px;
+    padding: 0 10px;
+    box-sizing: border-box;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.line-base .content-thr {
+    font-size: 12px;
+    color: #888888;
+}
+
+.status-banner {
+    margin: 12px 20px 0;
+}
+
+.page-content table.tableStyle {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.page-content table.tableStyle th,
+.page-content table.tableStyle td {
+    padding: 10px 8px;
+    border-bottom: 1px solid #eeeeee;
+    text-align: center;
+}
+
+.page-content table.tableStyle th {
+    background-color: #fafafa;
+    font-weight: 600;
+}
+
+@media (max-width: 720px) {
+    .page-content {
+        margin: 12px;
+        padding: 4px 14px 16px;
+    }
+
+    .line-base .title {
+        width: 100%;
+    }
+
+    .line-base .content {
+        width: 100%;
+        min-width: 0;
+    }
+}

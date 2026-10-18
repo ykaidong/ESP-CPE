@@ -1,81 +1,58 @@
 /*
- * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * SoftAP management interface for the ESP-CPE product.
+ *
+ * All parameters (SSID, WPA2 password, channel, bandwidth, hidden flag and
+ * maximum station count) come from components/cpe_core (cpe_config.h), never
+ * from compile-time credentials. Every API returns an error instead of
+ * aborting through ESP_ERROR_CHECK so that a bad configuration can never turn
+ * into a boot loop (audit P1-13).
  */
+
 #pragma once
 
-#include "esp_wifi.h"
+#include "esp_err.h"
+#include "esp_netif.h"
+#include "cpe_config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
-#define WIFI_BW_HT20 WIFI_BW20
-#define WIFI_BW_HT40 WIFI_BW40
-
-#define ESP_IF_WIFI_STA WIFI_IF_STA
-#define ESP_IF_WIFI_AP WIFI_IF_AP
-#endif
-
-#ifdef CONFIG_WIFI_BANDWIFTH_40
-#define MODEM_WIFI_BANDWIFTH WIFI_BW_HT40
-#else
-#define MODEM_WIFI_BANDWIFTH WIFI_BW_HT20
-#endif
-
 /**
- * @brief  Broadcast SSID or not, default 0, broadcast the SSID
+ * @brief Start the SoftAP with the configuration stored by cpe_core.
  *
+ * The AP is always secured with WPA2-PSK; the password is validated to be
+ * 8..63 bytes by cpe_config. The AP netif is kept alive for the whole runtime
+ * (the 4G/ECM link is independent, see main/).
+ *
+ * @return ESP_OK on success, an IDF error code otherwise.
  */
-#define MODEM_WIFI_DEFAULT_CONFIG()                \
-{                                                  \
-    .mode = WIFI_MODE_AP,                          \
-    .ap_ssid = CONFIG_ESP_WIFI_AP_SSID,            \
-    .ap_password = CONFIG_ESP_WIFI_AP_PASSWORD,    \
-    .sta_ssid = CONFIG_ESP_WIFI_STA_SSID,          \
-    .sta_password = CONFIG_ESP_WIFI_STA_PASSWORD,  \
-    .channel = CONFIG_ESP_WIFI_AP_CHANNEL,         \
-    .max_connection = CONFIG_MODEM_WIFI_MAX_STA,   \
-    .ssid_hidden = 0,                              \
-    .authmode = WIFI_AUTH_WPA_WPA2_PSK,            \
-    .bandwidth = MODEM_WIFI_BANDWIFTH,             \
-}
-
-typedef struct {
-    wifi_mode_t mode;              /*!< Wi-Fi Work mode */
-    char ap_ssid[32];                 /*!< Wi-Fi SSID of AP mode */
-    char ap_password[64];             /*!< Wi-Fi password of AP mode */
-    char sta_ssid[32];             /*!< Wi-Fi SSID for station mode*/
-    char sta_password[64];         /*!< Wi-Fi password for station mode*/
-    char dns[16];                  /*!< Wi-Fi SoftAP DNS address */
-    size_t channel;                /*!< Wi-Fi channel of the mode */
-    size_t max_connection;         /*!< Wi-Fi max connections of the softap mode */
-    size_t ssid_hidden;            /*!< If hide ssid in softap mode */
-    wifi_auth_mode_t authmode;     /*!< Wi-Fi authenticate  mode */
-    wifi_bandwidth_t bandwidth;    /*!< Wi-Fi bandwidth 20MHz or 40MHz */
-} modem_wifi_config_t;
+esp_err_t app_wifi_start(void);
 
 /**
- * @brief Wi-Fi configuration main function
+ * @brief Apply new AP parameters at runtime.
  *
- * @param config Wi-Fi configuration
+ * The radio configuration is only changed after every field passed validation
+ * (SSID 1..32, password 8..63, channel 1..13, bandwidth 20/40, max_sta 1..10).
+ * Channel changes use esp_wifi_set_channel() and bandwidth changes use
+ * esp_wifi_set_bandwidth(); on failure the previous configuration is restored,
+ * so the caller must only persist the configuration after this call returned
+ * ESP_OK.
  *
+ * @param cfg  New configuration (must not be NULL).
+ * @return ESP_OK on success, an IDF error code otherwise.
  */
-void app_wifi_main(const modem_wifi_config_t *config);
+esp_err_t app_wifi_apply(const cpe_config_t *cfg);
 
 /**
- * @brief Get the wifi station netif
+ * @brief Get the SoftAP netif handle (NULL before app_wifi_start()).
  *
- * @return The station netif pointer
- */
-esp_netif_t *app_wifi_get_sta_netif(void);
-
-/**
- * @brief Get the wifi softap netif
- *
- * @return The softap netif pointer
+ * Used by main/ to enable NAPT and to apply upstream DNS to the AP DHCP
+ * server. This component never touches DNS or NAPT itself.
  */
 esp_netif_t *app_wifi_get_ap_netif(void);
 

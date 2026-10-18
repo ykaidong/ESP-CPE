@@ -1,173 +1,218 @@
-// const baseurl = 'http://192.168.4.1'
-const baseurl = window.location.origin
-console.log(baseurl)
-const CONSTANT = {
-  wlanName: '',
-  GET_BASE_URL: `${baseurl}/wlan_general`,
-  GET_HIGH_URL: `${baseurl}/wlan_advance`,
-}
+/*
+ * WLAN settings page for the ESP-CPE management console.
+ *
+ * The SoftAP password is never sent back to the browser: an empty password
+ * field means "keep the current password". Values coming from the device are
+ * written with .value / .checked / textContent only (no innerHTML).
+ */
+'use strict';
 
-var Ajax = {
-  get: function(url,callback){
-    // XMLHttpRequest对象用于在后台与服务器交换数据
-    console.log('456789')
-    var xhr=new XMLHttpRequest();
-    xhr.open('GET', url,true);
-    xhr.setRequestHeader('Content-Type','application/json');
-    xhr.onreadystatechange=function(){
-      if(xhr.readyState === 4){
-        if(xhr.status === 200 || xhr.status === 304){
-          console.log(xhr.responseText);
-          callback(xhr.responseText);
-        } else {
-          console.log(xhr.responseText);
+(function () {
+    var GENERAL_URL = '/wlan_general';
+    var ADVANCE_URL = '/wlan_advance';
+
+    var currentMaxSta = 8;
+
+    function byId(id) {
+        return document.getElementById(id);
+    }
+
+    function showMessage(text, isError) {
+        var node = byId('wlan-msg');
+        if (!node) {
+            return;
         }
-      }
+        node.textContent = text;
+        node.className = isError ? 'wlan-msg wlan-msg-error' : 'wlan-msg wlan-msg-ok';
     }
-    xhr.send();
-  },
-  put: function(url, data, callback) {
-    var xhr=new XMLHttpRequest();
-    xhr.open('put', url,true);
-    xhr.setRequestHeader('Content-Type','application/json');
-    xhr.onreadystatechange=function(){
-      if(xhr.readyState === 4){
-        if(xhr.status === 200 || xhr.status === 304){
-          console.log(xhr.responseText);
-          callback(xhr.responseText);
-        } else {
-          console.log(xhr.responseText);
+
+    function clearMessage() {
+        var node = byId('wlan-msg');
+        if (node) {
+            node.textContent = '';
+            node.className = 'wlan-msg';
         }
-      }
     }
-    xhr.send(JSON.stringify(data));
-  },
-  post: function(url, data, callback){
-    var xhr=new XMLHttpRequest();
-    xhr.open('POST', url,true);
-    // 添加http头，发送信息至服务器时内容编码类型
-    xhr.setRequestHeader('Content-Type','application/json');
-    xhr.onreadystatechange=function(){
-      console.log('1: ', xhr.readyState)
-      console.log('2: ', xhr.status)
-      console.log('3: ', xhr.responseText)
-      if (xhr.readyState === 4){
-        if (xhr.status === 200 || xhr.status === 304){
-          callback(xhr.responseText);
+
+    function loadGeneral() {
+        return CPE.getJson(GENERAL_URL).then(function (data) {
+            var ssid = byId('wlanName');
+            var password = byId('password');
+            var hidden = byId('select');
+            var deviceName = byId('deviceName');
+
+            if (ssid) {
+                ssid.value = typeof data.ssid === 'string' ? data.ssid : '';
+            }
+            if (password) {
+                /* Never echo the stored password. */
+                password.value = '';
+                password.placeholder = data.has_password
+                    ? '已设置，留空表示不修改'
+                    : '请输入 8~63 位密码';
+            }
+            if (hidden) {
+                hidden.checked = data.if_hide_ssid === 'true' || data.if_hide_ssid === true;
+            }
+            if (deviceName) {
+                deviceName.value = typeof data.device_name === 'string' ? data.device_name : '';
+            }
+            currentMaxSta = Number(data.max_sta) || 8;
+        });
+    }
+
+    function loadAdvance() {
+        return CPE.getJson(ADVANCE_URL).then(function (data) {
+            var bandwidth = byId('broadband');
+            var channel = byId('channel');
+            if (bandwidth) {
+                bandwidth.value = String(data.bandwidth);
+            }
+            if (channel) {
+                channel.value = String(data.channel);
+            }
+        });
+    }
+
+    function saveBasic() {
+        clearMessage();
+        var ssidInput = byId('wlanName');
+        var passwordInput = byId('password');
+        var hiddenInput = byId('select');
+        var deviceNameInput = byId('deviceName');
+        if (!ssidInput || !passwordInput) {
+            return;
         }
-      }
+
+        var ssid = ssidInput.value.trim();
+        if (ssid.length < 1 || ssid.length > 32) {
+            showMessage('WLAN 名称长度必须为 1~32 个字符', true);
+            return;
+        }
+        var password = passwordInput.value;
+        if (password.length > 0 && (password.length < 8 || password.length > 63)) {
+            showMessage('密码长度必须为 8~63 个字符，留空表示不修改', true);
+            return;
+        }
+        var deviceName = deviceNameInput ? deviceNameInput.value.trim() : '';
+        if (deviceName.length > 32) {
+            showMessage('设备名称长度不能超过 32 个字符', true);
+            return;
+        }
+
+        var body = {
+            ssid: ssid,
+            password: password,
+            if_hide_ssid: !!(hiddenInput && hiddenInput.checked),
+            max_sta: currentMaxSta
+        };
+        if (deviceName.length > 0) {
+            body.device_name = deviceName;
+        }
+
+        CPE.postJson(GENERAL_URL, body).then(function () {
+            passwordInput.value = '';
+            showMessage('基本设置已保存。若修改了 WLAN 名称或密码，请使用新参数重新连接 Wi-Fi。', false);
+        }).catch(function (error) {
+            if (error.message === 'network_error') {
+                /* Changing SSID/password restarts the SoftAP and drops this
+                 * HTTP connection before the response can be read. */
+                passwordInput.value = '';
+                showMessage('设置已提交，设备无线可能正在重启；请使用新的 WLAN 参数重新连接后刷新页面确认。', false);
+            } else {
+                showMessage(CPE.errorText(error), true);
+            }
+        });
     }
-    xhr.send(JSON.stringify(data));
-  }
-}
 
-function baseSetting() {
-  var baseArray1 = document.getElementsByClassName('header-title-one')
-  var base1 = baseArray1[0]
-  base1.style.color = '#000'
-  base1.style.cursor = 'auto'
-  var baseArray = document.getElementsByClassName('header-title-two')
-  var base = baseArray[0]
-  base.style.color = '#888888'
-  base.style.cursor = 'pointer'
-  var baseShow = document.getElementById('baseShow')
-  baseShow.style.display = 'block'
-  var highShow = document.getElementById('highShow')
-  highShow.style.display = 'none'
-}
+    function saveAdvance() {
+        clearMessage();
+        var bandwidthInput = byId('broadband');
+        var channelInput = byId('channel');
+        if (!bandwidthInput || !channelInput) {
+            return;
+        }
+        var bandwidth = Number(bandwidthInput.value);
+        var channel = Number(channelInput.value);
+        if (bandwidth !== 20 && bandwidth !== 40) {
+            showMessage('带宽必须为 20 或 40 MHz', true);
+            return;
+        }
+        if (!(channel >= 1 && channel <= 13)) {
+            showMessage('信道必须为 1~13', true);
+            return;
+        }
 
-function advanceSetting() {
-  console.log('点击高级设置')
-  var base1 = document.querySelector('.header-title-one')
-  base1.style.color = '#888888'
-  base1.style.cursor = 'pointer'
-  var base = document.querySelector('.header-title-two')
-  base.style.color = '#000'
-  base.style.cursor = 'auto'
-  var baseShow = document.getElementById('baseShow')
-  baseShow.style.display = 'none'
-  var highShow = document.getElementById('highShow')
-  highShow.style.display = 'block'
-}
-
-function baseSave() {
-  var wlanName = document.getElementById('wlanName')
-  console.log('wlan 名称：', wlanName.value)
-  var model = document.getElementById('model')
-  console.log('安全模式：', model.value)
-  var password = document.getElementById('password')
-  console.log('密码：', password.value)
-  var select = document.getElementById('select')
-  console.log('wlan 隐身：', select.checked)
-  var isSelect = 'false'
-  if (select.checked) {
-    isSelect = 'true'
-  }
-  Ajax.post(CONSTANT.GET_BASE_URL, {ssid: wlanName.value, if_hide_ssid: isSelect, auth_mode: model.value, password: password.value}, function (res) {
-    console.log('基本信息保存：', res)
-  })
-}
-
-function highSave() {
-  var broadband = document.getElementById('broadband')
-  console.log('宽带：', broadband.value)
-  var channel = document.getElementById('channel')
-  console.log('信道：', channel.value)
-  Ajax.post(CONSTANT.GET_HIGH_URL, {bandwidth: broadband.value, channel: channel.value}, function (res) {
-    console.log('高级信息保存：', res)
-  })
-}
-
-function menuClick (e) {
-  console.log('e: ', e.classList)
-  var menuView = document.getElementById('leftMenu')
-  if (e.classList.contains('delMenu')) {
-    menuView.style.display = 'none'
-    e.classList.remove('delMenu')
-  } else {
-    e.classList.add('delMenu')
-    menuView.style.display = 'block'
-  }
-
-}
-
-function initHash () {
-  console.log('页面第一次加载')
-
-  var highShow = document.getElementById('highShow')
-  highShow.style.display = 'none'
-
-  Ajax.get(CONSTANT.GET_BASE_URL, function (res) {
-    console.log('获取基本信息： ', res)
-    res = JSON.parse(res)
-    var wlanName = document.getElementById('wlanName')
-    var model = document.getElementById('model')
-    var password = document.getElementById('password')
-    var select = document.getElementById('select')
-    wlanName.value = res.ssid
-    for (i = 0; i < model.length; i ++) {
-      if (res.auth_mode === model.options[i].value) {
-        model.options[i].selected = true
-      }
+        CPE.postJson(ADVANCE_URL, {
+            bandwidth: bandwidth,
+            channel: channel
+        }).then(function () {
+            showMessage('高级设置已保存。信道/带宽变更可能需要重新连接 Wi-Fi。', false);
+        }).catch(function (error) {
+            if (error.message === 'network_error') {
+                showMessage('设置已提交，设备无线可能正在切换信道；请重新连接 Wi-Fi 后刷新页面确认。', false);
+            } else {
+                showMessage(CPE.errorText(error), true);
+            }
+        });
     }
-    password.value = res.password
-    select.checked = res.if_hide_ssid === 'true'
-  })
-  Ajax.get(CONSTANT.GET_HIGH_URL, function (res) {
-    console.log('获取高级信息', res)
-    res = JSON.parse(res)
-    var broadband = document.getElementById('broadband')
-    var channel = document.getElementById('channel')
 
-    for (i = 0; i < broadband.length; i ++) {
-      if (res.bandwidth === broadband.options[i].value) {
-        broadband.options[i].selected = true
-      }
+    function switchTab(showBasic) {
+        var basicPanel = byId('baseShow');
+        var advancePanel = byId('highShow');
+        var basicTab = byId('tab-basic');
+        var advanceTab = byId('tab-advance');
+        if (!basicPanel || !advancePanel || !basicTab || !advanceTab) {
+            return;
+        }
+        basicPanel.style.display = showBasic ? 'block' : 'none';
+        advancePanel.style.display = showBasic ? 'none' : 'block';
+        basicTab.className = showBasic ? 'header-title-one active-title' : 'header-title-one';
+        advanceTab.className = showBasic ? 'header-title-two' : 'header-title-two active-title';
     }
-    for (i = 0; i < channel.length; i ++) {
-      if (res.channel === channel.options[i].value) {
-        channel.options[i].selected = true
-      }
+
+    function bindMenu() {
+        var menuButton = byId('menuBtn');
+        var menu = byId('leftMenu');
+        if (!menuButton || !menu) {
+            return;
+        }
+        menuButton.addEventListener('click', function () {
+            var hidden = menu.style.display === 'none';
+            menu.style.display = hidden ? 'block' : 'none';
+        });
     }
-  })
-}
+
+    function init() {
+        bindMenu();
+        var basicTab = byId('tab-basic');
+        var advanceTab = byId('tab-advance');
+        var saveBasicButton = byId('btn-save-basic');
+        var saveAdvanceButton = byId('btn-save-advance');
+        if (basicTab) {
+            basicTab.addEventListener('click', function () {
+                switchTab(true);
+            });
+        }
+        if (advanceTab) {
+            advanceTab.addEventListener('click', function () {
+                switchTab(false);
+            });
+        }
+        if (saveBasicButton) {
+            saveBasicButton.addEventListener('click', saveBasic);
+        }
+        if (saveAdvanceButton) {
+            saveAdvanceButton.addEventListener('click', saveAdvance);
+        }
+
+        CPE.bootstrap().then(function () {
+            switchTab(true);
+            return loadGeneral().then(loadAdvance);
+        }).catch(function () {
+            /* Forced password change already redirected to the login page. */
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+}());

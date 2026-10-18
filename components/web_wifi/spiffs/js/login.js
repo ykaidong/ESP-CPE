@@ -1,43 +1,74 @@
-const baseurl = 'http://192.168.4.1'
-const baseurl = window.location.origin
-const CONSTANT = {
-    POST_LOGIN_URL: `${baseurl}/login`,
-}
+/*
+ * Login page for the ESP-CPE management console.
+ *
+ * Credentials are submitted as JSON to POST /api/login. The server answers
+ * with a HttpOnly session cookie plus a CSRF token; the token is kept in
+ * sessionStorage (the cookie itself is not readable from JavaScript).
+ */
+'use strict';
 
-var Ajax = {
-    post: function(url, data, callback){
-        var xhr=new XMLHttpRequest();
-        xhr.open('POST', url,true);
-        // 添加http头，发送信息至服务器时内容编码类型
-        xhr.setRequestHeader('Content-Type','application/json');
-        xhr.onreadystatechange=function(){
-            console.log('1: ', xhr.readyState)
-            console.log('2: ', xhr.status)
-            console.log('3: ', xhr.responseText)
-            if (xhr.readyState === 4){
-                if (xhr.status === 200 || xhr.status === 304){
-                    callback(xhr.responseText);
-                }
-            }
+(function () {
+    function byId(id) {
+        return document.getElementById(id);
+    }
+
+    function setError(text) {
+        var node = byId('login-error');
+        if (node) {
+            node.textContent = text || '';
         }
-        xhr.send(JSON.stringify(data));
     }
-}
 
-function login() {
-    var wlanName = document.getElementById('wlanName')
-    console.log('wlan 名称：', wlanName.value)
-    var model = document.getElementById('model')
-    console.log('安全模式：', model.value)
-    var password = document.getElementById('password')
-    console.log('密码：', password.value)
-    var select = document.getElementById('select')
-    console.log('wlan 隐身：', select.checked)
-    var isSelect = 'false'
-    if (select.checked) {
-        isSelect = 'true'
+    function submitLogin(event) {
+        if (event) {
+            event.preventDefault();
+        }
+        var usernameInput = byId('username');
+        var passwordInput = byId('password');
+        var submitButton = byId('btn-login');
+        if (!usernameInput || !passwordInput) {
+            return;
+        }
+        var username = usernameInput.value.trim();
+        var password = passwordInput.value;
+        if (username.length === 0 || password.length === 0) {
+            setError('请输入用户名和密码');
+            return;
+        }
+        if (submitButton) {
+            submitButton.disabled = true;
+        }
+        setError('');
+        CPE.postJson('/api/login', {
+            username: username,
+            password: password
+        }).then(function (data) {
+            CPE.setCsrf(data.csrf);
+            window.location.href = '/index.html';
+        }).catch(function (error) {
+            if (submitButton) {
+                submitButton.disabled = false;
+            }
+            passwordInput.value = '';
+            setError(CPE.errorText(error));
+        });
     }
-    Ajax.post(CONSTANT.POST_LOGIN_URL, {ssid: wlanName.value, if_hide_ssid: isSelect, auth_mode: model.value, password: password.value}, function (res) {
-        console.log('基本信息保存：', res)
-    })
-}
+
+    function init() {
+        var form = byId('login-form');
+        var submitButton = byId('btn-login');
+        if (form) {
+            form.addEventListener('submit', submitLogin);
+        } else if (submitButton) {
+            submitButton.addEventListener('click', submitLogin);
+        }
+        /* Already authenticated? Go straight to the status page. */
+        CPE.getStatus().then(function () {
+            window.location.href = '/index.html';
+        }).catch(function () {
+            /* Not logged in yet - stay on this page. */
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', init);
+}());

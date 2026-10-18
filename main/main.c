@@ -1,495 +1,762 @@
 /*
- * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
-*
-* SPDX-License-Identifier: Apache-2.0
-*/
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * ESP-CPE application entry point.
+ *
+ * Design notes (see docs/IMPLEMENTATION_PLAN.md):
+ *  - SoftAP + Web management start FIRST and are independent from the 4G link,
+ *    so the device is always reachable for diagnostics/configuration.
+ *  - The USB 4G link is managed by a background task with bounded recovery:
+ *    L1 rebuild ECM driver -> L2 root port power cycle -> L3 controlled reboot
+ *    (NVS boot counter, cleared once healthy). "Link up but no IP" (no SIM /
+ *    PDP not active) never reboots: the device stays in fault mode with AP/Web.
+ *  - USB Host + CDC driver are installed once by the CDC component (idempotent)
+ *    and are NOT torn down at runtime anymore, which removes the whole
+ *    "uninstall -> install -> panic" failure chain found by the audit.
+ */
+
 #include <stdio.h>
-#include <sys/socket.h>
+#include <string.h>
+#include <inttypes.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
 #include "nvs_flash.h"
 #include "esp_log.h"
-#include "esp_check.h"
+#include "esp_system.h"
 #include "esp_event.h"
 #include "esp_netif.h"
-#include "dhcpserver/dhcpserver_options.h"
-#include "esp_http_client.h"
-#include "esp_console.h"
-#include "esp_sleep.h"
+#include "esp_timer.h"
 #include "driver/gpio.h"
-#include "iperf_cmd.h"
-#include "iot_usbh_ecm.h"
+#include "dhcpserver/dhcpserver.h"
+#include "lwip/lwip_napt.h"
+#include "usb/usb_host.h"
+
+#include "cpe_core.h"
 #include "app_wifi.h"
+#include "modem_http_config.h"
 #include "iot_eth.h"
 #include "iot_eth_netif_glue.h"
 #include "iot_usbh_cdc.h"
-#include "at_3gpp_ts_27_007.h"
-#include "network_test.h"
-#ifdef CONFIG_EXAMPLE_ENABLE_WEB_ROUTER
-#include "modem_http_config.h"
+#include "iot_usbh_ecm.h"
+
+static const char *TAG = "cpe";
+
+#define ECM_NETIF_KEY       "ECM0"
+#define ECM_NETIF_DESC      "usb-ecm"
+
+/* Disabled bool Kconfig options have no macro in sdkconfig.h; provide a
+ * fallback so the option can be used in normal C expressions. */
+#ifndef CONFIG_CPE_USB_PORT_POWER_CYCLE
+#define CONFIG_CPE_USB_PORT_POWER_CYCLE 0
 #endif
 
-static const char *TAG = "ECM_4G_MODULE";
-
-static EventGroupHandle_t s_event_group;
-static iot_eth_driver_t *s_ecm_eth_driver = NULL;
-static esp_netif_t *s_ecm_netif = NULL;
-static modem_wifi_config_t s_modem_wifi_config = MODEM_WIFI_DEFAULT_CONFIG();
-
-#define EVENT_GOT_IP_BIT (BIT0)
-#define EVENT_AT_READY_BIT (BIT1)
-
-#if CONFIG_EXAMPLE_ENABLE_AT_CMD
 typedef struct {
-    usbh_cdc_port_handle_t cdc_port;      /*!< CDC port handle */
-    at_handle_t at_handle;                /*!< AT command parser handle */
-} at_ctx_t;
+    iot_eth_driver_t *driver;
+    iot_eth_handle_t eth;
+    iot_eth_netif_glue_handle_t glue;
+    esp_netif_t *netif;
+    bool ready;
+} ecm_ctx_t;
 
-at_ctx_t g_at_ctx = {0};
+static ecm_ctx_t s_ecm;
+static bool s_cdc_installed;
 
-static esp_err_t _at_send_cmd(const char *command, size_t length, void *usr_data)
+/* ------------------------------------------------------------------------- */
+/* USB host / CDC driver                                                     */
+/* ------------------------------------------------------------------------- */
+
+#if CONFIG_CPE_ENUM_FILTER_ENABLE
+static bool cpe_enum_filter_cb(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue)
 {
-    at_ctx_t *at_ctx = (at_ctx_t *)usr_data;
-    return usbh_cdc_write_bytes(at_ctx->cdc_port, (const uint8_t *)command, length, pdMS_TO_TICKS(500));
-}
-
-static void _at_port_closed_cb(usbh_cdc_port_handle_t cdc_port_handle, void *arg)
-{
-    at_ctx_t *at_ctx = (at_ctx_t *)arg;
-    ESP_LOGI(TAG, "AT port closed");
-    at_ctx->cdc_port = NULL;
-
-    if (at_ctx->at_handle) {
-        modem_at_stop(at_ctx->at_handle);
-        modem_at_parser_destroy(at_ctx->at_handle);
-        at_ctx->at_handle = NULL;
+    bool vid_ok = (CONFIG_CPE_ECM_VID == 0) || (dev_desc->idVendor == CONFIG_CPE_ECM_VID);
+    bool pid_ok = (CONFIG_CPE_ECM_PID == 0) || (dev_desc->idProduct == CONFIG_CPE_ECM_PID);
+    if (vid_ok && pid_ok) {
+        *bConfigurationValue = CONFIG_CPE_ECM_CONFIG_VALUE;
+        ESP_LOGI(TAG, "Enumeration filter: %04X:%04X -> configuration %d",
+                 dev_desc->idVendor, dev_desc->idProduct, CONFIG_CPE_ECM_CONFIG_VALUE);
     }
-}
-
-static void _at_recv_data_cb(usbh_cdc_port_handle_t cdc_port_handle, void *arg)
-{
-    at_ctx_t *at_ctx = (at_ctx_t *)arg;
-    size_t length = 0;
-    usbh_cdc_get_rx_buffer_size(cdc_port_handle, &length);
-    char *buffer;
-    size_t buffer_remain;
-    modem_at_get_response_buffer(at_ctx->at_handle, &buffer, &buffer_remain);
-    if (buffer_remain < length) {
-        length = buffer_remain;
-        ESP_LOGE(TAG, "data size is too big, truncated to %zu", length);
-    }
-    usbh_cdc_read_bytes(cdc_port_handle, (uint8_t *)buffer, &length, 0);
-    // Parse the AT command response
-    modem_at_write_response_done(at_ctx->at_handle, length);
-}
-
-static esp_err_t at_init()
-{
-    ESP_LOGI(TAG, "AT init");
-    // Open a CDC port for AT command
-    usbh_cdc_port_handle_t _port = usb_ecm_get_cdc_port_handle(s_ecm_eth_driver);
-    usb_device_handle_t _dev_hdl = NULL;
-    ESP_ERROR_CHECK(usbh_cdc_get_dev_handle(_port, &_dev_hdl));
-    usb_device_info_t device_info;
-    ESP_ERROR_CHECK(usb_host_device_info(_dev_hdl, &device_info));
-    usbh_cdc_port_config_t cdc_port_config = {
-        .dev_addr = device_info.dev_addr,
-        .itf_num = CONFIG_EXAMPLE_AT_INTERFACE_NUM,
-        .in_transfer_buffer_size = 512,
-        .out_transfer_buffer_size = 512,
-        .cbs = {
-            .notif_cb = NULL,
-            .recv_data = _at_recv_data_cb,
-            .closed = _at_port_closed_cb,
-            .user_data = &g_at_ctx,
-        },
-    };
-    ESP_RETURN_ON_ERROR(usbh_cdc_port_open(&cdc_port_config, &g_at_ctx.cdc_port), TAG, "Failed to open CDC port");
-
-    // init the AT command parser
-    modem_at_config_t at_config = {
-        .send_buffer_length = 256,
-        .recv_buffer_length = 256,
-        .io = {
-            .send_cmd = _at_send_cmd,
-            .usr_data = &g_at_ctx,
-        }
-    };
-    g_at_ctx.at_handle = modem_at_parser_create(&at_config);
-    ESP_ERROR_CHECK(g_at_ctx.at_handle != NULL ? ESP_OK : ESP_FAIL);
-
-    return modem_at_start(g_at_ctx.at_handle);
+    return true;
 }
 #endif
 
-#ifdef CONFIG_EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-
-#define GPIO_MODULE_RST_NUM     CONFIG_EXAMPLE_MODULE_RST_GPIO_NUM
-#define GPIO_WAKEUP_NUM         CONFIG_EXAMPLE_MODULE_WAKEUP_GPIO_NUM
-#define GPIO_WAKEUP_LEVEL       CONFIG_EXAMPLE_MODULE_WAKEUP_LEVEL
-
-#ifdef CONFIG_EXAMPLE_ENABLE_AT_CMD
-
-#include "../priv_include/modem_at_internal.h"
-
-static esp_err_t at_cmd_power_down(at_handle_t ath, void *param, void *result)
+static esp_err_t usb_cdc_install(void)
 {
-    // This command is used to power down the modem,
-    // you can modify it according to your module's AT command set
-    ESP_LOGW(TAG, "Modem QC is powering down...");
-    return at_send_command_response_ok(ath, "AT+QPOWD");
-}
-#endif
-
-static esp_err_t register_gpio_wakeup(void)
-{
-    /* Initialize GPIO */
-    gpio_config_t config = {
-        .pin_bit_mask = BIT64(GPIO_WAKEUP_NUM),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&config), TAG, "Initialize GPIO%d failed", GPIO_WAKEUP_NUM);
-
-    /* Enable wake up from GPIO */
-    ESP_RETURN_ON_ERROR(gpio_wakeup_enable(GPIO_WAKEUP_NUM, GPIO_WAKEUP_LEVEL == 0
-                                           ? GPIO_INTR_LOW_LEVEL
-                                           : GPIO_INTR_HIGH_LEVEL),
-                        TAG, "Enable gpio wakeup failed");
-    ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(), TAG, "Configure gpio as wakeup source failed");
-
-    /* Make sure the GPIO is inactive and it won't trigger wakeup immediately */
-    while (gpio_get_level(GPIO_WAKEUP_NUM) == GPIO_WAKEUP_LEVEL) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_cdc_installed) {
+        return ESP_OK;
     }
-    ESP_LOGI(TAG, "gpio wakeup source is ready");
 
+    usbh_cdc_driver_config_t config = {
+        .task_stack_size = CONFIG_CPE_USB_TASK_STACK_SIZE,
+        .task_priority = CONFIG_CPE_USB_TASK_PRIORITY,
+        .task_coreid = CONFIG_CPE_USB_TASK_CORE_ID,
+        .skip_init_usb_host_driver = false,
+#if CONFIG_CPE_ENUM_FILTER_ENABLE
+        .enum_filter_cb = cpe_enum_filter_cb,
+#endif
+    };
+
+    esp_err_t err = usbh_cdc_driver_install(&config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "usbh_cdc_driver_install failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    s_cdc_installed = true;
+    ESP_LOGI(TAG, "USB CDC driver installed");
     return ESP_OK;
 }
 
-static void module_rst_set(bool on)
+/* ------------------------------------------------------------------------- */
+/* ECM network interface                                                     */
+/* ------------------------------------------------------------------------- */
+
+static bool usb_device_present(void);
+
+/* Full USB host stack restart, used only when no USB device is enumerated.
+ *
+ * With an externally powered modem and no module reset line, the modem can
+ * keep a stale USB device state after the ESP32 resets: the first enumeration
+ * after boot fails with CHECK_SHORT_DEV_DESC and the ESP-IDF enumeration FSM
+ * never retries. Uninstalling the host removes the host-side bus terminations
+ * (the modem usually sees a disconnect and resets its USB controller), then a
+ * fresh install triggers a clean enumeration. This is not the old "tear down
+ * and reinstall on every failure" chain: it only runs when there is no device
+ * and no ECM port, and the result is checked at every step.
+ */
+static esp_err_t usb_stack_restart(void)
 {
-    gpio_set_level(GPIO_MODULE_RST_NUM, !on ? 1 : 0);
-}
-
-static void module_power_init()
-{
-    gpio_config_t io_conf = {
-        .pin_bit_mask = BIT64(GPIO_MODULE_RST_NUM),
-        .mode = GPIO_MODE_OUTPUT,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_conf);
-    module_rst_set(true);
-}
-
-static void sleep_timer_cb(TimerHandle_t xTimer)
-{
-    ESP_LOGW(TAG, "Sleep timer triggered, entering light sleep...");
-    register_gpio_wakeup();
-    at_cmd_power_down(g_at_ctx.at_handle, NULL, NULL); // Power down the modem via AT command
-    vTaskDelay(pdMS_TO_TICKS(2000)); // Wait usb host to settle
-#ifdef CONFIG_IDF_TARGET_ESP32P4
-    esp_sleep_pd_config(ESP_PD_DOMAIN_CNNT, ESP_PD_OPTION_ON);
-#endif
-
-    ESP_LOGW(TAG, "Entering light sleep");
-    vTaskDelay(pdMS_TO_TICKS(10));
-    esp_light_sleep_start();
-    ESP_LOGW(TAG, "Wake up from light sleep");
-
-    vTaskDelay(pdMS_TO_TICKS(100));
-    module_rst_set(false); // Reset the module after wake up
-    vTaskDelay(pdMS_TO_TICKS(1500));
-    module_rst_set(true);
-}
-#endif
-
-#if CONFIG_EXAMPLE_USB_ECM_IPERF
-static void iperf_init(void)
-{
-    esp_console_repl_t *repl = NULL;
-    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-    esp_console_dev_uart_config_t uart_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    repl_config.prompt = "iperf>";
-    repl_config.max_history_len = 1;
-    repl_config.task_priority = 24;
-    ESP_ERROR_CHECK(esp_console_new_repl_uart(&uart_config, &repl_config, &repl));
-
-    /* Register commands */
-    ESP_ERROR_CHECK(app_register_iperf_commands());
-
-    printf("\n ==================================================\n");
-    printf(" |       Steps to test throughput            |\n");
-    printf(" |                                                |\n");
-    printf(" |  1. Print 'help' to gain overview of commands  |\n");
-    printf(" |  2. Run iperf to test UDP/TCP RX/TX throughput |\n");
-    printf(" |                                                |\n");
-    printf(" =================================================\n\n");
-
-    // start console REPL
-    ESP_ERROR_CHECK(esp_console_start_repl(repl));
-}
-#endif
-
-static void iot_event_handle(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
-{
-    if (event_base == IOT_ETH_EVENT) {
-        switch (event_id) {
-        case IOT_ETH_EVENT_START:
-            ESP_LOGI(TAG, "IOT_ETH_EVENT_START");
-            break;
-        case IOT_ETH_EVENT_STOP:
-            ESP_LOGI(TAG, "IOT_ETH_EVENT_STOP");
-            break;
-        case IOT_ETH_EVENT_CONNECTED:
-            ESP_LOGI(TAG, "IOT_ETH_EVENT_CONNECTED");
-#if CONFIG_EXAMPLE_ENABLE_AT_CMD
-            if (at_init() == ESP_OK) {
-                xEventGroupSetBits(s_event_group, EVENT_AT_READY_BIT);
-            }
-#endif
-            break;
-        case IOT_ETH_EVENT_DISCONNECTED:
-            ESP_LOGI(TAG, "IOT_ETH_EVENT_DISCONNECTED");
-            xEventGroupClearBits(s_event_group, EVENT_GOT_IP_BIT);
-#ifndef CONFIG_EXAMPLE_USB_ECM_IPERF
-            stop_ping_timer();
-#endif
-            break;
-        default:
-            ESP_LOGI(TAG, "IOT_ETH_EVENT_UNKNOWN");
-            break;
-        }
-    } else if (event_base == IP_EVENT) {
-        ESP_LOGI(TAG, "GOT_IP");
-        xEventGroupSetBits(s_event_group, EVENT_GOT_IP_BIT);
-#ifndef CONFIG_EXAMPLE_USB_ECM_IPERF
-        start_ping_timer();
-#endif
+    if (!s_cdc_installed) {
+        return ESP_ERR_INVALID_STATE;
     }
-}
-
-#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
-
-static bool usb_host_enum_filter_cb(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue)
-{
-    if (dev_desc->bNumConfigurations > 1) {
-        *bConfigurationValue = 2;
-    } else {
-        *bConfigurationValue = 1;
+    if (usb_device_present()) {
+        /* A device is enumerated; restarting the stack would be disruptive and
+         * is not the recovery path for that situation. */
+        return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGI(TAG, "USB device configuration value set to %d", *bConfigurationValue);
-    // Return true to enumerate the USB device
-    return true;
-}
 
-static void usb_lib_task(void *arg)
-{
-    // Install USB Host driver. Should only be called once in entire application
-    const usb_host_config_t host_config = {
-        .skip_phy_setup = false,
-        .intr_flags = ESP_INTR_FLAG_LEVEL1,
-        .enum_filter_cb = usb_host_enum_filter_cb,
-#if CONFIG_EXAMPLE_USE_USB_HOST_FULLSPEED
-        .peripheral_map = BIT1, // Only valid for ESP32-P4 and ESP_IDF_VERSION >= v5.5
-#endif
-    };
-    ESP_ERROR_CHECK(usb_host_install(&host_config));
-
-    //Signalize the usbh_cdc_driver_install, the USB host library has been installed
-    xTaskNotifyGive(arg);
-
-    bool has_clients = true;
-    bool has_devices = false;
-    while (has_clients) {
-        uint32_t event_flags;
-        ESP_ERROR_CHECK(usb_host_lib_handle_events(portMAX_DELAY, &event_flags));
-        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
-            ESP_LOGI(TAG, "Get FLAGS_NO_CLIENTS");
-            if (ESP_OK == usb_host_device_free_all()) {
-                ESP_LOGI(TAG, "All devices marked as free, no need to wait FLAGS_ALL_FREE event");
-                has_clients = false;
-            } else {
-                ESP_LOGI(TAG, "Wait for the FLAGS_ALL_FREE");
-                has_devices = true;
-            }
-        }
-        if (has_devices && event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
-            ESP_LOGI(TAG, "Get FLAGS_ALL_FREE");
-            has_clients = false;
-        }
+    ESP_LOGW(TAG, "Restarting the USB host stack to force a clean re-enumeration");
+    (void)usbh_cdc_port_close_all();
+    esp_err_t err = usbh_cdc_driver_uninstall();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "usbh_cdc_driver_uninstall failed (%s), not reinstalling", esp_err_to_name(err));
+        return err;
     }
-    ESP_LOGI(TAG, "No more clients and devices, uninstall USB Host library");
+    s_cdc_installed = false;
 
-    // Clean up USB Host
-    vTaskDelay(100); // Short delay to allow clients clean-up
-    usb_host_uninstall();
-    ESP_LOGD(TAG, "USB Host library is uninstalled");
-    vTaskDelete(NULL);
+    /* Give the modem time to notice that the host disappeared. */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    return usb_cdc_install();
 }
-#endif
 
-static void install_ecm(uint16_t idVendor, uint16_t idProduct, const char *netif_name)
+static void ecm_teardown(void)
 {
-    esp_err_t ret = ESP_OK;
-    iot_eth_handle_t eth_handle = NULL;
-    iot_eth_netif_glue_handle_t glue = NULL;
-
-    usb_device_match_id_t *dev_match_id = calloc(2, sizeof(usb_device_match_id_t));
-    if (dev_match_id == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate memory for device match ID");
+    if (!s_ecm.ready && s_ecm.eth == NULL) {
         return;
     }
-    dev_match_id[0].match_flags = USB_DEVICE_ID_MATCH_VID_PID;
-    dev_match_id[0].idVendor = idVendor;
-    dev_match_id[0].idProduct = idProduct;
-    memset(&dev_match_id[1], 0, sizeof(usb_device_match_id_t)); // end of list
-    iot_usbh_ecm_config_t ecm_cfg = {
-        .match_id_list = dev_match_id,
-    };
+    s_ecm.ready = false;
+    ESP_LOGI(TAG, "Tearing down ECM driver");
 
-    ret = iot_eth_new_usb_ecm(&ecm_cfg, &s_ecm_eth_driver);
-    if (ret != ESP_OK || s_ecm_eth_driver == NULL) {
-        ESP_LOGE(TAG, "Failed to create USB ECM driver");
-        free(dev_match_id);
-        return;
+    if (s_ecm.eth != NULL) {
+        /* STOP is posted asynchronously by iot_eth_stop(); stop the lwIP netif
+         * synchronously as well, otherwise its DHCP timers can still access a
+         * netif that is about to be destroyed (review P2-4). */
+        iot_eth_stop(s_ecm.eth);
+        if (s_ecm.netif != NULL) {
+            esp_netif_action_stop(s_ecm.netif, NULL, 0, NULL);
+        }
+        /* Disconnect the RX path BEFORE the glue/netif are freed; iot_eth does
+         * not clear stack_input_info in del_netif_glue (review P1-1). */
+        iot_eth_update_input_path(s_ecm.eth, NULL, NULL);
     }
-    // Note: dev_match_id is now managed by the driver, don't free it here
+    if (s_ecm.glue != NULL) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        iot_eth_del_netif_glue(s_ecm.glue);
+        s_ecm.glue = NULL;
+    }
+    if (s_ecm.netif != NULL) {
+        esp_netif_destroy(s_ecm.netif);
+        s_ecm.netif = NULL;
+    }
+    if (s_ecm.eth != NULL) {
+        /* Driver deinit closes the CDC port first (patched fork, audit P0-1).
+         * If it fails, keep the handle so a later retry can finish the
+         * teardown instead of leaking a zombie instance (review P2-5). */
+        esp_err_t err = iot_eth_uninstall(s_ecm.eth);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "iot_eth_uninstall failed (%s), will retry teardown", esp_err_to_name(err));
+            cpe_status_set_link(false);
+            cpe_status_set_usb_connected(false);
+            cpe_status_set_ip(NULL);
+            return;
+        }
+        s_ecm.eth = NULL;
+    }
+    s_ecm.driver = NULL;
 
-    iot_eth_config_t eth_cfg = {
-        .driver = s_ecm_eth_driver,
+    /* The link state belongs to this interface: clear it explicitly so the
+     * link manager does not keep acting on stale "link up / got IP" values
+     * while the driver is being rebuilt. */
+    cpe_status_set_link(false);
+    cpe_status_set_usb_connected(false);
+    cpe_status_set_ip(NULL);
+}
+
+static esp_err_t ecm_bring_up(void)
+{
+    if (s_ecm.ready) {
+        return ESP_OK;
+    }
+    /* A previous teardown may have left an uninstall retry pending: finish it
+     * before creating a second instance. */
+    if (s_ecm.eth != NULL) {
+        ecm_teardown();
+        if (s_ecm.eth != NULL) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    esp_err_t err = iot_eth_new_usb_ecm(&(iot_usbh_ecm_config_t) {
+        .match_id_list = ESP_USB_DEVICE_MATCH_ID_ANY,
+    }, &s_ecm.driver);
+    if (err != ESP_OK || s_ecm.driver == NULL) {
+        ESP_LOGE(TAG, "Failed to create ECM driver: %s", esp_err_to_name(err));
+        return err != ESP_OK ? err : ESP_FAIL;
+    }
+
+    iot_eth_config_t eth_config = {
+        .driver = s_ecm.driver,
         .stack_input = NULL,
     };
-    ret = iot_eth_install(&eth_cfg, &eth_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install USB ECM driver");
-        return;
+    err = iot_eth_install(&eth_config, &s_ecm.eth);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to install ECM driver: %s", esp_err_to_name(err));
+        /* The driver object is owned by iot_eth after a successful install; on
+         * this rare error path it cannot be destroyed (limits API). Do not
+         * hammer this path (recovery is rate limited by the caller). */
+        s_ecm.driver = NULL;
+        return err;
     }
 
-    esp_netif_inherent_config_t _inherent_eth_config = ESP_NETIF_INHERENT_DEFAULT_ETH();
-    _inherent_eth_config.if_key = netif_name;
-    _inherent_eth_config.if_desc = netif_name;
-    esp_netif_config_t netif_cfg = {
-        .base = &_inherent_eth_config,
+    esp_netif_inherent_config_t inherent = ESP_NETIF_INHERENT_DEFAULT_ETH();
+    inherent.if_key = ECM_NETIF_KEY;
+    inherent.if_desc = ECM_NETIF_DESC;
+    esp_netif_config_t netif_config = {
+        .base = &inherent,
         .driver = NULL,
         .stack = ESP_NETIF_NETSTACK_DEFAULT_ETH,
     };
-    s_ecm_netif = esp_netif_new(&netif_cfg);
-    if (s_ecm_netif == NULL) {
-        ESP_LOGE(TAG, "Failed to create network interface");
+    s_ecm.netif = esp_netif_new(&netif_config);
+    if (s_ecm.netif == NULL) {
+        ESP_LOGE(TAG, "Failed to create ECM netif");
+        ecm_teardown();
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_ecm.glue = iot_eth_new_netif_glue(s_ecm.eth);
+    if (s_ecm.glue == NULL) {
+        ESP_LOGE(TAG, "Failed to create netif glue");
+        ecm_teardown();
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = esp_netif_attach(s_ecm.netif, s_ecm.glue);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to attach netif glue: %s", esp_err_to_name(err));
+        ecm_teardown();
+        return err;
+    }
+
+    err = iot_eth_start(s_ecm.eth);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start ECM driver: %s", esp_err_to_name(err));
+        ecm_teardown();
+        return err;
+    }
+
+    s_ecm.ready = true;
+
+    /* The ECM driver may have already reported LINK_UP before the glue was
+     * attached (review P2-9). Re-sync the netif with the current status so the
+     * DHCP client and NAPT path are actually started. */
+    cpe_status_t st;
+    cpe_status_get(&st);
+    if (st.link_up && s_ecm.netif != NULL) {
+        ESP_LOGI(TAG, "ECM link was already up, re-syncing the netif");
+        esp_netif_action_connected(s_ecm.netif, NULL, 0, NULL);
+    }
+
+    ESP_LOGI(TAG, "ECM driver ready, waiting for the USB modem");
+    return ESP_OK;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Events                                                                   */
+/* ------------------------------------------------------------------------- */
+
+static void cpe_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    (void)arg;
+    if (base == IOT_ETH_EVENT) {
+        /* Do NOT gate on s_ecm.ready: the ECM driver may report the link state
+         * while main is still creating the netif/glue. Dropping those events
+         * would lose the link-up forever because the driver suppresses
+         * duplicate reports (review P2-9). Only status is touched here. */
+        if (id == IOT_ETH_EVENT_CONNECTED) {
+            ESP_LOGI(TAG, "4G link up");
+            cpe_status_set_usb_connected(true);
+            cpe_status_set_link(true);
+            cpe_status_set_error(NULL);
+        } else if (id == IOT_ETH_EVENT_DISCONNECTED) {
+            ESP_LOGW(TAG, "4G link down");
+            cpe_status_set_link(false);
+            cpe_status_set_usb_connected(false);
+            cpe_status_set_ip(NULL);
+        }
+    } else if (base == IP_EVENT) {
+        if (id == IP_EVENT_ETH_GOT_IP) {
+            ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
+            if (event->esp_netif != s_ecm.netif) {
+                return;
+            }
+            char ip[16];
+            snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
+            ESP_LOGI(TAG, "4G WAN IP: %s", ip);
+            cpe_status_set_ip(ip);
+            cpe_status_set_error(NULL);
+        } else if (id == IP_EVENT_ETH_LOST_IP) {
+            cpe_status_set_ip(NULL);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* CPE helpers: NAPT and DHCP DNS                                           */
+/* ------------------------------------------------------------------------- */
+
+static void cpe_apply_upstream_dns(void)
+{
+    esp_netif_t *ap = app_wifi_get_ap_netif();
+    if (ap == NULL || s_ecm.netif == NULL) {
         return;
     }
 
-    glue = iot_eth_new_netif_glue(eth_handle);
-    if (glue == NULL) {
-        ESP_LOGE(TAG, "Failed to create netif glue");
+    esp_netif_dns_info_t dns = {0};
+    if (esp_netif_get_dns_info(s_ecm.netif, ESP_NETIF_DNS_MAIN, &dns) != ESP_OK ||
+            dns.ip.u_addr.ip4.addr == 0) {
+        ESP_LOGW(TAG, "No upstream DNS from the 4G modem");
         return;
     }
-    esp_netif_attach(s_ecm_netif, glue);
-    iot_eth_start(eth_handle);
+
+    if (esp_netif_dhcps_stop(ap) != ESP_OK) {
+        return;
+    }
+    dhcps_offer_t offer_dns = OFFER_DNS;
+    esp_err_t err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
+                                           &offer_dns, sizeof(offer_dns));
+    if (err == ESP_OK) {
+        err = esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
+    }
+    if (esp_netif_dhcps_start(ap) != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to restart AP DHCP server");
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to apply upstream DNS to AP DHCP: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "AP clients now use upstream DNS " IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+    }
 }
+
+static void cpe_enable_napt(void)
+{
+    esp_netif_t *ap = app_wifi_get_ap_netif();
+    if (ap == NULL) {
+        return;
+    }
+    esp_netif_ip_info_t ap_ip;
+    if (esp_netif_get_ip_info(ap, &ap_ip) != ESP_OK || ap_ip.ip.addr == 0) {
+        return;
+    }
+    ip_napt_enable(ap_ip.ip.addr, 1);
+    ESP_LOGI(TAG, "NAPT enabled on " IPSTR, IP2STR(&ap_ip.ip));
+}
+
+static void cpe_link_online(void)
+{
+    if (s_ecm.netif != NULL) {
+        esp_netif_set_default_netif(s_ecm.netif);
+    }
+    cpe_enable_napt();
+    cpe_apply_upstream_dns();
+}
+
+static void cpe_link_offline(void)
+{
+    esp_netif_t *ap = app_wifi_get_ap_netif();
+    if (ap != NULL) {
+        esp_netif_ip_info_t ap_ip;
+        if (esp_netif_get_ip_info(ap, &ap_ip) == ESP_OK && ap_ip.ip.addr != 0) {
+            ip_napt_enable(ap_ip.ip.addr, 0);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* 4G module reset / USB enumeration recovery                                */
+/* ------------------------------------------------------------------------- */
+
+#if CONFIG_CPE_MODULE_RESET_GPIO >= 0
+static void module_reset_init(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << CONFIG_CPE_MODULE_RESET_GPIO),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&io) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure module reset GPIO%d", CONFIG_CPE_MODULE_RESET_GPIO);
+        return;
+    }
+    /* Keep the module out of reset when idle. */
+    gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, !CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+}
+
+static void module_reset_pulse(void)
+{
+    ESP_LOGW(TAG, "Pulsing the 4G module reset (GPIO%d)", CONFIG_CPE_MODULE_RESET_GPIO);
+    gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_MODULE_RESET_HOLD_MS));
+    gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, !CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_MODULE_BOOT_DELAY_MS));
+}
+#endif
+
+/* Bring the module USB stack back to a clean state. Prefers the module reset
+ * GPIO (works for externally powered modules); falls back to a root-port VBUS
+ * toggle when enabled. Returns true when a reset was actually performed. */
+static bool usb_modem_reset(void)
+{
+#if CONFIG_CPE_MODULE_RESET_GPIO >= 0
+    module_reset_pulse();
+    return true;
+#elif CONFIG_CPE_USB_PORT_POWER_CYCLE
+    ESP_LOGW(TAG, "Power-cycling the USB root port to force re-enumeration");
+    if (usb_host_lib_set_root_port_power(false) != ESP_OK) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
+    usb_host_lib_set_root_port_power(true);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    return true;
+#else
+    return false;
+#endif
+}
+
+/* ------------------------------------------------------------------------- */
+/* Link manager                                                              */
+/* ------------------------------------------------------------------------- */
+
+/* True when the USB Host Library sees at least one enumerated device. Used to
+ * distinguish "no modem attached / enumeration failed before NEW_DEV" (a full
+ * CPE reboot cannot help) from "modem enumerated but the ECM interface never
+ * came up" (a controlled reboot is the last resort). */
+static bool usb_device_present(void)
+{
+    usb_host_lib_info_t info = { 0 };
+    if (usb_host_lib_info(&info) != ESP_OK) {
+        return false;
+    }
+    return info.num_devices > 0;
+}
+
+/* Sleep in 500 ms slices, returning early if the 4G link comes up (e.g. the
+ * user plugs the modem back in while the link manager is backing off). */
+static void backoff_sleep_ms(uint32_t ms)
+{
+    uint32_t waited = 0;
+    while (waited < ms) {
+        cpe_status_t st;
+        cpe_status_get(&st);
+        if (st.link_up) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+        waited += 500;
+    }
+}
+
+static void link_manager_task(void *arg)
+{
+    (void)arg;
+    uint32_t recover_attempts = 0;
+    uint32_t enum_reset_attempts = 0;
+    int64_t wait_start_us = 0;
+    int64_t online_start_us = 0;
+    bool was_online = false;
+    bool last_link_up = false;
+    bool last_got_ip = false;
+
+    cpe_status_set_state(CPE_STATE_BOOT, "starting usb modem support");
+
+    for (;;) {
+        /* 1. USB host + CDC driver: installed once, never torn down. */
+        if (!s_cdc_installed) {
+            if (usb_cdc_install() != ESP_OK) {
+                cpe_status_set_state(CPE_STATE_FAULT, "usb host init failed, retrying");
+                cpe_status_set_error("usb host init failed");
+                vTaskDelay(pdMS_TO_TICKS(5000));
+                continue;
+            }
+        }
+
+        /* 2. ECM driver + netif. */
+        if (!s_ecm.ready) {
+            if (ecm_bring_up() != ESP_OK) {
+                cpe_status_set_state(CPE_STATE_FAULT, "ecm driver init failed, retrying");
+                cpe_status_set_error("ecm driver init failed");
+                vTaskDelay(pdMS_TO_TICKS(5000));
+                continue;
+            }
+        }
+
+        cpe_status_t st;
+        cpe_status_get(&st);
+        int64_t now = esp_timer_get_time();
+
+        if (st.link_up != last_link_up) {
+            wait_start_us = now;
+            last_link_up = st.link_up;
+        }
+        if (st.got_ip != last_got_ip) {
+            wait_start_us = now;
+            last_got_ip = st.got_ip;
+            if (st.got_ip) {
+                cpe_link_online();
+            } else {
+                cpe_link_offline();
+            }
+        }
+
+        if (st.link_up && st.got_ip) {
+            /* Healthy. Clear the persistent boot/recovery counter once stable. */
+            if (!was_online) {
+                was_online = true;
+                recover_attempts = 0;
+                enum_reset_attempts = 0;
+                online_start_us = now;
+                cpe_status_set_recovery_attempts(0);
+                cpe_status_set_state(CPE_STATE_ONLINE, "online");
+                ESP_LOGI(TAG, "CPE online (WAN IP %s)", st.ip);
+            }
+            if (online_start_us != 0 &&
+                    (now - online_start_us) > (int64_t)CONFIG_CPE_HEALTHY_CLEAR_SECONDS * 1000000LL) {
+                if (cpe_boot_count_get() != 0) {
+                    cpe_boot_count_clear();
+                    /* Keep the reported status in sync: otherwise the web UI
+                     * keeps showing the boot count captured at start-up. */
+                    cpe_status_set_boot_count(0);
+                    ESP_LOGI(TAG, "Healthy for %d s, boot counter cleared", CONFIG_CPE_HEALTHY_CLEAR_SECONDS);
+                }
+                online_start_us = 0;
+            }
+        } else {
+            was_online = false;
+
+            if (st.link_up) {
+                /* Link is up but the modem has not obtained an IP: usually no
+                 * SIM / PDP not activated. Retry the ECM config a few times but
+                 * never reboot, and keep AP/Web fully available. */
+                if (wait_start_us == 0) {
+                    wait_start_us = now;
+                }
+                if ((now - wait_start_us) > (int64_t)CONFIG_CPE_IP_TIMEOUT_MS * 1000LL) {
+                    recover_attempts++;
+                    cpe_status_set_recovery_attempts(recover_attempts);
+                    cpe_status_set_error("link up but no IP (SIM/PDP problem?)");
+                    cpe_status_set_state(CPE_STATE_FAULT,
+                                         "no IP from modem (SIM/PDP?), retrying");
+                    ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
+                             CONFIG_CPE_IP_TIMEOUT_MS, recover_attempts);
+                    ecm_teardown();
+                    wait_start_us = 0;
+                    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_RECOVERY_RETRY_MS));
+                    continue;
+                }
+                cpe_status_set_state(CPE_STATE_LINK_WAIT, "waiting for IP");
+            } else {
+                /* No USB link at all: module missing, enumeration failed or
+                 * the module dropped off the bus. */
+                if (wait_start_us == 0) {
+                    wait_start_us = now;
+                }
+                if ((now - wait_start_us) > (int64_t)CONFIG_CPE_LINK_TIMEOUT_MS * 1000LL) {
+                    recover_attempts++;
+                    cpe_status_set_recovery_attempts(recover_attempts);
+                    cpe_status_set_error("no USB link from 4G modem");
+                    ESP_LOGW(TAG, "No USB link after %d ms (attempt %"PRIu32")",
+                             CONFIG_CPE_LINK_TIMEOUT_MS, recover_attempts);
+                    cpe_status_set_state(CPE_STATE_FAULT, "waiting for USB modem");
+                    ecm_teardown();
+                    wait_start_us = 0;
+
+                    if (!usb_device_present()) {
+                        /* Nothing enumerated: the modem is absent OR its USB
+                         * stack is stale (typical when the ESP32 is reset while
+                         * an externally powered module keeps its power ->
+                         * CHECK_SHORT_DEV_DESC FAILED). ECM rebuilds cannot fix
+                         * this; try the reset mechanisms right away (the first
+                         * attempt happens after LINK_TIMEOUT_MS, not after
+                         * several pointless ECM retries). */
+                        if (enum_reset_attempts < CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS) {
+                            bool retried = false;
+                            if (usb_modem_reset()) {
+                                retried = true;
+                            } else if (usb_stack_restart() == ESP_OK) {
+                                retried = true;
+                            }
+                            if (retried) {
+                                enum_reset_attempts++;
+                                cpe_status_set_state(CPE_STATE_BOOT, "re-enumerating the USB modem");
+                                wait_start_us = 0;
+                                continue;
+                            }
+                        }
+                        ESP_LOGW(TAG, "No USB modem detected, staying in fault mode (AP/Web available)");
+                        cpe_status_set_state(CPE_STATE_FAULT,
+                                             "no USB modem, AP/Web still available");
+                        backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
+                        /* Retry the whole reset cycle later (a modem may be
+                         * plugged in at any time). */
+                        enum_reset_attempts = 0;
+                        wait_start_us = 0;
+                        continue;
+                    }
+
+                    if (recover_attempts >= CONFIG_CPE_MAX_RECOVERY_ATTEMPTS) {
+                        recover_attempts = 0;
+                        cpe_status_set_recovery_attempts(0);
+                        /* The modem is on the bus but the ECM link never came
+                         * up: controlled reboot is the last resort, bounded by
+                         * the persistent boot counter. */
+                        uint32_t boot_count = cpe_boot_count_get();
+                        if (CONFIG_CPE_MAX_REBOOTS > 0 && boot_count < CONFIG_CPE_MAX_REBOOTS) {
+                            ESP_LOGE(TAG, "ECM link stuck, controlled reboot %"PRIu32"/%d",
+                                     boot_count, CONFIG_CPE_MAX_REBOOTS);
+                            cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
+                            vTaskDelay(pdMS_TO_TICKS(1000));
+                            esp_restart();
+                        }
+                        ESP_LOGE(TAG, "ECM link stuck, keeping AP/Web alive (fault mode)");
+                        cpe_status_set_state(CPE_STATE_FAULT,
+                                             "ECM link stuck, AP/Web still available");
+                        backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
+                    } else {
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                    }
+                    continue;
+                }
+                cpe_status_set_state(CPE_STATE_USB_WAIT, "waiting for USB modem");
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Application entry                                                          */
+/* ------------------------------------------------------------------------- */
 
 void app_main(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    /* Initialize default TCP/IP stack */
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    s_event_group = xEventGroupCreate();
-    ESP_RETURN_VOID_ON_FALSE(s_event_group != NULL, TAG, "Failed to create event group");
-    esp_event_handler_register(IOT_ETH_EVENT, ESP_EVENT_ANY_ID, iot_event_handle, NULL);
-    esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, iot_event_handle, NULL);
-
-#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
-    BaseType_t task_created = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(), 5, NULL, 0);
-    ESP_RETURN_VOID_ON_FALSE(task_created == pdPASS, TAG, "xTaskCreatePinnedToCore failed");
-    // Wait until the USB host library is installed
-    uint32_t notify_value = ulTaskNotifyTake(false, pdMS_TO_TICKS(1000));
-    if (notify_value == 0) {
-        ESP_LOGE(TAG, "USB host library not installed");
-        return;
-    }
-#endif
-    // install usbh cdc driver
-    usbh_cdc_driver_config_t config = {
-        .task_stack_size = 1024 * 4,
-        .task_priority = configMAX_PRIORITIES - 1,
-        .task_coreid = 0,
-#if CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
-        .skip_init_usb_host_driver = true,
-#else
-        .skip_init_usb_host_driver = false,
-#endif
-    };
-    ESP_ERROR_CHECK(usbh_cdc_driver_install(&config));
-
-#ifdef CONFIG_EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-    module_power_init();
-#endif
-    install_ecm(USB_DEVICE_VENDOR_ANY, USB_DEVICE_PRODUCT_ANY, "USB ECM0");
-    xEventGroupWaitBits(s_event_group, EVENT_GOT_IP_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
-
-#if CONFIG_EXAMPLE_USB_ECM_IPERF
-    iperf_init();
-    vTaskSuspend(NULL);
-#endif
-
-#ifdef CONFIG_EXAMPLE_ENABLE_WEB_ROUTER
-    modem_http_get_nvs_wifi_config(&s_modem_wifi_config);
-    modem_http_init(&s_modem_wifi_config);
-#endif
-    app_wifi_main(&s_modem_wifi_config);
-    esp_netif_set_default_netif(s_ecm_netif);
-
-#ifdef CONFIG_EXAMPLE_USB_ECM_LIGHT_SLEEP_TEST
-    TimerHandle_t sleep_timer = xTimerCreate("sleep_timer", pdMS_TO_TICKS(20000), pdTRUE, NULL, sleep_timer_cb);
-    ESP_RETURN_VOID_ON_FALSE(sleep_timer != NULL, TAG, "Failed to create FreeRTOS timer");
-    xTimerStart(sleep_timer, 0);
-#endif
-
-    while (1) {
-        EventBits_t bits = xEventGroupWaitBits(s_event_group, EVENT_AT_READY_BIT | EVENT_GOT_IP_BIT, pdTRUE, pdFALSE, portMAX_DELAY);
-#if CONFIG_EXAMPLE_ENABLE_AT_CMD
-        if (bits & EVENT_AT_READY_BIT) {
-            at_cmd_set_echo(g_at_ctx.at_handle, true);
-
-            esp_modem_at_csq_t result;
-            esp_err_t err = at_cmd_get_signal_quality(g_at_ctx.at_handle, &result);
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "Signal quality rssi: %d", result.rssi);
-            }
-
-            // Print modem information
-            char str[128] = {0};
-            at_cmd_get_manufacturer_id(g_at_ctx.at_handle, str, sizeof(str));
-            ESP_LOGI(TAG, "Modem manufacturer ID: %s", str);
-            str[0] = '\0'; // clear the string buffer
-            at_cmd_get_module_id(g_at_ctx.at_handle, str, sizeof(str));
-            ESP_LOGI(TAG, "Modem module ID: %s", str);
-            str[0] = '\0'; // clear the string buffer
-            at_cmd_get_revision_id(g_at_ctx.at_handle, str, sizeof(str));
-            ESP_LOGI(TAG, "Modem revision ID: %s", str);
-            str[0] = '\0'; // clear the string buffer
-            at_cmd_get_pdp_context(g_at_ctx.at_handle, str, sizeof(str));
-            ESP_LOGI(TAG, "Modem PDP context: %s", str);
-        }
-#endif
-        if (bits & EVENT_GOT_IP_BIT) {
-            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait a bit for DNS to be ready
-            test_query_public_ip(); // Query public IP via HTTP
-#if CONFIG_EXAMPLE_USB_ECM_DOWNLOAD_SPEED_TEST
-            test_download_speed("http://mirrors.ustc.edu.cn/ros/ubuntu/db/references.db");
-#endif
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        err = nvs_flash_erase();
+        if (err == ESP_OK) {
+            err = nvs_flash_init();
         }
     }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "FATAL: nvs_flash_init failed (%s); staying idle", esp_err_to_name(err));
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
+    }
+
+    err = esp_netif_init();
+    if (err == ESP_OK) {
+        err = esp_event_loop_create_default();
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "FATAL: network stack init failed (%s); staying idle", esp_err_to_name(err));
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
+    }
+
+    err = cpe_core_init();
+    if (err != ESP_OK) {
+        /* A configuration/NVS failure must not turn into an endless panic
+         * reboot loop on a remote CPE: erase NVS once and retry. */
+        ESP_LOGE(TAG, "cpe_core_init failed (%s), erasing NVS and retrying once", esp_err_to_name(err));
+        if (nvs_flash_erase() == ESP_OK && nvs_flash_init() == ESP_OK) {
+            err = cpe_core_init();
+        }
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "FATAL: cannot initialize configuration; staying idle (no reboot loop)");
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
+    }
+
+    err = esp_event_handler_register(IOT_ETH_EVENT, ESP_EVENT_ANY_ID, cpe_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register IOT_ETH event handler: %s", esp_err_to_name(err));
+    }
+    err = esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, cpe_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register ETH_GOT_IP handler: %s", esp_err_to_name(err));
+    }
+    err = esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_LOST_IP, cpe_event_handler, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register ETH_LOST_IP handler: %s", esp_err_to_name(err));
+    }
+
+    /* SoftAP + Web first: the device is always reachable, even without 4G. */
+    err = app_wifi_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SoftAP start failed: %s", esp_err_to_name(err));
+    }
+    err = modem_http_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Web server start failed: %s", esp_err_to_name(err));
+    }
+
+#if CONFIG_CPE_MODULE_RESET_GPIO >= 0
+    /* An ESP32 reset does not power-cycle an externally powered 4G module; its
+     * USB stack can stay in a stale state and enumeration fails with
+     * "CHECK_SHORT_DEV_DESC FAILED". Pulse the module reset once here so the
+     * USB host always enumerates from a clean state. */
+    module_reset_init();
+    ESP_LOGI(TAG, "Resetting the 4G module so USB enumeration starts clean");
+    module_reset_pulse();
+#endif
+
+    BaseType_t created = xTaskCreate(link_manager_task, "cpe_link", 4096, NULL, 6, NULL);
+    if (created != pdPASS) {
+        /* Without the link manager the CPE stays in AP-only mode instead of
+         * aborting into a reboot loop. */
+        ESP_LOGE(TAG, "Failed to create link manager task, 4G WAN disabled");
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(10000));
+        }
+    }
+
+    ESP_LOGI(TAG, "CPE started, management console on http://192.168.4.1");
 }
