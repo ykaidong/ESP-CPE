@@ -279,6 +279,11 @@ static esp_err_t ecm_bring_up(void)
 
     s_ecm.ready = true;
 
+    /* Make the ECM netif the default route as soon as it exists, instead of
+     * waiting for the first got-IP event: DHCP, DNS and any traffic the upper
+     * layers start from the link-up event then use the correct interface. */
+    esp_netif_set_default_netif(s_ecm.netif);
+
     /* The ECM driver may have already reported LINK_UP before the glue was
      * attached (review P2-9). Re-sync the netif with the current status so the
      * DHCP client and NAPT path are actually started. */
@@ -412,9 +417,6 @@ static void cpe_enable_napt(void)
 
 static void cpe_link_online(void)
 {
-    if (s_ecm.netif != NULL) {
-        esp_netif_set_default_netif(s_ecm.netif);
-    }
     cpe_enable_napt();
     cpe_apply_upstream_dns();
 }

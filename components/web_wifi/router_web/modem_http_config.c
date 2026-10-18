@@ -2214,6 +2214,25 @@ esp_err_t modem_http_start(void)
     config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
+    /* The management console must only be reachable from the SoftAP side. The
+     * ECM WAN interface can get a routable address from the modem (e.g.
+     * 192.168.225.x); binding the listening socket to the AP netif keeps the
+     * console off the WAN (audit item 7.6). The ifreq only has to stay valid
+     * until httpd_start() returns. */
+    struct ifreq ap_ifr;
+    memset(&ap_ifr, 0, sizeof(ap_ifr));
+    esp_netif_t *ap_netif = app_wifi_get_ap_netif();
+    if (ap_netif == NULL ||
+            esp_netif_get_netif_impl_name(ap_netif, ap_ifr.ifr_name) != ESP_OK ||
+            ap_ifr.ifr_name[0] == '\0') {
+        ESP_LOGE(TAG, "SoftAP netif unavailable; refusing to expose the web server "
+                 "on the WAN interface");
+        err = ESP_ERR_INVALID_STATE;
+        goto fail;
+    }
+    config.if_name = &ap_ifr;
+    ESP_LOGI(TAG, "Web server will listen on SoftAP interface \"%s\" only", ap_ifr.ifr_name);
+
     err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start HTTP server: %s", esp_err_to_name(err));

@@ -23,7 +23,9 @@ static const char *TAG = "cpe_auth";
 #define CPE_MAX_SESSIONS            4
 #define CPE_SESSION_IDLE_US         (30LL * 60LL * 1000LL * 1000LL)
 #define CPE_MAX_FAILURES            5
-#define CPE_LOCKOUT_US              (60LL * 1000LL * 1000LL)
+#define CPE_LOCKOUT_BASE_US         (60LL * 1000LL * 1000LL)
+#define CPE_LOCKOUT_MAX_US          (600LL * 1000LL * 1000LL)
+#define CPE_LOCKOUT_MAX_LEVEL       3
 
 typedef struct {
     bool used;
@@ -37,6 +39,7 @@ static SemaphoreHandle_t s_lock;
 static bool s_inited;
 static int s_fail_count;
 static int64_t s_lock_until_us;
+static int s_lockout_level;
 
 static void random_token(char *out, size_t out_len)
 {
@@ -102,6 +105,7 @@ esp_err_t cpe_auth_init(void)
     memset(s_sessions, 0, sizeof(s_sessions));
     s_fail_count = 0;
     s_lock_until_us = 0;
+    s_lockout_level = 0;
     s_inited = true;
     ESP_LOGI(TAG, "Auth initialized (session + CSRF, PBKDF2 password)");
     return ESP_OK;
@@ -143,8 +147,19 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
         s_fail_count++;
         if (s_fail_count >= CPE_MAX_FAILURES) {
             s_fail_count = 0;
-            s_lock_until_us = now + CPE_LOCKOUT_US;
-            ESP_LOGW(TAG, "Too many failed logins, locked for 60s");
+            /* Exponential backoff: 60s, 120s, 240s, then 600s cap. This makes
+             * repeated guessing progressively more expensive while a normal
+             * user only ever sees the first 60s lockout. */
+            int64_t lockout = CPE_LOCKOUT_BASE_US << s_lockout_level;
+            if (lockout > CPE_LOCKOUT_MAX_US) {
+                lockout = CPE_LOCKOUT_MAX_US;
+            }
+            if (s_lockout_level < CPE_LOCKOUT_MAX_LEVEL) {
+                s_lockout_level++;
+            }
+            s_lock_until_us = now + lockout;
+            ESP_LOGW(TAG, "Too many failed logins, locked for %lld s",
+                     (long long)(lockout / 1000000LL));
             xSemaphoreGive(s_lock);
             return CPE_AUTH_ERR_LOCKED;
         }
@@ -153,6 +168,7 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
     }
 
     s_fail_count = 0;
+    s_lockout_level = 0;
 
     /* Allocate an unused slot, or evict the least recently used one. */
     cpe_session_t *slot = NULL;
