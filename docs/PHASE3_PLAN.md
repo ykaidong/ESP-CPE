@@ -100,9 +100,9 @@
 | 4.5 超大文件（4MB） | ✅ `413`，17.6ms 内拒绝（不读 body） |
 | 4.3 上传中断（0.3s 后客户端断开） | ✅ 3s 后状态不变：仍 `ota_1`、`upload_in_progress:false`、版本不变 |
 | 4.6 并发上传 | ⚠️ 无法复现：`esp_http_server` 单任务串行处理，第二个请求在第一个 handler 返回后才开始，天然互斥；两次上传各自完整跑完（~26-28s）后按预期 400。`upload_in_progress` 的 409 分支保留作为兜底。注意：上传期间 Web 控制台会被阻塞（1MB/2s 可接受，大镜像需提示用户等待） |
+| `POST /api/system/reboot`（带 CSRF） | ✅ 返回 `{"status":"ok","message":"rebooting"}`；重启后仍为 `partition: "ota_1"`、版本 `6f4dac7`、4G 重新上线 → 启动分区持久、无回滚 |
 | 4.4 非固件文件 | ⚠️ 设备当前固件 `6f4dac7` 未含"先校验 magic"修复，错误码仍是 `upload_interrupted`；重新构建烧录 `41fcf1e` 后应为 `invalid_firmware_image` |
-| `POST /api/system/reboot` | ✅ 返回 `{"status":"ok","message":"rebooting"}`；重启后 PC 的 Wi-Fi 自动切回原网络，无法继续确认（扫描仍能看到 `ESP-CPE-F2BD`，设备存活） |
-| 4.7 boot loop 回滚 | ⏳ 需新 bootloader + 人为制造启动失败后复测 |
+| 4.7 boot loop 回滚 | ⏳ 需新 bootloader（含 `BOOTLOADER_APP_ROLLBACK_ENABLE`）+ 人为制造启动失败后复测 |
 
 注意：回滚保护需要**带 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 的 bootloader**。当前设备上的 bootloader 是开启该选项之前烧录的，
 所以本轮 OTA 虽然能切换分区，但 `PENDING_VERIFY`/回滚状态机要到用 `idf.py -p COM6 flash` 整片重烧一次（含 bootloader）后才真正生效；
