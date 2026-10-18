@@ -88,6 +88,18 @@ idf.py build
 idf.py -p COMx flash monitor
 ```
 
+测试脚本：
+
+```powershell
+# 串口日志统计（保存 monitor 输出到 build_log.txt 后运行）
+.\scripts\serial_log_check.ps1 -LogFile .\build_log.txt
+
+# 管理面安全回归（PC 连接设备 SoftAP 后运行）
+.\scripts\web_security_test.ps1 -Password '<admin 口令>'
+```
+
+Phase 2 验收清单见 [docs/PHASE2_TEST_PLAN.md](docs/PHASE2_TEST_PLAN.md)。
+
 要点：
 
 - Flash 必须 ≥16MB（分区表 `partitions_16m_ota.csv`：nvs/otadata/phy_init/ota_0 3M/ota_1 3M/storage 1M）；
@@ -141,7 +153,7 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | Phase 1 | 阻断 P0/P1 + 产品骨架（安全默认值、AP/Web 先行、USB 恢复根修、配置校验、16MB OTA 分区） | 构建通过，上板验收中 |
-| Phase 2 | 驱动与 Web 全面加固；公网 IP/测速/AT 等诊断功能按审计修复后重新接入 | 待开始 |
+| Phase 2 | 驱动与 Web 全面加固；公网 IP/测速/AT 等诊断功能按审计修复后重新接入 | 进行中（Web/驱动加固已完成，待上板回归） |
 | Phase 3 | OTA 升级/回滚、Secure Boot/加密、长稳测试、出厂流程 | 待开始 |
 
 ## 7. 目录
