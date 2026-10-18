@@ -96,9 +96,13 @@
 | 4.8 无 CSRF `POST /api/system/reboot` | ✅ 403 `csrf_invalid` |
 | 4.8 无 CSRF `POST /api/ota/upload` | ✅ 403（服务端不读 body 直接关闭；大 body 时客户端可能看到连接重置） |
 | 4.1 上传合法固件（`build/usb_ecm_4g_module.bin`） | ✅ `200 {"status":"ok","message":"ota_ready","reboot":true}`，耗时 2.27s，设备重启 |
-| 4.4 上传非固件文件 | ⚠️ 返回 400，但错误码是 `upload_interrupted`；根因是 `esp_ota_write()` 在首个字节不是 `0xE9` 时返回 `ESP_ERR_OTA_VALIDATE_FAILED`。已改进：先读首块校验 magic 再动 flash，并映射为 `400 invalid_firmware_image`（待重新构建验证） |
-| 4.1/4.2 重启后状态确认 | ⏳ 设备 OTA 重启后 PC 的 Wi-Fi 自动切回了原来的网络（192.168.1.x），未能继续用 curl 确认 `ota_1` 与 60s 后的 mark-valid；需要重新连接 `ESP-CPE-F2BD` 后补测 |
-| 4.5/4.6/4.3 | ⏳ 待补 |
+| 4.1/4.2 OTA 重启后确认 | ✅ 重启后 `partition: "ota_1"`、版本 `6f4dac7`、`pending_verify: false`，4G 正常上线（`state: online`、uptime 446s）；⚠️ 旧 bootloader 下回滚状态机未生效，`PENDING_VERIFY→valid` 需整片重烧后复测 |
+| 4.5 超大文件（4MB） | ✅ `413`，17.6ms 内拒绝（不读 body） |
+| 4.3 上传中断（0.3s 后客户端断开） | ✅ 3s 后状态不变：仍 `ota_1`、`upload_in_progress:false`、版本不变 |
+| 4.6 并发上传 | ⚠️ 无法复现：`esp_http_server` 单任务串行处理，第二个请求在第一个 handler 返回后才开始，天然互斥；两次上传各自完整跑完（~26-28s）后按预期 400。`upload_in_progress` 的 409 分支保留作为兜底。注意：上传期间 Web 控制台会被阻塞（1MB/2s 可接受，大镜像需提示用户等待） |
+| 4.4 非固件文件 | ⚠️ 设备当前固件 `6f4dac7` 未含"先校验 magic"修复，错误码仍是 `upload_interrupted`；重新构建烧录 `41fcf1e` 后应为 `invalid_firmware_image` |
+| `POST /api/system/reboot` | ✅ 返回 `{"status":"ok","message":"rebooting"}`；重启后 PC 的 Wi-Fi 自动切回原网络，无法继续确认（扫描仍能看到 `ESP-CPE-F2BD`，设备存活） |
+| 4.7 boot loop 回滚 | ⏳ 需新 bootloader + 人为制造启动失败后复测 |
 
 注意：回滚保护需要**带 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 的 bootloader**。当前设备上的 bootloader 是开启该选项之前烧录的，
 所以本轮 OTA 虽然能切换分区，但 `PENDING_VERIFY`/回滚状态机要到用 `idf.py -p COM6 flash` 整片重烧一次（含 bootloader）后才真正生效；
