@@ -71,6 +71,28 @@ idf.py -p COM6 flash monitor
 .\scripts\serial_log_check.ps1 -LogFile .\build_log.txt
 ```
 
+### 2.x 串口日志首轮记录（2026-10-18，固件 `8a3a140` / `iot_usbh_cdc 3.1.2`）
+
+`serial_log_check.ps1` 结果：**PASS**
+
+| 统计项 | 次数 |
+| --- | --- |
+| New device connected / ECM interface found | 1 / 1 |
+| 4G WAN IP / CPE online | 1 / 1 |
+| Boot counter cleared | 1 |
+| Link up but no IP / No USB link | 0 / 0 |
+| USB host stack restarts / ECM link stuck | 0 / 0 |
+| CHECK_SHORT_DEV_DESC | 0 |
+| `Replaying ... existing device(s)` 刷屏 | 0 |
+
+结论：
+
+- 2.1（正常启动/上网）通过；2.6（无周期日志刷屏）通过；2.7（120s 清零启动计数）通过；
+- 无 panic/assert/watchdog，无 USB 枚举失败。
+- 日志中大量 `httpd_uri: uri handler execution failed` 与 `httpd_sock_err: error in recv : 11` 来自本次 Web 安全测试的**故意拒绝请求**（401/403/413/畸形 JSON，服务器主动关闭连接），不是故障；后续可考虑降低这类日志级别。
+- 观察到启动时 ECM 配置/MAC 解析出现两次（先 `Disconnected` 后 `Connected`），最终 link up 正常；后续可评估去掉重复配置。
+- 待补：2.2 热插拔 20 次、2.3 无 RESET 线复位 10 次、2.4/2.5 长时间无 SIM/无模组、2.8 堆水位。
+
 ## 3. 复位键（Phase 1.5 回归）
 
 | # | 测试 | 期望 | 结果 |
