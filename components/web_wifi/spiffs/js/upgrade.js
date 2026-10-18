@@ -76,6 +76,31 @@
         setStatus('升级失败：' + CPE.errorText(error), true);
     }
 
+    /* The firmware image must start with the ESP32 image magic byte (0xE9).
+     * Checking it in the browser gives an immediate, precise error and avoids
+     * uploading megabytes of a wrong file (the server checks it as well). */
+    function fileMagicOk(file) {
+        return new Promise(function (resolve) {
+            try {
+                if (!file.slice || !window.FileReader) {
+                    resolve(true); /* let the server decide */
+                    return;
+                }
+                var reader = new FileReader();
+                reader.onload = function () {
+                    var bytes = new Uint8Array(reader.result || []);
+                    resolve(bytes.length > 0 && bytes[0] === 0xE9);
+                };
+                reader.onerror = function () {
+                    resolve(true);
+                };
+                reader.readAsArrayBuffer(file.slice(0, 1));
+            } catch (e) {
+                resolve(true);
+            }
+        });
+    }
+
     function upload() {
         if (uploading) {
             return;
@@ -94,10 +119,19 @@
             setStatus('所选文件超过 OTA 分区容量（' + formatBytes(MAX_OTA_SIZE) + '）', true);
             return;
         }
-        if (!window.confirm('确定要升级到所选固件吗？\n\n升级过程中请勿断电，设备会在完成后自动重启。')) {
-            return;
-        }
+        fileMagicOk(file).then(function (ok) {
+            if (!ok) {
+                setStatus('所选文件不是有效的 ESP32 固件（镜像头校验失败），请选择 usb_ecm_4g_module.bin', true);
+                return;
+            }
+            if (!window.confirm('确定要升级到所选固件吗？\n\n升级过程中请勿断电，设备会在完成后自动重启。')) {
+                return;
+            }
+            startUpload(file);
+        });
+    }
 
+    function startUpload(file) {
         var token = CPE.getCsrf();
         if (!token) {
             window.location.href = '/login.html';
@@ -150,8 +184,9 @@
             failUpload(data.error || ('http_' + xhr.status));
         };
         xhr.onerror = function () {
-            /* A reset right after a successful upload is expected (the device
-             * reboots). Report it as such instead of a hard failure. */
+            /* A reset can also happen when the device reboots right after a
+             * successful upload; the onload path usually wins, but if the reset
+             * arrives first the upload was likely accepted. */
             failUpload('upload_interrupted');
         };
         xhr.send(file);

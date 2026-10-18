@@ -1449,6 +1449,7 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 
 #define OTA_CHUNK_SIZE              4096
 #define OTA_UPLOAD_TIMEOUT_US       (180LL * 1000 * 1000)
+#define OTA_DRAIN_TIMEOUT_US        (5LL * 1000 * 1000)
 
 /*
  * The OTA upload is a binary body (not JSON), so precheck_post() cannot be
@@ -1499,6 +1500,38 @@ static esp_err_t api_ota_status_get_handler(httpd_req_t *req)
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
+/*
+ * Discard the unread part of the upload body before answering with an error.
+ *
+ * If the server closes the socket while the browser is still sending, the
+ * client gets a TCP reset and its XHR reports a network error ("upload
+ * interrupted") instead of the real 4xx response. Draining first lets the
+ * response reach the page. The drain is time bounded so an authenticated
+ * client cannot keep the (single) HTTP server task busy forever, and it is only
+ * used after the session/CSRF checks have passed.
+ */
+static void ota_drain_unread_body(httpd_req_t *req, size_t unread_len)
+{
+    char scratch[256];
+    int64_t start_us = esp_timer_get_time();
+    while (unread_len > 0) {
+        size_t to_read = (unread_len > sizeof(scratch)) ? sizeof(scratch) : unread_len;
+        int received = httpd_req_recv(req, scratch, to_read);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (esp_timer_get_time() - start_us > OTA_DRAIN_TIMEOUT_US) {
+                ESP_LOGW(TAG, "Stopped draining %u unread upload bytes", (unsigned)unread_len);
+                break;
+            }
+            continue;
+        }
+        if (received <= 0) {
+            ESP_LOGW(TAG, "Client aborted while the upload error was being returned");
+            break;
+        }
+        unread_len -= (size_t)received;
+    }
+}
+
 static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
 {
     esp_err_t pre = precheck_ota_post(req);
@@ -1513,14 +1546,17 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
 
     cpe_ota_info_t info;
     if (cpe_ota_get_info(&info) != ESP_OK) {
+        ota_drain_unread_body(req, req->content_len);
         return send_error_response(req, HTTPD_500_STR, "ota_info_failed", true);
     }
     if (info.upload_in_progress) {
+        ota_drain_unread_body(req, req->content_len);
         return send_error_response(req, HTTPD_409_STR, "ota_busy", true);
     }
     if (info.max_image_size > 0 && req->content_len > info.max_image_size) {
         ESP_LOGW(TAG, "Rejecting firmware upload of %u bytes (partition is %u bytes)",
                  (unsigned)req->content_len, (unsigned)info.max_image_size);
+        ota_drain_unread_body(req, req->content_len);
         return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
     }
 
@@ -1554,26 +1590,31 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     if (buf[0] != 0xE9) { /* ESP_IMAGE_HEADER_MAGIC */
         ESP_LOGW(TAG, "Rejected upload: not an ESP32 firmware image (magic 0x%02x)", buf[0]);
         free(buf);
+        ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
         return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
     }
 
     err = cpe_ota_begin(req->content_len);
     if (err == ESP_ERR_INVALID_SIZE) {
         free(buf);
+        ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
         return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
     }
     if (err == CPE_OTA_ERR_PENDING_VERIFY) {
         /* The running image was installed by OTA and has not been validated
          * yet (cpe_ota validates it CPE_OTA_VALIDATE_DELAY_MS after boot). */
         free(buf);
+        ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
         return send_error_response(req, HTTPD_409_STR, "pending_verify", true);
     }
     if (err == CPE_OTA_ERR_BUSY) {
         free(buf);
+        ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
         return send_error_response(req, HTTPD_409_STR, "ota_busy", true);
     }
     if (err != ESP_OK) {
         free(buf);
+        ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
         return send_error_response(req, HTTPD_500_STR, "ota_begin_failed", true);
     }
 

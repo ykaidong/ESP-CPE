@@ -103,7 +103,7 @@
 | 4.3 上传中断（0.3s 后客户端断开） | ✅ 3s 后状态不变：仍 `ota_1`、`upload_in_progress:false`、版本不变 |
 | 4.6 并发上传 | ⚠️ 无法复现：`esp_http_server` 单任务串行处理，第二个请求在第一个 handler 返回后才开始，天然互斥；两次上传各自完整跑完（~26-28s）后按预期 400。`upload_in_progress` 的 409 分支保留作为兜底。注意：上传期间 Web 控制台会被阻塞（1MB/2s 可接受，大镜像需提示用户等待） |
 | `POST /api/system/reboot`（带 CSRF） | ✅ 返回 `{"status":"ok","message":"rebooting"}`；重启后仍为 `partition: "ota_1"`、版本 `6f4dac7`、4G 重新上线 → 启动分区持久、无回滚 |
-| 4.4 非固件文件 | ⚠️ 设备当前固件 `6f4dac7` 未含"先校验 magic"修复，错误码仍是 `upload_interrupted`；重新构建烧录 `41fcf1e` 后应为 `invalid_firmware_image` |
+| 4.4 非固件文件 | ⚠️ 实机复测（2026-10-18 晚，`504825b`+`7f007e6`）：页面只显示"升级失败，上传中断"。根因是错误响应前服务器仍有未读 body，关闭 socket 时客户端收到 RST，XHR 走 `onerror` 而看不到 400；已修：① 浏览器端先读首字节校验 magic，选错文件立即提示；② 服务端错误响应前排空未读 body（`ota_drain_unread_body()`）。待重新编译验证 |
 | 4.7 boot loop 回滚 | ⏳ 需新 bootloader（含 `BOOTLOADER_APP_ROLLBACK_ENABLE`）+ 人为制造启动失败后复测 |
 
 注意：回滚保护需要**带 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 的 bootloader**。当前设备上的 bootloader 是开启该选项之前烧录的，

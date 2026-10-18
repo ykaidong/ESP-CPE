@@ -295,7 +295,10 @@ for (;;) {
 失败/异常处理：
 
 - 请求无 body、超过分区大小 → 400/413；
-- 上传内容首字节不是 `0xE9`（ESP 镜像 magic）→ 在写 flash 之前直接 `400 invalid_firmware_image`，非活动分区不被擦除；
+- **错误响应前先排空未读 body**（`ota_drain_unread_body()`，5 秒上限）：否则服务器在客户端仍在上传时
+  关闭 socket，内核回 RST，浏览器 XHR 触发 `onerror`，页面只能显示"上传中断"而看不到真正的 4xx 错误；
+- 上传内容首字节不是 `0xE9`（ESP 镜像 magic）→ 在写 flash 之前直接 `400 invalid_firmware_image`，
+  非活动分区不被擦除；**浏览器端也会先读首字节预校验**，选错文件时立即提示、不上传；
 - 镜像校验（`esp_ota_end`）失败 → 400 `invalid_firmware_image`，旧版本不变；
 - 上传中拔电/断网 → `otadata` 未切换，重启仍进旧版本；重新上传即可；
 - 上传进行中再次上传 → 409 `ota_busy`；当前运行镜像处于 `PENDING_VERIFY`（尚未跑满健康判定）→ 409 `pending_verify`；
