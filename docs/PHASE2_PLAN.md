@@ -70,8 +70,8 @@
 | M2.1 | Web 加固：绑定 AP 网口、请求体公共函数、会话/限速 | 已完成（httpd 绑定 AP、登录指数退避、default netif 提前；请求体公共函数/`json_parse_end` 为 Phase 1 已有，复核通过） |
 | M2.2 | 驱动加固第一批：ECM deinit/通知长度、per-port IN 重试、NEW_DEV 生命周期 | 已完成（Phase 1 已实现，本阶段复核并补充 CDC 周期重扫） |
 | M2.3 | 驱动加固第二批：Union/EC 描述符、usb 栈事件/超时、TOCTOU refcount | 部分完成：Union/EC 描述符、NEW_DEV 生命周期已落地；新增周期重扫兜底事件丢失；TOCTOU/HCD 超时评估后按“接受风险”处理（见第 5 节） |
-| M2.4 | 无 RESET 线恢复收口 + 上板回归 | Web 自动化项全部通过；串口/热插拔日志 PASS：7 次枚举、6 次上线、每次 18~20s 恢复；堆水位 6 轮稳定（free≈175.3KB、largest=126976），无逐轮泄漏；无 panic/重扫刷屏。待补：ESP32 复位 ×10、无 SIM/无模组长时间、20 轮循环 |
-| M2.5 | 构建卫生、测试脚本、Phase 2 测试报告 | 进行中：Python 版 Web 回归脚本、串口日志脚本、`PHASE2_TEST_PLAN.md` 已添加 |
+| M2.4 | 无 RESET 线恢复收口 + 上板回归 | 已完成收口：不再卸载 USB 栈（修复 `proc_req_callback` panic）+ 根端口掉电恢复；Web 自动化全 PASS；热插拔 7 次/堆水位 6 轮 PASS。ESP32 复位长稳项受模组 USB 硬件限制（见 `PHASE2_TEST_PLAN.md` 2.w） |
+| M2.5 | 构建卫生、测试脚本、Phase 2 测试报告 | 已完成：Python Web 回归、串口日志检查脚本、`PHASE2_TEST_PLAN.md` 含收口结论与结果记录 |
 | M2.6 | AT 诊断与状态页（Phase 2 完成后单独立项） | 待开始 |
 
 ## 3. 风险与约束

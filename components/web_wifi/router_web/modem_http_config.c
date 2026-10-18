@@ -68,6 +68,7 @@
 #include "app_wifi.h"
 #include "cpe_auth.h"
 #include "cpe_config.h"
+#include "cpe_ota.h"
 #include "cpe_status.h"
 #include "modem_http_config.h"
 
@@ -108,6 +109,7 @@ static bool s_events_registered;
 #define HTTPD_403_STR               "403 Forbidden"
 #define HTTPD_404_STR               "404 Not Found"
 #define HTTPD_408_STR               "408 Request Timeout"
+#define HTTPD_409_STR               "409 Conflict"
 #define HTTPD_413_STR               "413 Content Too Large"
 #define HTTPD_414_STR               "414 URI Too Long"
 #define HTTPD_415_STR               "415 Unsupported Media Type"
@@ -1442,6 +1444,182 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 }
 
 /* ------------------------------------------------------------------------- */
+/* Firmware update (OTA endpoints) and system reboot                         */
+/* ------------------------------------------------------------------------- */
+
+#define OTA_CHUNK_SIZE              4096
+#define OTA_UPLOAD_TIMEOUT_US       (180LL * 1000 * 1000)
+
+/*
+ * The OTA upload is a binary body (not JSON), so precheck_post() cannot be
+ * used: it rejects anything larger than MAX_JSON_BODY. Only the origin check
+ * and the presence of a body are enforced here; the size limit is applied by
+ * cpe_ota_begin() against the inactive OTA partition.
+ */
+static esp_err_t precheck_ota_post(httpd_req_t *req)
+{
+    if (req->content_len == 0) {
+        return send_error_response(req, HTTPD_400, "empty_body", true);
+    }
+    if (!request_origin_is_same_origin(req)) {
+        ESP_LOGW(TAG, "Rejecting cross-origin firmware upload");
+        return send_error_response(req, HTTPD_403_STR, "cross_origin_rejected", true);
+    }
+    return ESP_OK;
+}
+
+static esp_err_t api_ota_status_get_handler(httpd_req_t *req)
+{
+    esp_err_t body_check = reject_unexpected_body(req);
+    if (body_check != ESP_OK) {
+        return body_check;
+    }
+    char session[SESSION_BUF_LEN] = { 0 };
+    if (require_session(req, session, false) != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    cpe_ota_info_t info;
+    if (cpe_ota_get_info(&info) != ESP_OK) {
+        return send_error_response(req, HTTPD_500_STR, "ota_info_failed", false);
+    }
+
+    sbuf_t sb;
+    sbuf_init(&sb, 512);
+    sbuf_append(&sb, "{\"status\":\"200\",\"version\":");
+    sbuf_append_json_string(&sb, info.running_version);
+    sbuf_append(&sb, ",\"partition\":");
+    sbuf_append_json_string(&sb, info.running_partition);
+    sbuf_append(&sb, ",\"next_partition\":");
+    sbuf_append_json_string(&sb, info.next_partition);
+    sbuf_appendf(&sb, ",\"max_image_size\":%u,\"pending_verify\":%s,\"upload_in_progress\":%s}",
+                 (unsigned)info.max_image_size,
+                 info.pending_verify ? "true" : "false",
+                 info.upload_in_progress ? "true" : "false");
+    return send_sbuf_json(req, HTTPD_200, &sb, false);
+}
+
+static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
+{
+    esp_err_t pre = precheck_ota_post(req);
+    if (pre != ESP_OK) {
+        return pre;
+    }
+    char session[SESSION_BUF_LEN] = { 0 };
+    esp_err_t err = require_session_mutable(req, session);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    cpe_ota_info_t info;
+    if (cpe_ota_get_info(&info) != ESP_OK) {
+        return send_error_response(req, HTTPD_500_STR, "ota_info_failed", true);
+    }
+    if (info.upload_in_progress) {
+        return send_error_response(req, HTTPD_409_STR, "ota_busy", true);
+    }
+    if (info.max_image_size > 0 && req->content_len > info.max_image_size) {
+        ESP_LOGW(TAG, "Rejecting firmware upload of %u bytes (partition is %u bytes)",
+                 (unsigned)req->content_len, (unsigned)info.max_image_size);
+        return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
+    }
+
+    err = cpe_ota_begin(req->content_len);
+    if (err == ESP_ERR_INVALID_SIZE) {
+        return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
+    }
+    if (err != ESP_OK) {
+        return send_error_response(req, HTTPD_500_STR, "ota_begin_failed", true);
+    }
+
+    uint8_t *buf = malloc(OTA_CHUNK_SIZE);
+    if (buf == NULL) {
+        cpe_ota_abort();
+        return send_error_response(req, HTTPD_500_STR, "out_of_memory", true);
+    }
+
+    size_t remaining = req->content_len;
+    int64_t start_us = esp_timer_get_time();
+    esp_err_t upload_err = ESP_OK;
+    while (remaining > 0) {
+        size_t to_read = (remaining > OTA_CHUNK_SIZE) ? OTA_CHUNK_SIZE : remaining;
+        int received = httpd_req_recv(req, (char *)buf, to_read);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (esp_timer_get_time() - start_us > OTA_UPLOAD_TIMEOUT_US) {
+                upload_err = ESP_ERR_TIMEOUT;
+                break;
+            }
+            continue;
+        }
+        if (received <= 0) {
+            upload_err = ESP_FAIL;
+            break;
+        }
+        upload_err = cpe_ota_write(buf, (size_t)received);
+        if (upload_err != ESP_OK) {
+            break;
+        }
+        remaining -= (size_t)received;
+    }
+    free(buf);
+
+    if (upload_err != ESP_OK) {
+        cpe_ota_abort();
+        ESP_LOGE(TAG, "Firmware upload interrupted: %s", esp_err_to_name(upload_err));
+        return send_error_response(req,
+                                   upload_err == ESP_ERR_TIMEOUT ? HTTPD_408_STR : HTTPD_400,
+                                   "upload_interrupted", true);
+    }
+
+    err = cpe_ota_end();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Firmware image rejected: %s", esp_err_to_name(err));
+        return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
+    }
+
+    sbuf_t sb;
+    sbuf_init(&sb, 96);
+    sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"ota_ready\",\"reboot\":true}");
+    err = send_sbuf_json(req, HTTPD_200, &sb, false);
+
+    /* Let the response leave the socket, then boot the new image. */
+    ESP_LOGW(TAG, "Firmware update stored, restarting into the new image");
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();
+    return err;
+}
+
+static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
+{
+    esp_err_t pre = precheck_post(req, false);
+    if (pre != ESP_OK) {
+        return pre;
+    }
+    char session[SESSION_BUF_LEN] = { 0 };
+    esp_err_t err = require_session_mutable(req, session);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (req->content_len > 0) {
+        char body[MAX_JSON_BODY + 1];
+        size_t body_len = 0;
+        if (read_json_body(req, body, sizeof(body), &body_len) != BODY_OK) {
+            return send_error_response(req, HTTPD_400, "invalid_body", true);
+        }
+    }
+
+    sbuf_t sb;
+    sbuf_init(&sb, 64);
+    sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"rebooting\"}");
+    err = send_sbuf_json(req, HTTPD_200, &sb, false);
+
+    ESP_LOGW(TAG, "Reboot requested from the web console");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return err;
+}
+
+/* ------------------------------------------------------------------------- */
 /* WLAN basic settings (/wlan_general)                                       */
 /* ------------------------------------------------------------------------- */
 
@@ -2133,6 +2311,9 @@ static const httpd_uri_t s_uri_handlers[] = {
     { .uri = "/api/password",    .method = HTTP_POST, .handler = api_password_post_handler },
     { .uri = "/api/status",      .method = HTTP_GET,  .handler = api_status_get_handler },
     { .uri = "/api/factory_reset", .method = HTTP_POST, .handler = api_factory_reset_post_handler },
+    { .uri = "/api/ota/status",  .method = HTTP_GET,  .handler = api_ota_status_get_handler },
+    { .uri = "/api/ota/upload",  .method = HTTP_POST, .handler = api_ota_upload_post_handler },
+    { .uri = "/api/system/reboot", .method = HTTP_POST, .handler = api_system_reboot_post_handler },
     { .uri = "/wlan_general",    .method = HTTP_GET,  .handler = wlan_general_get_handler },
     { .uri = "/wlan_general",    .method = HTTP_POST, .handler = wlan_general_post_handler },
     { .uri = "/wlan_advance",    .method = HTTP_GET,  .handler = wlan_advance_get_handler },
@@ -2203,7 +2384,7 @@ esp_err_t modem_http_start(void)
              "%s", CONFIG_CPE_WEB_MOUNT_POINT);
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.max_resp_headers = 12;
     config.max_open_sockets = 7; /* matches the browser per-origin connection limit */
     config.recv_wait_timeout = 2;

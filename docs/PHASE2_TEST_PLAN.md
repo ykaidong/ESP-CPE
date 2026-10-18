@@ -57,7 +57,7 @@ idf.py -p COM6 flash monitor
 | --- | --- | --- | --- |
 | 2.1 | 正常启动接模组 | 枚举成功、`ECM driver ready`、`4G WAN IP`、`CPE online` | ✅ 通过 |
 | 2.2 | 反复热插拔模组 20 次 | 每次恢复 link/IP；无 panic；无重复端口打开错误 | ✅ 初步通过（7 次，恢复 18~20s；建议补到 20 次） |
-| 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机、不 panic** | ☐ 待上板（已修复：①"幽灵设备"跳过恢复；②卸载 USB 栈时 panic，改为根端口掉电） |
+| 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机、不 panic** | ⛔ 受阻：软件侧修复已上板验证（不再 panic、AP/Web 可用、周期重试），但模组 USB 控制器复位后挂死属硬件限制，只有插拔恢复，见 2.w |
 | 2.4 | 无 SIM 持续 10 分钟 | `link up but no IP` → FAULT，AP/Web 可用，无重启 | ☐ 待补 |
 | 2.5 | 不接模组上电 10 分钟 | no-device FAULT，AP/Web 可用，无重启 | ☐ 待补 |
 | 2.6 | 正常运行时观察 10 分钟日志 | **不出现** `Replaying the CONNECTED event for N existing device(s)` 周期刷屏；无 `CHECK_SHORT_DEV_DESC` 后卡死 | ✅ 通过（0 次刷屏） |
@@ -244,4 +244,28 @@ I (31301) cpe: USB root port powered off for 1000 ms
 
 | 日期 | 固件版本 | 执行人 | 结果 | 备注 |
 | --- | --- | --- | --- | --- |
-|  |  |  |  |  |
+| 2026-10-18 | `8a3a140` | 用户/代理 | 2.1/2.6/2.7 PASS | 首轮串口日志 |
+| 2026-10-18 | `c0ed06a` | 用户/代理 | 2.2 初步 PASS、2.8 初步 PASS | 热插拔 7 次、堆水位 6 轮稳定 |
+| 2026-10-18 | `f66b533`/`4cd94f4` | 代理（脚本） | 1.4~1.9、1.11 PASS | Web 安全自动化回归 |
+| 2026-10-18 | `b105d1c` | 用户 | panic 消失 | 根端口掉电替代 USB 栈卸载；2.3 受模组硬件限制 |
+| 2026-10-18 | `1c22d2f`/`e40f0ee` | 用户 | 实验 A/B 均无效 | 加长复位无效；FS-only 在 IDF 6.1 不支持，已回撤 |
+
+## 6. Phase 2 收口结论（2026-10-18）
+
+**已完成并验收**：
+
+- 驱动：CDC/ECM 本地 fork 的 P0/P1 生命周期缺陷修复、`NEW_DEV` 补发 + 5s 周期重扫、Union/EC 描述符解析、
+  `enum_filter_cb` 透传、枚举速度日志（`iot_usbh_cdc` 3.1.3 / `iot_usbh_ecm` 0.4.2）；
+- 恢复链路：移除运行期 USB 栈卸载（修复 `proc_req_callback` NULL 解引用 panic），改为根端口掉电/上电 +
+  `usb_host_device_addr_list_fill()` 判定设备存在；无设备时按上限重试并保持 FAULT（AP/Web 常驻）；
+- Web：管理面仅绑定 SoftAP 网口、会话 + CSRF、登录锁定与指数退避、请求体/JSON 校验、XSS 白名单；
+  安全自动化回归全部 PASS；
+- 诊断：`CPE_HEAP_LOG_PERIOD_S` 堆水位日志、`scripts/serial_log_check.ps1`、`scripts/web_security_test.py`。
+
+**未完成/受阻（不阻塞 Phase 3 代码工作）**：
+
+- 2.3 复位 ×10、2.4 无 SIM 10 分钟、2.5 无模组 10 分钟、2.2 补到 20 次、2.8 补到 20 轮：需实机长时间占用；
+- 2.3 的根因在模组侧（见 2.w）：外供电模组只有 USB 口、无 `RESET_N`、VBUS 不可控，
+  ESP32 复位后其 USB 控制器挂死，纯软件无法复位；产品化需换模组或下一版硬件增加模组复位/供电控制。
+
+**遗留风险**：见第 4 节与 `docs/PHASE2_PLAN.md` 第 5 节（TOCTOU、上游 HCD 无超时、`usb_host_uninstall()` 竞态已绕开）。

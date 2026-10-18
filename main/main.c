@@ -37,6 +37,7 @@
 #include "usb/usb_host.h"
 
 #include "cpe_core.h"
+#include "cpe_ota.h"
 #include "app_wifi.h"
 #include "modem_http_config.h"
 #include "reset_button.h"
@@ -61,6 +62,23 @@ static void log_heap(const char *reason)
 
 #define ECM_NETIF_KEY       "ECM0"
 #define ECM_NETIF_DESC      "usb-ecm"
+
+/* Validate an image that was just installed by OTA.
+ *
+ * With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE the new image boots in
+ * PENDING_VERIFY: it has to be marked valid, otherwise the bootloader rolls
+ * back on the next reset. AP + Web being up (which is true by the time this
+ * task runs) is what counts as "healthy": the 4G link depends on the external
+ * modem and cannot be a firmware health criterion. A crash/reboot loop stops
+ * the image from ever reaching this point, which is exactly when the rollback
+ * is wanted. */
+static void ota_validate_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_OTA_VALIDATE_DELAY_MS));
+    (void)cpe_ota_mark_running_valid();
+    vTaskDelete(NULL);
+}
 
 typedef struct {
     iot_eth_driver_t *driver;
@@ -833,5 +851,23 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "CPE started, management console on http://192.168.4.1");
+
+    /* Firmware/OTA bookkeeping: log the running image, then validate it once the
+     * boot is considered healthy (see ota_validate_task). */
+    cpe_ota_info_t ota_info;
+    if (cpe_ota_get_info(&ota_info) == ESP_OK) {
+        ESP_LOGI(TAG, "Firmware version %s on %s%s%s",
+                 ota_info.running_version, ota_info.running_partition,
+                 ota_info.next_partition[0] != '\0' ? ", next boot " : "",
+                 ota_info.next_partition);
+        if (ota_info.pending_verify) {
+            ESP_LOGW(TAG, "Image is pending verification, validating in %d ms",
+                     CONFIG_CPE_OTA_VALIDATE_DELAY_MS);
+        }
+    }
+    if (xTaskCreate(ota_validate_task, "cpe_ota", 3072, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "Failed to create the OTA validation task");
+    }
+
     log_heap("boot");
 }

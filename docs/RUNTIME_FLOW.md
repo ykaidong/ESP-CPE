@@ -227,6 +227,11 @@ for (;;) {
 | `Restarting the DHCP client (status N, ...)` | 只重启 DHCP；`status 2` = DHCP 客户端正在运行 |
 | `DHCP client retries exhausted, rebuilding the ECM driver` | DHCP 重试耗尽，开始拆 ECM 重建 |
 | `No USB link after 30000 ms (attempt N)` | 30s 内没有 USB link |
+| `Firmware version ... on ota_0, next boot ota_1` | 启动时打印运行版本/分区，以及下次启动分区 |
+| `Image is pending verification, validating in 60000 ms` | 该次启动来自 OTA，等待健康判定后标记有效 |
+| `OTA image validated and marked valid (rollback cancelled)` | 新固件已验证，取消回滚 |
+| `OTA image validated: version ... on ota_x (...), boot partition switched` | 上传完成、镜像校验通过、已切换启动分区 |
+| `Firmware update stored, restarting into the new image` | Web 升级成功，即将重启进入新固件 |
 | `Power-cycling the USB root port to force re-enumeration` | 无设备时触发软件兜底：根端口掉电/上电（不再卸载 USB 栈） |
 | `USB root port powered off for 1000 ms` | 根端口已掉电并等待模组感知总线断开 |
 | `Healthy for 120 s, boot counter cleared` | 已连续在线 120s，启动计数清零（正常健康标志） |
@@ -269,7 +274,33 @@ for (;;) {
   应用不会启动。这也是打印凭据改用"启动后双击"而不是"启动时按住"的原因；
   板子方便改线时建议换到其它空闲 GPIO。
 
-## 9. 相关文档
+## 9. 固件升级（OTA，Phase 3）
+
+### 9.1 本地升级流程
+
+1. PC 连上 SoftAP，登录管理面（需先完成首次改密）；
+2. `GET /api/ota/status` 读取当前版本/分区/上传上限；
+3. `POST /api/ota/upload` 上传完整 app 镜像（`application/octet-stream`，body 即 `.bin`，
+   受会话 + CSRF 保护）：
+   - 固件按 `Content-Length` 流式写入**非活动** OTA 分区（`esp_ota_write`，4KB 分块）；
+   - 写满且 `esp_ota_end()` 校验通过后才 `esp_ota_set_boot_partition()` 切换启动分区；
+   - 响应 `{"status":"ok","message":"ota_ready","reboot":true}` 后自动重启；
+4. 新固件启动后处于 `PENDING_VERIFY`，在 `CPE_OTA_VALIDATE_DELAY_MS`（默认 60s）后由
+   `cpe_ota_mark_running_valid()` 标记为有效，取消回滚；
+5. 若新固件在标记有效前崩溃/反复复位，bootloader 自动回滚到旧版本。
+
+失败/异常处理：
+
+- 请求无 body、超过分区大小 → 400/413；非固件内容 → `esp_ota_end()` 拒绝，返回 400，旧版本不变；
+- 上传中拔电/断网 → `otadata` 未切换，重启仍进旧版本；重新上传即可；
+- 上传进行中再次上传 → 409（同一分区不允许并发写）；
+- `POST /api/system/reboot`：运维用重启接口（会话 + CSRF）。
+
+> `idf.py flash` 直接烧录的镜像不走 OTA 状态机，不受回滚影响。
+> 注意：当前模组在 ESP32 重启后可能 USB 挂死（见 `PHASE2_TEST_PLAN.md` 2.w），升级重启后
+> 4G 若未恢复需人工插拔模组，这是硬件限制，与 OTA 无关。
+
+## 10. 相关文档
 
 - 阶段计划与审计条目映射：[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
 - 上板验收清单：[PHASE1_TEST_PLAN.md](PHASE1_TEST_PLAN.md)

@@ -119,6 +119,19 @@ menu "CPE Application Configuration"
             fragmentation tests. Link up/down and got/lost-IP transitions are
             always logged regardless of this option.
 
+    config CPE_OTA_VALIDATE_DELAY_MS
+        int "Delay before validating a newly flashed OTA image (ms)"
+        default 60000
+        range 5000 600000
+        help
+            With BOOTLOADER_APP_ROLLBACK_ENABLE the image installed by OTA boots
+            in PENDING_VERIFY and must be marked valid, otherwise the bootloader
+            rolls back on the next reset. The running image is validated after
+            this delay: long enough to catch a crash/reboot loop, short enough
+            that a healthy device is not rolled back. Reachability of the
+            management console (AP/Web) counts as healthy; the 4G link is not
+            required, because it depends on the external modem and the network.
+
     config CPE_USB_PORT_POWER_OFF_MS
         int "USB root port power-off time during recovery (ms)"
         default 1000

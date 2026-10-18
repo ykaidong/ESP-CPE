@@ -52,3 +52,9 @@ CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=512
 
 # ---- Crash behaviour -----------------------------------------------------
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+# ---- OTA rollback (Phase 3) ---------------------------------------------
+# An OTA image boots in PENDING_VERIFY and is rolled back unless the firmware
+# marks it valid (cpe_ota.c, after CPE_OTA_VALIDATE_DELAY_MS). Direct
+# `idf.py flash` writes are unaffected by this option.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

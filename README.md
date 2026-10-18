@@ -16,7 +16,7 @@ ESP32-S3 同时提供 SoftAP + NAPT + Web 管理面。本仓库是**重新开始
 | 默认安全 | 开放 AP，管理员固定 `esp32/12345678`，HTTP Basic | **WPA2 + 每台唯一随机口令**；管理员口令首启随机、首次登录强制修改；会话 Cookie + CSRF |
 | USB 恢复 | 无；偶发枚举失败只能重插 | 枚举事件补发 + ECM 重建 + 可选端口掉电 + **有界受控重启**；"link up 无 IP"永不重启 |
 | 配置校验 | 任意参数直写 NVS，`channel:"999"` 会变砖 | 服务端强校验、失败回滚、启动时非法值回退默认 |
-| 分区 | 单 factory，无 OTA | 16MB + `ota_0`/`ota_1` 双分区（OTA 接口在阶段三接入） |
+| 分区 | 单 factory，无 OTA | 16MB + `ota_0`/`ota_1` 双分区；Phase 3 接入管理面本地 OTA（上传 + 回滚保护） |
 | 驱动 | registry 版本存在 UAF/double free/TX 令牌丢失 | 本地 fork（`components/iot_usbh_*`）逐条修补，见各组件 CHANGELOG |
 
 ## 2. 首次启动与登录
@@ -153,8 +153,8 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | Phase 1 | 阻断 P0/P1 + 产品骨架（安全默认值、AP/Web 先行、USB 恢复根修、配置校验、16MB OTA 分区） | 构建通过，上板验收中 |
-| Phase 2 | 驱动与 Web 全面加固；公网 IP/测速/AT 等诊断功能按审计修复后重新接入 | 进行中（Web/驱动加固已完成，待上板回归） |
-| Phase 3 | OTA 升级/回滚、Secure Boot/加密、长稳测试、出厂流程 | 待开始 |
+| Phase 2 | 驱动与 Web 全面加固；公网 IP/测速/AT 等诊断功能按审计修复后重新接入 | 已完成收口（2026-10-18）：驱动/Web/恢复链路修复 + 自动化回归 PASS；2.3 长稳受模组 USB 硬件限制，见 `docs/PHASE2_TEST_PLAN.md` 2.w |
+| Phase 3 | OTA 升级/回滚、Secure Boot/加密、长稳测试、出厂流程 | 进行中（P3-1 OTA），计划见 `docs/PHASE3_PLAN.md` |
 
 ## 7. 目录
 
