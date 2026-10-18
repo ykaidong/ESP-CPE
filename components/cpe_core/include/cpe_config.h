@@ -69,7 +69,13 @@ bool cpe_config_first_boot(void);
  * Call only when the credentials have just been generated (first boot or
  * factory reset); credentials are never printed on normal boots.
  */
-void cpe_config_print_credentials(void);
+/**
+ * @brief Print the current credentials to the UART log (never to an HTTP response).
+ *
+ * @param reason  Short description of why they are printed, e.g.
+ *                "first boot" or "reset button request". May be NULL.
+ */
+void cpe_config_print_credentials(const char *reason);
 
 /* Validation helpers, all return ESP_OK or ESP_ERR_INVALID_ARG. */
 esp_err_t cpe_config_validate_ap_ssid(const char *ssid);
@@ -107,6 +113,15 @@ bool cpe_config_check_admin_password(const char *password);
 esp_err_t cpe_config_set_admin_password(const char *new_password, bool must_change);
 
 bool cpe_config_admin_must_change(void);
+
+/**
+ * @brief True when the stored admin hash still matches the current AP password.
+ *
+ * Used by the boot-time reset-button helper: the plaintext admin password can
+ * only be printed while it is still the AP password (the device never stores
+ * the plaintext admin password).
+ */
+bool cpe_config_admin_password_is_ap_password(void);
 
 /**
  * @brief Erase stored configuration and regenerate random per-device credentials.

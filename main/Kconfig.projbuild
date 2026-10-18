@@ -162,4 +162,62 @@ menu "CPE Application Configuration"
             enabled, and finally a full USB host stack restart (bus release +
             fresh enumeration). Set to 0 to disable this recovery entirely.
 
+    config CPE_RESET_BUTTON_GPIO
+        int "Reset/factory-reset button GPIO (-1 = disabled)"
+        default 0
+        range -1 48
+        help
+            Button wired from the GPIO to GND (active low by default).
+
+            Within CPE_CREDENTIAL_PRINT_WINDOW_MS after boot, double-click the
+            button to print the SoftAP and administrator credentials on the
+            UART. The AP password is always printable; the admin password is
+            printable while it still equals the AP password (a changed admin
+            password is stored as a hash only and is reported as changed).
+            This is a physical action, so the credentials are only exposed to
+            someone holding the device.
+
+            Keep holding it for CPE_FACTORY_RESET_HOLD_MS after boot to restore
+            factory settings and reboot.
+
+            NOTE: GPIO0 is the ESP32-S3 boot strapping pin. Holding it low
+            while the chip resets selects the UART download mode and the
+            application never starts, which is why a double-click (not a
+            boot-time hold) is used. Use a different free GPIO if the board
+            allows it.
+
+    config CPE_RESET_BUTTON_ACTIVE_LEVEL
+        depends on CPE_RESET_BUTTON_GPIO >= 0
+        int "Reset button active level (0 = active low, 1 = active high)"
+        default 0
+        range 0 1
+
+    config CPE_CREDENTIAL_PRINT_WINDOW_MS
+        depends on CPE_RESET_BUTTON_GPIO >= 0
+        int "Window after boot for the credential-print double-click (ms)"
+        default 10000
+        range 1000 60000
+        help
+            A double-click on the reset button within this time after boot
+            prints the SoftAP/admin credentials, but only while the admin
+            password has never been changed.
+
+    config CPE_DOUBLE_CLICK_MS
+        depends on CPE_RESET_BUTTON_GPIO >= 0
+        int "Maximum gap between the two clicks (ms)"
+        default 800
+        range 200 2000
+        help
+            Maximum time between the start of the first click and the start of
+            the second click for the press to count as a double-click.
+
+    config CPE_FACTORY_RESET_HOLD_MS
+        depends on CPE_RESET_BUTTON_GPIO >= 0
+        int "Hold time to restore factory settings (ms)"
+        default 10000
+        range 1000 60000
+        help
+            Continuous hold time after boot before the device restores factory
+            settings and reboots.
+
 endmenu

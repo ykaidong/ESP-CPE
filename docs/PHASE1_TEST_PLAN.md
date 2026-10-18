@@ -37,7 +37,9 @@ cd C:\Users\fytech\Desktop\usb_ecm_4g_module
 | 1.11c | 修改 AP SSID 或口令 | 浏览器连接断开后提示“已提交/网络中断”（不是“操作失败”）；用新参数可重新连接 |
 | 1.12 | 客户端列表修改名称为 `"><img src=x onerror=alert(1)>` | 页面以纯文本显示，无脚本执行（XSS 修复） |
 | 1.13 | 重启设备 | 不出现启动 abort/重启循环；仅 AP 口令不再重复打印 |
-| 1.14 | 登录后 Web“恢复出厂” | AP 名称/口令保持不变，管理员口令重置为 AP 口令并强制改密；重启次数计数清零；站点昵称被清除 |
+| 1.14 | 登录后 Web“恢复出厂” | AP 名称/口令保持不变；管理员口令重置为 AP 口令并强制改密；启动计数清零；站点昵称被清除 |
+| 1.14b | 启动后 10 秒内双击复位键（默认 GPIO0） | 打印当前 AP 口令；管理员口令未修改过 → 一并打印（= AP 口令）；已修改过 → 该行显示"已修改，明文不可恢复" |
+| 1.14c | 正常运行时连续按住复位键 ≥10s（`CPE_FACTORY_RESET_HOLD_MS`） | 恢复出厂设置并自动重启；重启后 AP 口令不变，管理员口令 = AP 口令 |
 
 ## 2. 4G 链路与恢复（P0-1/P0-2/P1-11/P1-19）
 
@@ -69,7 +71,7 @@ Select-String -Path main\main.c -Pattern 'usb_host_install|usb_stack_tear_down|u
 Get-Content components\iot_usbh_cdc\idf_component.yml, components\iot_usbh_ecm\idf_component.yml
 ```
 
-期望：固定凭据 0 命中；`ESP_ERROR_CHECK` 在网络 IO 处 0 命中；`main.c` 不出现上述 USB 重装符号；fork 版本为 3.1.1 / 0.4.1。
+期望：固定凭据 0 命中；`ESP_ERROR_CHECK` 在网络 IO 处 0 命中；`main.c` 不出现上述 USB 重装符号；fork 版本为 3.1.1 / 0.4.2。
 
 ## 4. 已知未覆盖（Phase 2/3）
 

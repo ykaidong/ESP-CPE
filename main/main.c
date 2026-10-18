@@ -38,6 +38,7 @@
 #include "cpe_core.h"
 #include "app_wifi.h"
 #include "modem_http_config.h"
+#include "reset_button.h"
 #include "iot_eth.h"
 #include "iot_eth_netif_glue.h"
 #include "iot_usbh_cdc.h"
@@ -721,6 +722,10 @@ static void link_manager_task(void *arg)
 
 void app_main(void)
 {
+    /* Start the reset-button boot window: a double-click within the first
+     * seconds after boot prints the credentials (physical-presence trigger). */
+    (void)reset_button_init();
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         err = nvs_flash_erase();
@@ -803,6 +808,12 @@ void app_main(void)
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(10000));
         }
+    }
+
+    /* Long-press the same button to restore factory settings. */
+    err = reset_button_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Reset button monitor not started (%s)", esp_err_to_name(err));
     }
 
     ESP_LOGI(TAG, "CPE started, management console on http://192.168.4.1");

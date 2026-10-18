@@ -46,6 +46,9 @@
 
 ### 阶段二：驱动与 Web 全面加固（下一阶段）
 
+> 详细任务、优先级、验收与里程碑见 **[PHASE2_PLAN.md](PHASE2_PLAN.md)**。
+> 按用户要求：先把现有功能做成熟（驱动 + Web），AT 诊断作为新功能在 Phase 2 完成后单独立项。
+
 - CDC：`port_close()` 两阶段延迟释放、回调链表加锁、控制传输长度校验、IN 轮询耗尽状态上报、通知重提交；`driver_install` 失败置 NULL。
 - ECM：`itf+1`/IAD 解析改为按 Union/EC 功能描述符定位；通知长度校验；`wMaxSegmentSize` 上限钳制；deinit 幂等。
 - `espressif__usb`：评估升级/补丁（枚举 FSM SECOND_RESET 卡死、无传输超时、事件队列满）。
@@ -200,8 +203,8 @@ app_main
 | 3 | Web 后台：状态页"客户端数量/已连接数/剩余连接数"一直显示 `--`；登录页图标显示为方框（iconfont 字体未随 SPIFFS 打包）；登录框偏左、页面空旷；新标签页/刷新后"退出登录"无反应 | ① 4s 轮询只在客户端页签激活时启动，初始化时不再拉取列表；② `style.css` 引用 `fonts/iconfont.*` 但 SPIFFS 无该字体；③ 旧 CSS 把登录卡绝对定位在 left:15%/top:20%；④ CSRF token 只存 sessionStorage（按标签页），新标签页取不到 → POST 403 被静默吞掉 | ① 页面加载时拉取一次客户端数量（不启动隐藏轮询）；② 登录页改用已有图片、去掉 iconfont；③ cpe.css 覆盖登录/状态页布局（居中卡片、白底分区卡片、移动端适配）；④ 服务端下发非 HttpOnly 的 `CPE_CSRF` Cookie（SameSite=Strict，双提交），登出不再强制 CSRF 且失败时前端提示；启动计数清零后同步刷新状态 |
 | 4 | 状态页排版不美观：基本状态三个点位被推到页面两端、网络详情"标签在左、值贴右边缘" | 旧布局用 `flex:1` 的占位线段把三项撑满整行；`.status-row{justify-content:space-between}` 使值总是贴右 | 基本状态改为三张等宽状态卡（图标 + 标签 + 值，间距 12px）；设备状态改为三块指标卡；网络详情改为两列键值网格，值左对齐紧跟标签；≤720px 自动单列 |
 | 5 | 复位后 ECM 枚举/配置正常、`4G link up`，但反复出现 `Link up but no IP after 20000 ms`，每轮都拆 ECM 重建 | ① 默认 IP 超时只有 20s，而模组在 USB 复位后重新附着网络（PDP/DHCP 服务器就绪）可能需要数十秒；② 超时立即 `ecm_teardown()` 会重置模组 USB 接口，下一轮又只给 20s，形成"重建—超时—再重建"循环，反而让 DHCP 永远等不到可用窗口 | `CPE_IP_TIMEOUT_MS` 默认改为 90s；新增 `CPE_IP_DHCP_RESTARTS`（默认 2）：链路保持、仅重启 DHCP 客户端并打印其状态，仍无 IP 才重建 ECM；链路断开/拿到 IP 时重置计数 |
-
 | 6 | 仓库残留官方示例的 PING/诊断组件与其它芯片配置：`components/network_test`（每 5s ping 8.8.8.8、公网 IP、上传/下载测速）、`sdkconfig.ci.at`、`sdkconfig.ci.p4fullspeed`、`sdkconfig.defaults.esp32s2/.esp32p4`，以及 `EXAMPLE_WEB_MOUNT_POINT`、未实现的 `CPE_FACTORY_RESET_GPIO` | 示例改造为产品时未清理：`network_test` 已不被 `main` 引用（map 中无 ping 符号）但仍参与编译；示例 CI 引用的 `CONFIG_EXAMPLE_*` 在任何 Kconfig 中都已不存在；其它芯片的 defaults 与 ESP32-S3 产品无关 | 删除 `components/network_test`、两个 `sdkconfig.ci.*`、`sdkconfig.defaults.esp32s2/.esp32p4`；`EXAMPLE_WEB_MOUNT_POINT` → `CPE_WEB_MOUNT_POINT`；删除未实现的 `CPE_FACTORY_RESET_GPIO`；文档同步 |
+| 7 | 恢复出厂后重启没有打印凭据，串口监视器仍会错过早期输出；用户误以为旧密码失效或系统异常 | 恢复出厂/重启时打印的时机太早，且明文管理员口令无法从哈希恢复；GPIO0 在复位期间被按住会让芯片进入下载模式，不能做"启动时按住" | 新增 `main/reset_button.c`：复位键（默认 GPIO0，低有效）**启动后 10 秒内双击** → 打印当前 AP 口令；管理员口令若仍等于 AP 口令则一并打印，已修改则标注"明文不可恢复"（避免误报）。**开机后长按 10s** → 恢复出厂并重启（等待松开再重启，避免 strapping）。恢复出厂不再依赖"重启后打印一次"的 NVS 标记 |
 
 > 现场结论：对外部供电的 4G 模组，产品硬件必须提供 RESET_N→GPIO 或受控供电，否则主机复位后可能枚举失败。README 已补充接线说明。
 

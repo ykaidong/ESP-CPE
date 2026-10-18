@@ -21,6 +21,9 @@
 ```
 上电
  │
+ ├─ 0. reset_button_init()
+ │       配置复位按键 GPIO（默认 GPIO0，低电平有效），并开始"双击打印"窗口计时
+ │
  ├─ 1. nvs_flash_init()
  │       损坏（NO_FREE_PAGES / NEW_VERSION）时擦除重试一次
  │
@@ -42,7 +45,8 @@
  ├─ 7. （可选）模组 RESET 脉冲  仅当配置了 CPE_MODULE_RESET_GPIO
  │       保证外部供电的模组从干净 USB 状态开始枚举
  │
- └─ 8. 创建 cpe_link 任务       后台链路管理器（见第 3、4 节）
+ ├─ 8. 创建 cpe_link 任务       后台链路管理器（见第 3、4 节）
+ └─ 9. reset_button_start()    按键监控：启动后双击打印凭据 / 长按 10s 恢复出厂（见第 8 节）
 ```
 
 启动失败的降级策略：
@@ -55,6 +59,7 @@
 | SoftAP 启动失败 | 记录错误，继续启动 Web 和链路管理器 |
 | Web 启动失败 | 记录错误，继续启动链路管理器（AP 仍可连） |
 | `cpe_link` 任务创建失败 | 记录错误，保持 AP-only 模式，不重启 |
+| 复位按键任务创建失败 | 记录错误，长按恢复出厂不可用（其余功能正常） |
 
 ## 3. 链路状态机
 
@@ -213,6 +218,11 @@ for (;;) {
 | `Healthy for 120 s, boot counter cleared` | 已连续在线 120s，启动计数清零（正常健康标志） |
 | `ECM link stuck, controlled reboot N/3` | 已枚举但 ECM 卡死，触发有界受控重启 |
 | `no USB modem, AP/Web still available` | 无设备，进入 FAULT，AP/Web 保持可用 |
+| `Factory reset performed (AP credentials kept, ...)` | 恢复出厂完成：AP SSID/口令保留，管理员口令重置为 AP 口令 |
+| `Reset button double-clicked: printing credentials` | 启动后双击，开始打印当前凭据 |
+| `Admin password  : (changed, plaintext not stored; hold the button 10 s to factory reset)` | 管理员口令已修改，明文无法恢复（AP 口令仍会打印） |
+| `Reset button pressed (hold 10000 ms for factory reset)` | 运行中按下按键，开始计时 |
+| `Reset button held for 10000 ms, restoring factory settings` | 长按达到阈值，恢复出厂并重启 |
 
 ## 7. 与 AP/Web 管理面的关系
 
@@ -220,9 +230,30 @@ for (;;) {
 - Web 状态页每 5s 轮询一次 `/status`；客户端列表在页签激活时每 4s 轮询；
 - 只有 `ONLINE` 状态下 NAPT 才开启，此时 AP 客户端才能访问外网；
 - 认证：会话 Cookie（`CPE_SID`）+ CSRF 双提交；首次登录强制修改管理员口令；
-  登出/改密会使会话失效；恢复出厂保留本机 AP 凭据。
+  登出/改密会使会话失效；恢复出厂保留本机 AP 凭据，管理员口令重置为 AP 口令。
 
-## 8. 相关文档
+## 8. 复位/恢复出厂按键（默认 GPIO0）
+
+同一个按键承担两个功能，均由 `main/reset_button.c` 实现：
+
+| 操作 | 条件 | 行为 |
+| --- | --- | --- |
+| 启动后 `CPE_CREDENTIAL_PRINT_WINDOW_MS`（默认 10s）内**双击**按键 | 任意状态 | 打印当前 AP SSID/口令；管理员口令若仍等于 AP 口令则一并打印，否则明确标注"已修改、明文不可恢复" |
+| 开机后连续按住 `CPE_FACTORY_RESET_HOLD_MS`（默认 10s） | 任意状态 | 恢复出厂设置（保留 AP 凭据、管理员口令重置为 AP 口令）、清启动计数、重启 |
+
+- 按键为**低电平有效**、内部上拉，接在 GPIO 与 GND 之间；GPIO 和有效电平可通过
+  `CPE_RESET_BUTTON_GPIO` / `CPE_RESET_BUTTON_ACTIVE_LEVEL` 配置，`-1` 表示不使用；
+- 双击判定：第二次按下的起点距第一次按下起点 ≤ `CPE_DOUBLE_CLICK_MS`（默认 800ms），
+  且整体落在启动后窗口内；
+- 长按触发恢复出厂后，固件会**等待按键松开**再重启：GPIO0 在复位期间被拉低会让 ROM 进入
+  UART 下载模式，所以不能"按着 10 秒直接重启"；
+- AP 口令总是可打印（明文存于 NVS）；管理员口令只在仍等于 AP 口令时可打印，修改后只剩
+  PBKDF2 哈希，因此打印行会明确标注"已修改"，避免误导；
+- **GPIO0 是 ESP32-S3 的启动 strapping 引脚**：在芯片复位期间按住会进入 UART 下载模式，
+  应用不会启动。这也是打印凭据改用"启动后双击"而不是"启动时按住"的原因；
+  板子方便改线时建议换到其它空闲 GPIO。
+
+## 9. 相关文档
 
 - 阶段计划与审计条目映射：[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
 - 上板验收清单：[PHASE1_TEST_PLAN.md](PHASE1_TEST_PLAN.md)

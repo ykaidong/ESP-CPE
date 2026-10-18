@@ -400,7 +400,7 @@ esp_err_t cpe_config_init(void)
     ESP_LOGI(TAG, "Configuration loaded: AP SSID \"%s\", channel %u, '%uMHz', admin \"%s\"",
              s_cfg.cfg.ap_ssid, s_cfg.cfg.ap_channel, s_cfg.cfg.ap_bandwidth, s_cfg.cfg.admin_user);
     if (generated) {
-        cpe_config_print_credentials();
+        cpe_config_print_credentials("first boot");
     }
     return ESP_OK;
 }
@@ -421,23 +421,33 @@ bool cpe_config_first_boot(void)
     return s_cfg.first_boot;
 }
 
-void cpe_config_print_credentials(void)
+void cpe_config_print_credentials(const char *reason)
 {
     if (!s_cfg.inited) {
         return;
     }
     cpe_config_t cfg;
     cpe_config_get(&cfg);
+
+    /* The AP password is always printable (it is stored in NVS). The admin
+     * password is only known while it still equals the AP password; after a
+     * change only its PBKDF2 hash exists, so say so instead of printing a
+     * misleading value. */
+    bool admin_is_ap = cpe_config_admin_password_is_ap_password();
+
     ESP_LOGW(TAG, "==================================================");
-    ESP_LOGW(TAG, "  Device initial credentials (printed once)");
+    ESP_LOGW(TAG, "  Credentials (%s)", reason != NULL ? reason : "requested");
     ESP_LOGW(TAG, "  SoftAP SSID     : %s", cfg.ap_ssid);
     ESP_LOGW(TAG, "  SoftAP password : %s", cfg.ap_password);
     ESP_LOGW(TAG, "  Admin user      : %s", cfg.admin_user);
-    ESP_LOGW(TAG, "  Admin password  : %s (must be changed on first login)", cfg.ap_password);
+    if (admin_is_ap) {
+        ESP_LOGW(TAG, "  Admin password  : %s", cfg.ap_password);
+    } else {
+        ESP_LOGW(TAG, "  Admin password  : (changed, plaintext not stored; "
+                 "hold the button 10 s to factory reset)");
+    }
     ESP_LOGW(TAG, "  Web console     : http://192.168.4.1");
     ESP_LOGW(TAG, "==================================================");
-    printf("\n[cpe] SoftAP: %s / %s   admin: %s / %s (change on first login)\n\n",
-           cfg.ap_ssid, cfg.ap_password, cfg.admin_user, cfg.ap_password);
 }
 
 esp_err_t cpe_config_set_ap(const char *ssid, const char *password,
@@ -601,6 +611,23 @@ bool cpe_config_admin_must_change(void)
     return mc;
 }
 
+bool cpe_config_admin_password_is_ap_password(void)
+{
+    if (!s_cfg.inited) {
+        return false;
+    }
+    xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
+    uint8_t hash[CPE_ADMIN_HASH_LEN];
+    bool match = false;
+    if (pbkdf2_sha256(s_cfg.cfg.ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
+                      hash) == ESP_OK) {
+        match = ct_equal(hash, s_cfg.adm_hash, sizeof(hash));
+    }
+    memset(hash, 0, sizeof(hash));
+    xSemaphoreGiveRecursive(s_cfg.lock);
+    return match;
+}
+
 esp_err_t cpe_config_factory_reset(void)
 {
     if (!s_cfg.inited) {
@@ -642,8 +669,12 @@ esp_err_t cpe_config_factory_reset(void)
         /* A factory reset also clears the persistent recovery budget, so the
          * device gets a fresh set of bounded recovery attempts. */
         (void)cpe_boot_count_clear();
-        ESP_LOGW(TAG, "Factory reset performed (AP credentials kept, admin password reset to the AP password)");
-        cpe_config_print_credentials();
+        /* The credentials are printed on the next boot when the reset button
+         * is held down while the application starts (only while the admin
+         * password has not been changed). */
+        ESP_LOGW(TAG, "Factory reset performed (AP credentials kept, admin password "
+                 "reset to the AP password); hold the reset button during the next boot "
+                 "to print the credentials");
     }
     return err;
 }

@@ -21,15 +21,16 @@ ESP32-S3 同时提供 SoftAP + NAPT + Web 管理面。本仓库是**重新开始
 
 ## 2. 首次启动与登录
 
-首次上电（或恢复出厂后）会自动生成每台设备唯一的随机凭据，并**仅通过串口打印一次**：
+首次上电会自动生成每台设备唯一的随机凭据，并**通过串口打印一次**（恢复出厂保留现有 AP 凭据，
+只重置管理员口令）：
 
 ```
 W (xxxx) cpe_config: ==================================================
-W (xxxx) cpe_config:   Device initial credentials (printed once)
+W (xxxx) cpe_config:   Credentials (first boot)
 W (xxxx) cpe_config:   SoftAP SSID     : ESP-CPE-XXXX
 W (xxxx) cpe_config:   SoftAP password : ************
 W (xxxx) cpe_config:   Admin user      : admin
-W (xxxx) cpe_config:   Admin password  : ************ (must be changed on first login)
+W (xxxx) cpe_config:   Admin password  : ************
 W (xxxx) cpe_config:   Web console     : http://192.168.4.1
 W (xxxx) cpe_config: ==================================================
 ```
@@ -43,6 +44,10 @@ W (xxxx) cpe_config: ==================================================
 
 > 恢复出厂会保留本机唯一的 SoftAP SSID/口令（避免复位后连不上 AP），其余配置回默认，
 > 管理员口令重置为 AP 口令并再次要求首次登录修改。
+>
+> 忘记管理员口令时：**设备启动后 10 秒内双击复位键（默认 GPIO0，低电平有效）**，串口会打印
+> 当前 AP 口令；管理员口令若从未修改过（仍等于 AP 口令）会一并打印，否则明确提示"已修改、
+> 明文不可恢复"。开机后**连续按住同一按键 10 秒**会恢复出厂设置并重启。
 
 > 安全说明：固定凭据已彻底移除；管理面默认仅 HTTP，但只开放给 SoftAP 网段并要求会话 + CSRF。
 > HTTPS/证书与 Secure Boot/Flash 加密属于阶段三内容。
@@ -118,6 +123,18 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 
 特定模组若 ECM 不在配置 1，可开启 `CPE Application Configuration → Enable USB host enumeration filter`
 并填写 VID/PID/配置号（默认关闭，避免官方示例"强制所有设备用配置 2"的缺陷）。
+
+**复位/恢复出厂按键**：按键一端接 `GPIO0`、另一端接 `GND`（默认低电平有效），可通过
+`CPE Application Configuration → Reset/factory-reset button GPIO` 修改，`-1` 表示不使用。
+
+- **启动后 10 秒内双击**（`CPE_CREDENTIAL_PRINT_WINDOW_MS`）：打印当前 AP 口令；管理员口令
+  未修改过时一并打印（用于忘记口令时取回），已修改则提示不可恢复；
+- **开机后连续按住 10 秒**（`CPE_FACTORY_RESET_HOLD_MS`）：恢复出厂设置；**松开按键后**
+  自动重启（GPIO0 在复位期间被拉低会进入下载模式）。
+
+> 注意：GPIO0 是 ESP32-S3 的启动 strapping 引脚，**在芯片复位期间**按住会被 ROM 当作
+> UART 下载模式，导致应用不启动。所以打印凭据改用"启动后双击"而不是"启动时按住"；
+> 如果板子方便改线，建议换到其它空闲 GPIO。
 
 ## 6. 阶段状态
 
