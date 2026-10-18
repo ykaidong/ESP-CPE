@@ -40,9 +40,16 @@ idf.py -p COM6 flash monitor
 ### 1.x 自动化执行记录（2026-10-18）
 
 - 设备地址：用户提供 192.168.1.4 不可达；实际设备 SoftAP 为 **192.168.4.1**（PC 在 192.168.4.2），测试按 192.168.4.1 执行。
-- 默认凭据 `admin` / `FooTdEh2F4jv` 登录成功（`must_change=true`，说明尚未完成首次改密）。
-- 结果：未登录 401 + `Connection: close`、超长 Content-Length 被快速断开且服务器仍存活、登录/会话/CSRF、无 CSRF 403、畸形 JSON 400、弱口令 400 —— **全部 PASS**。
-- 因 `must_change=true`，`/wlan_advance` 等状态变更接口被强制改密拦截（403 `password_change_required`），相应校验项（1.8）待改密后补测。
+- 默认凭据 `admin` / `FooTdEh2F4jv` 登录成功（首次为 `must_change=true`）。
+- 首轮结果：未登录 401 + `Connection: close`、超长 Content-Length 被快速断开且服务器仍存活、登录/会话/CSRF、无 CSRF 403、畸形 JSON 400、弱口令 400 —— **全部 PASS**。
+- 补测（测试代理把管理员口令临时改为 `CpeTest2026!` 完成首次改密后执行）：
+  - 状态变更接口无 CSRF → 403；
+  - 畸形 JSON → 400；`channel=999` → 400；
+  - 客户端名称 XSS 载荷被服务端白名单拒绝（400），合法特殊字符名称可正常 JSON round-trip；
+  - 连续错误登录触发 429，等待 60s 后正确口令恢复 200。
+  - **全部 PASS**。
+- 1.3（从 4G WAN 侧访问管理面）无法从 AP 侧验证，待有 4G 侧主机时补测。
+- ⚠️ 设备当前管理员口令为测试用的临时口令 `CpeTest2026!`，交付/继续使用前请通过 Web 改成正式口令。
 
 ## 2. 驱动与枚举（M2.2/M2.3）
 
