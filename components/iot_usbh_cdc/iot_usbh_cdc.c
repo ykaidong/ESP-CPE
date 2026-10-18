@@ -62,7 +62,6 @@ typedef struct dev_event_cb_s {
 typedef struct {
     TaskHandle_t install_task;
     bool (*enum_filter_cb)(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue);
-    bool fsls_only;
 } usb_lib_task_ctx_t;
 
 typedef struct {
@@ -209,7 +208,6 @@ static void usb_lib_task(void *arg)
     // the installer may free the driver object when the notification times out.
     TaskHandle_t install_task = ctx->install_task;
     bool (*enum_filter_cb)(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue) = ctx->enum_filter_cb;
-    const bool fsls_only = ctx->fsls_only;
     free(ctx);
 
     esp_err_t ret = ESP_OK;
@@ -223,7 +221,6 @@ static void usb_lib_task(void *arg)
             .skip_phy_setup = false,
             .intr_flags = ESP_INTR_FLAG_LEVEL1,
             .enum_filter_cb = enum_filter_cb,
-            .fsls_only = fsls_only,
         };
         ret = usb_host_install(&host_config);
         if (ret != ESP_OK) {
@@ -1538,7 +1535,6 @@ esp_err_t usbh_cdc_driver_install(const usbh_cdc_driver_config_t *config)
         }
         lib_ctx->install_task = xTaskGetCurrentTaskHandle();
         lib_ctx->enum_filter_cb = config->enum_filter_cb;
-        lib_ctx->fsls_only = config->fsls_only;
         BaseType_t core_id = (CONFIG_USBH_TASK_CORE_ID < 0) ? tskNO_AFFINITY : CONFIG_USBH_TASK_CORE_ID;
         BaseType_t task_created = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, lib_ctx,
                                                           CONFIG_USBH_TASK_BASE_PRIORITY, NULL, core_id);

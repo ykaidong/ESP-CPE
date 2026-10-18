@@ -105,9 +105,6 @@ static esp_err_t usb_cdc_install(void)
 #if CONFIG_CPE_ENUM_FILTER_ENABLE
         .enum_filter_cb = cpe_enum_filter_cb,
 #endif
-#if CONFIG_CPE_USB_FSLS_ONLY
-        .fsls_only = true,
-#endif
     };
 
     esp_err_t err = usbh_cdc_driver_install(&config);
@@ -116,11 +113,7 @@ static esp_err_t usb_cdc_install(void)
         return err;
     }
     s_cdc_installed = true;
-#if CONFIG_CPE_USB_FSLS_ONLY
-    ESP_LOGI(TAG, "USB CDC driver installed (host mode: full-speed only)");
-#else
-    ESP_LOGI(TAG, "USB CDC driver installed (host mode: high-speed capable)");
-#endif
+    ESP_LOGI(TAG, "USB CDC driver installed");
     return ESP_OK;
 }
 

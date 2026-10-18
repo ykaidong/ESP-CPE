@@ -74,16 +74,6 @@ typedef struct {
      * CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK to be enabled in sdkconfig.
      */
     bool (*enum_filter_cb)(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue);
-    /**
-     * @brief Install the USB Host Library in full-speed-only mode
-     *        (`usb_host_config_t::fsls_only`).
-     *
-     * When true, the host does not respond to a high-speed chirp, so high-speed capable devices
-     * negotiate full speed (12 Mbit/s). This avoids the high-speed chirp handshake, which some
-     * devices mishandle after an abrupt host reset. Only used when `skip_init_usb_host_driver`
-     * is false (i.e. when this driver installs the USB Host Library itself).
-     */
-    bool fsls_only;
 } usbh_cdc_driver_config_t;
 
 /**

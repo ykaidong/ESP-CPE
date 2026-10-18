@@ -215,7 +215,7 @@ for (;;) {
 
 | 日志 | 含义 |
 | --- | --- |
-| `USB CDC driver installed (host mode: high-speed capable / full-speed only)` | USB Host + CDC 驱动安装成功（每次启动只装一次）；同时给出主机模式 |
+| `USB CDC driver installed` | USB Host + CDC 驱动安装成功（每次启动只装一次） |
 | `New device connected, address: N, speed: high/full/low` | 设备枚举完成，并打印协商出的 USB 速度（用于确认 HS/FS） |
 | `Replaying the CONNECTED event for 1 existing device(s)` | 驱动重建/重装后，把已枚举设备的连接事件补发给上层 |
 | `ECM interface found: VID: ..., PID: ..., IFNUM: 4` | ECM 描述符解析成功（VID/PID/控制接口号） |

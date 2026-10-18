@@ -4,15 +4,16 @@
 
 Local ESP-CPE fork (not an upstream release). Changes:
 
-* Add `usbh_cdc_driver_config_t::fsls_only`: install the USB Host Library in
-  full-speed-only mode (`usb_host_config_t::fsls_only`). High-speed capable
-  devices then negotiate full speed, bypassing the high-speed chirp handshake
-  that some devices mishandle after an abrupt host reset (4G module lockup
-  investigation, CPE_USB_FSLS_ONLY experiment).
 * Log the negotiated speed of every newly connected device
   (`New device connected, address: N, speed: high/full/low`). Helps tell
   whether a device enumerated as HS or FS, which is otherwise not visible in
   the log.
+* Note: a `fsls_only` pass-through (full-speed-only host) was tried and then
+  removed: with ESP-IDF v6.1 + `espressif/usb` 1.6.0 the HAL is built without
+  `USB_DWC_HAL_INIT_HAS_CONFIG`, so `usb_host_config_t::fsls_only` makes
+  `hcd_port_init()` fail with `ESP_ERR_NOT_SUPPORTED`
+  ("FS/LS-only host requires ESP-IDF with USB DWC HAL configuration support")
+  and the USB Host library cannot be installed at all.
 
 ## v3.1.2 - 2026-10-18
 

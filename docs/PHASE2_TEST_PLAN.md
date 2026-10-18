@@ -187,16 +187,18 @@ I (31301) cpe: USB root port powered off for 1000 ms
 结论：**纯软件无法复位挂死的模组 USB 控制器**。固件只能保证不 panic、AP/Web 可用、周期性重试；
 根治需要模组固件/换模组，或下一版硬件增加模组 `RESET_N` 或受控供电。
 
-尝试中的实验（均为降低挂死概率，不保证解决）：
+尝试过的实验（均未能解决）：
 
-| 实验 | 改动 | 判读 |
+| 实验 | 改动 | 结果 |
 | --- | --- | --- |
 | A 加长主机复位 | `CONFIG_USB_HOST_RESET_HOLD_MS=100`、`CONFIG_USB_HOST_RESET_RECOVERY_MS=100`（仅本地 sdkconfig） | ❌ **无效**（2026-10-18，固件 `1c22d2f`）：复位后仍是 `CHECK_SHORT_DEV_DESC FAILED`，且未枚举所以也没有 `speed` 行 |
-| B 强制全速 | `CPE_USB_FSLS_ONLY=y`（安装 Host 时 `fsls_only=1`，跳过 HS chirp） | 待测：能恢复 → 模组挂在 HS chirp；用 `New device connected ... speed: full` 确认 |
-| 观察 | 新版会打印枚举速度（`speed: high/full/low`） | 由于复位后枚举失败，需要**物理插拔模组**一次才能看到速度行，确认模组 HS/FS |
+| B 强制全速（FS-only） | 安装 Host 时 `usb_host_config_t::fsls_only=1`，跳过 HS chirp | ❌ **不可用**（2026-10-18，固件 `e40f0ee`）：ESP-IDF v6.1 + `usb` 1.6.0 的 HAL 未定义 `USB_DWC_HAL_INIT_HAS_CONFIG`，`hcd_port_init()` 直接返回 `ESP_ERR_NOT_SUPPORTED`：`HCD DWC: FS/LS-only host requires ESP-IDF with USB DWC HAL configuration support`，USB Host 装不上。该实验的固件/配置已回撤 |
+| 观察（保留） | 设备连接日志打印枚举速度 `speed: high/full/low` | 由于复位后枚举失败，需要**物理拔插模组**一次才能看到速度行，可用于日后确认模组 HS/FS |
 
-下一步若 B 也无效：确认纯软件无解，只能换模组（USB 设备控制器能正确处理总线复位）或
-下一版硬件增加 `RESET_N`/受控供电；同时可让模组厂确认是否为已知 USB 固件缺陷。
+结论：**纯软件无法复位挂死的模组 USB 控制器**。下一步只能：
+1. 换模组（USB 设备控制器能正确处理主机总线复位），或下一版硬件给模组加 `RESET_N` 或受控供电；
+2. 让模组厂确认"主机复位后 USB 设备控制器不响应"是否为已知固件缺陷、有无新固件；
+3. 当前固件行为保持不变：不 panic、AP/Web 始终可用、每 ~90s 重试一次；现场遇到时插拔模组即可恢复。
 
 ### 2.x 串口日志首轮记录（2026-10-18，固件 `8a3a140` / `iot_usbh_cdc 3.1.2`）
 
