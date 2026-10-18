@@ -140,11 +140,14 @@ for (;;) {
 
 等待 `CPE_LINK_TIMEOUT_MS`（默认 **30s**）后判定失败。若此时**没有任何已枚举设备**：
 
+> 判定"没有设备"使用 `usb_host_device_addr_list_fill()`（只包含完成枚举、已分配地址的设备），
+> 不用 `usb_host_lib_info().num_devices`：失败枚举（如 `CHECK_SHORT_DEV_DESC FAILED`）后
+> 设备对象仍可能被计数，会误判为"设备在总线上"而跳过根端口掉电恢复。
+
 | 顺序 | 动作 | 条件 |
 | --- | --- | --- |
 | ① | 脉冲模组 `RESET_N`（`CPE_MODULE_RESET_GPIO`） | 硬件已接线（推荐） |
-| ② | USB 根端口 VBUS 掉电再上电（`CPE_USB_PORT_POWER_CYCLE`） | 仅对总线供电、能感知 VBUS 的模组有效 |
-| ③ | 重启 USB Host 栈：卸载 host/CDC → 500ms → 重新安装，强制一次全新枚举 | 纯软件兜底 |
+| ② | USB 根端口掉电再上电（`CPE_USB_PORT_POWER_OFF_MS`，默认 1000ms） | 未接 `RESET_N` 时的默认兜底 |
 
 最多尝试 `CPE_USB_ENUM_RESET_ATTEMPTS`（默认 **3**）次；仍失败则：
 
@@ -152,9 +155,18 @@ for (;;) {
 - 退避 `CPE_RECOVERY_RETRY_MS`（默认 **60s**）后重置尝试次数、重新开始；
 - **绝不重启整机**（可能是用户根本没插模组）。
 
+> **不再重启 USB Host 栈**。原"卸载 host/CDC → 500ms → 重新安装"的兜底在
+> `espressif/usb` 1.6.0 上有竞态：`usb_host_uninstall()` 先把 `p_host_lib_obj` 置 NULL，
+> 之后才卸载 hub/HCD；若在这段窗口内有根端口中断进来，`proc_req_callback()` 会解引用
+> NULL，panic（`LoadProhibited`，`EXCVADDR 0x0`）。实测：复位后 1.08s 出现
+> `CHECK_SHORT_DEV_DESC FAILED`，30s 后进入该兜底并在 `usb_host_uninstall()` 处 panic。
+> 现在改用根端口掉电/上电：HCD 端口被 deinit、VBUS 掉电，模组看到的总线断开，
+> 通常会自动复位其 USB 控制器；Host 库、CDC 驱动与 client 全程保持安装，
+> 从根本上绕开该竞态。
+
 > 已知硬件限制：外部独立供电的模组在 ESP32 复位后可能保留旧 USB 状态，导致
-> `CHECK_SHORT_DEV_DESC FAILED`。软件最后兜底是 USB Host 栈重启；产品硬件应提供
-> `RESET_N`→GPIO 或受控 5V 供电。
+> `CHECK_SHORT_DEV_DESC FAILED`。纯软件兜底是根端口掉电（是否能让模组复位取决于
+> 模组是否监听 VBUS）；产品硬件应提供 `RESET_N`→GPIO 或受控 5V 供电。
 
 ### 5.2 link up 但没有 IP
 
@@ -190,7 +202,7 @@ for (;;) {
 | 等 IP（DHCP） | `CPE_IP_TIMEOUT_MS` | 90s | 模组 USB 复位后重新附着网络、重建 PDP、启动 DHCP 需要时间 |
 | 无 IP 时重启 DHCP 客户端 | `CPE_IP_DHCP_RESTARTS` | 2 次 | 只重启 DHCP，不破坏 USB/ECM 会话 |
 | 恢复退避（ECM 重建/无设备） | `CPE_RECOVERY_RETRY_MS` | 60s | 避免高频拆装 USB 驱动，给模组重新初始化时间 |
-| 无设备时的恢复次数 | `CPE_USB_ENUM_RESET_ATTEMPTS` | 3 | 覆盖模组 RESET、VBUS、USB 栈重启三种手段 |
+| 无设备时的恢复次数 | `CPE_USB_ENUM_RESET_ATTEMPTS` | 3 | 覆盖模组 `RESET_N` 脉冲与根端口掉电两种手段 |
 | ECM 卡死判定轮数 | `CPE_MAX_RECOVERY_ATTEMPTS` | 3 | 多次 ECM 重建无效后才考虑重启整机 |
 | 受控重启上限 | `CPE_MAX_REBOOTS` | 3 | 用 NVS 启动计数防止无限重启 |
 | 健康清零时间 | `CPE_HEALTHY_CLEAR_SECONDS` | 120s | 排除"刚拿到 IP 就掉线"，并重置重启额度 |
@@ -214,7 +226,8 @@ for (;;) {
 | `Restarting the DHCP client (status N, ...)` | 只重启 DHCP；`status 2` = DHCP 客户端正在运行 |
 | `DHCP client retries exhausted, rebuilding the ECM driver` | DHCP 重试耗尽，开始拆 ECM 重建 |
 | `No USB link after 30000 ms (attempt N)` | 30s 内没有 USB link |
-| `Restarting the USB host stack to force a clean re-enumeration` | 无设备时触发软件兜底：重启 USB Host 栈 |
+| `Power-cycling the USB root port to force re-enumeration` | 无设备时触发软件兜底：根端口掉电/上电（不再卸载 USB 栈） |
+| `USB root port powered off for 1000 ms` | 根端口已掉电并等待模组感知总线断开 |
 | `Healthy for 120 s, boot counter cleared` | 已连续在线 120s，启动计数清零（正常健康标志） |
 | `ECM link stuck, controlled reboot N/3` | 已枚举但 ECM 卡死，触发有界受控重启 |
 | `no USB modem, AP/Web still available` | 无设备，进入 FAULT，AP/Web 保持可用 |

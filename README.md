@@ -128,10 +128,10 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 `RESET_N` 接到一个空闲 GPIO（例如 GPIO5，按你的板子实际接线），并在
 `CPE Application Configuration → 4G module RESET GPIO number` 中填写该 GPIO（默认 `-1` 未接）。
 配置后固件会在启动时以及 USB 枚举恢复时自动脉冲模组复位，使枚举从干净状态开始。
-若无法改硬件，可尝试开启 `CPE_USB_PORT_POWER_CYCLE`（根端口 VBUS 掉电，仅对能感知 VBUS 的模组有效），
-或让模组供电由 ESP32 控制。两者都不可用时，固件仍会在"总线上没有已枚举设备"时自动**重启 USB Host 栈**
-（卸载 host 撤掉总线端接，让模组感知断开，再重新安装触发一次全新枚举，次数由
-`CPE_USB_ENUM_RESET_ATTEMPTS` 限制），这是纯软件的最后兜底。
+若无法改硬件，固件会用根端口掉电/上电兜底：未接 `RESET_N` 时，在没有"已枚举设备"的情况下，
+固件把 USB 根端口掉电 `CPE_USB_PORT_POWER_OFF_MS`（默认 1000ms）再上电，撤除总线端接让模组
+感知断开，从而触发一次全新枚举；次数由 `CPE_USB_ENUM_RESET_ATTEMPTS`（默认 3）限制。
+注意：该兜底是否有效取决于模组是否监听 VBUS/总线断开，最可靠的仍是 `RESET_N` 或受控 5V 供电。
 
 特定模组若 ECM 不在配置 1，可开启 `CPE Application Configuration → Enable USB host enumeration filter`
 并填写 VID/PID/配置号（默认关闭，避免官方示例"强制所有设备用配置 2"的缺陷）。

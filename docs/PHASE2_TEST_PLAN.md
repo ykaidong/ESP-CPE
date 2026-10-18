@@ -57,7 +57,7 @@ idf.py -p COM6 flash monitor
 | --- | --- | --- | --- |
 | 2.1 | 正常启动接模组 | 枚举成功、`ECM driver ready`、`4G WAN IP`、`CPE online` | ✅ 通过 |
 | 2.2 | 反复热插拔模组 20 次 | 每次恢复 link/IP；无 panic；无重复端口打开错误 | ✅ 初步通过（7 次，恢复 18~20s；建议补到 20 次） |
-| 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机** | ☐ 待补 |
+| 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机、不 panic** | ☐ 待上板（已修复：①"幽灵设备"跳过恢复；②卸载 USB 栈时 panic，改为根端口掉电） |
 | 2.4 | 无 SIM 持续 10 分钟 | `link up but no IP` → FAULT，AP/Web 可用，无重启 | ☐ 待补 |
 | 2.5 | 不接模组上电 10 分钟 | no-device FAULT，AP/Web 可用，无重启 | ☐ 待补 |
 | 2.6 | 正常运行时观察 10 分钟日志 | **不出现** `Replaying the CONNECTED event for N existing device(s)` 周期刷屏；无 `CHECK_SHORT_DEV_DESC` 后卡死 | ✅ 通过（0 次刷屏） |
@@ -106,6 +106,57 @@ idf.py -p COM6 flash monitor
   - 拔模组时 `USB HOST: EP command error: ESP_ERR_INVALID_STATE`（清理在途 URB，预期）。
 - 仍待补：2.3（ESP32 复位、模组不断电 10 次）、2.4（无 SIM 10 分钟）、2.5（不接模组 10 分钟）、2.2 达到 20 次循环。
 
+### 2.z 多次复位日志：CHECK_SHORT_DEV_DESC、幽灵设备、USB 栈卸载 panic（已修复，构建通过，待上板验证）
+
+现象（`C:\Users\fytech\Desktop\log.txt`，模组外供电、无 RESET 线、复位 ESP32）：
+
+```
+E (1088) USBH: Dev 0 EP 0 Error
+E (1088) ENUM: Bad transfer status 1: CHECK_SHORT_DEV_DESC
+E (1088) ENUM: CHECK_SHORT_DEV_DESC FAILED
+W (31293) cpe: No USB link after 30000 ms (attempt 1)
+W (31313) cpe: Restarting the USB host stack to force a clean re-enumeration
+I (31333) USBH_CDC: No more clients and devices, uninstall USB Host library
+Guru Meditation Error: Core 1 panic'ed (LoadProhibited).
+--- 0x42022ea9: proc_req_callback at .../espressif__usb/src/usb_host.c:347
+--- 0x42029bb1: root_port_callback at .../espressif__usb/src/hub.c:371
+--- 0x42027c5a: intr_hdlr_main at .../espressif__usb/src/hcd_dwc.c:1087
+```
+
+三个层次的问题：
+
+1. **枚举失败（硬件/板级）**：`CHECK_SHORT_DEV_DESC FAILED` = 主机读不到设备描述符前 8 字节，
+   `Bad transfer status 1` 即 `USB_TRANSFER_STATUS_ERROR`（无响应/CRC 错误）。
+   模组外供电、ESP32 复位时它不断电，USB 设备控制器保留旧状态，不响应枚举；
+   ESP-IDF 枚举 FSM 不会自行重试。
+2. **幽灵设备（固件逻辑，已修）**：失败枚举后 `usb_host_lib_info().num_devices` 仍计入设备对象，
+   `usb_device_present()` 误判"模组已在总线上"，于是跳过恢复动作，最后停在 FAULT。
+   修复：改用 `usb_host_device_addr_list_fill()`（只含完成枚举、已分配地址的设备）。
+3. **卸载 USB Host 栈 panic（上游竞态，已绕过）**：`usb_host_uninstall()` 先 `p_host_lib_obj = NULL`
+   （`usb_host.c:868`），之后才 `hub_uninstall()` → `hcd_port_deinit()`（`usb_host.c:879`）。
+   这之间根端口中断仍使能，一旦有端口事件进来，`root_port_callback()` →
+   `proc_req_callback()` 在 `usb_host.c:347` 解引用 NULL（`EXCVADDR 0x0`）→ `LoadProhibited`。
+   `espressif/usb` 最新版即 1.6.0，暂无修复版本。
+
+修复（本轮）：**运行期不再卸载/重装 USB Host 栈**。没有 `RESET_N` 时改为根端口掉电/上电
+（`usb_host_lib_set_root_port_power(false/true)`，掉电时长 `CPE_USB_PORT_POWER_OFF_MS`，默认 1000ms）：
+掉电时 HCD 端口 deinit、VBUS 撤除，模组看到总线断开后通常复位其 USB 控制器；再上电触发全新枚举。
+Host 库、CDC 驱动与 client 全程保持安装，既不丢事件也彻底避开上面的竞态。
+
+修复后复位场景预期日志：
+
+```
+E (...) ENUM: CHECK_SHORT_DEV_DESC FAILED            ← 复位瞬间仍可能出现，允许
+W (31xxx) cpe: No USB link after 30000 ms (attempt 1)
+W (31xxx) cpe: Power-cycling the USB root port to force re-enumeration
+I (31xxx) cpe: USB root port powered off for 1000 ms
+I (...) USBH_CDC: New device connected, address: 1
+I (...) cpe: 4G link up / 4G WAN IP: ...
+```
+
+判定：只要掉电/上电后能重新枚举并恢复 link/IP，且**不再出现 panic**，该兜底即有效；
+若 3 次尝试后仍枚举失败，则确认该模组不响应主机侧断开，只能加 `RESET_N` 或控制供电。
+
 ### 2.x 串口日志首轮记录（2026-10-18，固件 `8a3a140` / `iot_usbh_cdc 3.1.2`）
 
 `serial_log_check.ps1` 结果：**PASS**
@@ -116,7 +167,7 @@ idf.py -p COM6 flash monitor
 | 4G WAN IP / CPE online | 1 / 1 |
 | Boot counter cleared | 1 |
 | Link up but no IP / No USB link | 0 / 0 |
-| USB host stack restarts / ECM link stuck | 0 / 0 |
+| USB root port power cycles / ECM link stuck | 0 / 0 |
 | CHECK_SHORT_DEV_DESC | 0 |
 | `Replaying ... existing device(s)` 刷屏 | 0 |
 

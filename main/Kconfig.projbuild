@@ -119,13 +119,16 @@ menu "CPE Application Configuration"
             fragmentation tests. Link up/down and got/lost-IP transitions are
             always logged regardless of this option.
 
-    config CPE_USB_PORT_POWER_CYCLE
-        bool "Power-cycle the USB root port during recovery"
-        default n
+    config CPE_USB_PORT_POWER_OFF_MS
+        int "USB root port power-off time during recovery (ms)"
+        default 1000
+        range 100 5000
         help
-            Toggles VBUS of the USB host root port to force re-enumeration.
-            Only useful when the module is bus powered; with an externally
-            powered module VBUS toggle may not produce a disconnect.
+            When no module RESET GPIO is wired, the USB host root port is
+            powered down for this long to detach the modem from the bus (which
+            usually makes it reset its USB device controller), then powered back
+            up to force a clean enumeration. Longer values are safer for
+            externally powered modems; shorter values recover faster.
 
     config CPE_MODULE_RESET_GPIO
         int "4G module RESET GPIO number (-1 = not connected)"
@@ -167,10 +170,11 @@ menu "CPE Application Configuration"
         range 0 10
         help
             How many recovery attempts are made when no USB device is
-            enumerated. Each attempt uses the module reset GPIO when configured,
-            otherwise a root-port VBUS cycle when CPE_USB_PORT_POWER_CYCLE is
-            enabled, and finally a full USB host stack restart (bus release +
-            fresh enumeration). Set to 0 to disable this recovery entirely.
+            enumerated. Each attempt pulses the module reset GPIO when
+            configured, otherwise it power-cycles the USB host root port to
+            detach the modem from the bus and force a fresh enumeration. The USB
+            Host stack is never uninstalled at runtime. Set to 0 to disable this
+            recovery entirely.
 
     config CPE_RESET_BUTTON_GPIO
         int "Reset/factory-reset button GPIO (-1 = disabled)"

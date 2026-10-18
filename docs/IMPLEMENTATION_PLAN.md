@@ -80,7 +80,7 @@ app_main
       ├─ usbh_cdc_driver_install / iot_eth_new_usb_ecm / iot_eth_install
       ├─ 事件：IOT_ETH CONNECTED/DISCONNECTED、IP_EVENT_ETH_GOT_IP
       ├─ ONLINE：set_default_netif + ip_napt_enable + 上游 DNS 下发给 AP
-      └─ 失败：无设备 → 模组复位/VBUS/USB 栈重启；无 IP → 只重启 DHCP；ECM 卡死 → 有界重启；FAULT 保底（AP/Web 保持）
+      └─ 失败：无设备 → 模组复位/根端口掉电；无 IP → 只重启 DHCP；ECM 卡死 → 有界重启；FAULT 保底（AP/Web 保持）
 ```
 
 > 启动各阶段的日志、状态机迁移、每个等待点的超时与原因，见 **[RUNTIME_FLOW.md](RUNTIME_FLOW.md)**。

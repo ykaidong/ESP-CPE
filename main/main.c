@@ -62,12 +62,6 @@ static void log_heap(const char *reason)
 #define ECM_NETIF_KEY       "ECM0"
 #define ECM_NETIF_DESC      "usb-ecm"
 
-/* Disabled bool Kconfig options have no macro in sdkconfig.h; provide a
- * fallback so the option can be used in normal C expressions. */
-#ifndef CONFIG_CPE_USB_PORT_POWER_CYCLE
-#define CONFIG_CPE_USB_PORT_POWER_CYCLE 0
-#endif
-
 typedef struct {
     iot_eth_driver_t *driver;
     iot_eth_handle_t eth;
@@ -123,47 +117,50 @@ static esp_err_t usb_cdc_install(void)
     return ESP_OK;
 }
 
-/* ------------------------------------------------------------------------- */
-/* ECM network interface                                                     */
-/* ------------------------------------------------------------------------- */
-
-static bool usb_device_present(void);
-
-/* Full USB host stack restart, used only when no USB device is enumerated.
+/* Release the USB bus by power-cycling the host root port.
  *
- * With an externally powered modem and no module reset line, the modem can
- * keep a stale USB device state after the ESP32 resets: the first enumeration
- * after boot fails with CHECK_SHORT_DEV_DESC and the ESP-IDF enumeration FSM
- * never retries. Uninstalling the host removes the host-side bus terminations
- * (the modem usually sees a disconnect and resets its USB controller), then a
- * fresh install triggers a clean enumeration. This is not the old "tear down
- * and reinstall on every failure" chain: it only runs when there is no device
- * and no ECM port, and the result is checked at every step.
+ * With an externally powered modem and no module reset line, the modem can keep
+ * a stale USB device state after the ESP32 resets: the first enumeration after
+ * boot fails with CHECK_SHORT_DEV_DESC and the ESP-IDF enumeration FSM never
+ * retries. Powering the root port down deinitializes the HCD port and drops
+ * VBUS, which the modem sees as a bus detach and usually answers by resetting
+ * its USB device controller; powering the port back up then triggers a clean
+ * enumeration.
+ *
+ * The USB Host library, the CDC driver and its client are deliberately kept
+ * installed. Uninstalling/reinstalling them is not needed for a bus detach, and
+ * in espressif/usb 1.6.0 usb_host_uninstall() publishes p_host_lib_obj = NULL
+ * before the hub/HCD layers are removed, so a root-port interrupt landing in
+ * that window calls proc_req_callback() with a NULL library object and panics
+ * (LoadProhibited in proc_req_callback, observed 31 s after boot with a stale
+ * modem). A power cycle keeps every object alive and avoids that race.
  */
-static esp_err_t usb_stack_restart(void)
+static esp_err_t usb_root_port_power_cycle(uint32_t off_ms)
 {
     if (!s_cdc_installed) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (usb_device_present()) {
-        /* A device is enumerated; restarting the stack would be disruptive and
-         * is not the recovery path for that situation. */
-        return ESP_ERR_INVALID_STATE;
-    }
 
-    ESP_LOGW(TAG, "Restarting the USB host stack to force a clean re-enumeration");
-    (void)usbh_cdc_port_close_all();
-    esp_err_t err = usbh_cdc_driver_uninstall();
+    esp_err_t err = usb_host_lib_set_root_port_power(false);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "usbh_cdc_driver_uninstall failed (%s), not reinstalling", esp_err_to_name(err));
+        ESP_LOGE(TAG, "USB root port power off failed (%s)", esp_err_to_name(err));
         return err;
     }
-    s_cdc_installed = false;
+    ESP_LOGI(TAG, "USB root port powered off for %" PRIu32 " ms", off_ms);
+    vTaskDelay(pdMS_TO_TICKS(off_ms));
 
-    /* Give the modem time to notice that the host disappeared. */
-    vTaskDelay(pdMS_TO_TICKS(500));
-    return usb_cdc_install();
+    /* ESP_ERR_INVALID_STATE only means the port is already powered on. */
+    err = usb_host_lib_set_root_port_power(true);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "USB root port power on failed (%s)", esp_err_to_name(err));
+        return err;
+    }
+    return ESP_OK;
 }
+
+/* ------------------------------------------------------------------------- */
+/* ECM network interface                                                     */
+/* ------------------------------------------------------------------------- */
 
 static void ecm_teardown(void)
 {
@@ -478,24 +475,17 @@ static void module_reset_pulse(void)
 #endif
 
 /* Bring the module USB stack back to a clean state. Prefers the module reset
- * GPIO (works for externally powered modules); falls back to a root-port VBUS
- * toggle when enabled. Returns true when a reset was actually performed. */
+ * GPIO (definitive for an externally powered module); without it the host root
+ * port is power-cycled, which detaches the modem from the bus. Returns true when
+ * a reset was actually performed. */
 static bool usb_modem_reset(void)
 {
 #if CONFIG_CPE_MODULE_RESET_GPIO >= 0
     module_reset_pulse();
     return true;
-#elif CONFIG_CPE_USB_PORT_POWER_CYCLE
-    ESP_LOGW(TAG, "Power-cycling the USB root port to force re-enumeration");
-    if (usb_host_lib_set_root_port_power(false) != ESP_OK) {
-        return false;
-    }
-    vTaskDelay(pdMS_TO_TICKS(500));
-    usb_host_lib_set_root_port_power(true);
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    return true;
 #else
-    return false;
+    ESP_LOGW(TAG, "Power-cycling the USB root port to force re-enumeration");
+    return usb_root_port_power_cycle(CONFIG_CPE_USB_PORT_POWER_OFF_MS) == ESP_OK;
 #endif
 }
 
@@ -503,17 +493,22 @@ static bool usb_modem_reset(void)
 /* Link manager                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* True when the USB Host Library sees at least one enumerated device. Used to
- * distinguish "no modem attached / enumeration failed before NEW_DEV" (a full
- * CPE reboot cannot help) from "modem enumerated but the ECM interface never
- * came up" (a controlled reboot is the last resort). */
+/* True when the USB Host Library has at least one *enumerated* device.
+ *
+ * Do not use usb_host_lib_info().num_devices here: after a failed enumeration
+ * (e.g. CHECK_SHORT_DEV_DESC FAILED when the ESP32 resets while an externally
+ * powered modem keeps its USB state) the device object can still be counted,
+ * which made the recovery logic believe "the modem is on the bus" and skip the
+ * root-port power cycle. The address list only contains devices that finished
+ * enumeration. */
 static bool usb_device_present(void)
 {
-    usb_host_lib_info_t info = { 0 };
-    if (usb_host_lib_info(&info) != ESP_OK) {
+    uint8_t dev_addr_list[8];
+    int num_dev = 0;
+    if (usb_host_device_addr_list_fill(sizeof(dev_addr_list), dev_addr_list, &num_dev) != ESP_OK) {
         return false;
     }
-    return info.num_devices > 0;
+    return num_dev > 0;
 }
 
 /* Sleep in 500 ms slices, returning early if the 4G link comes up (e.g. the
@@ -688,13 +683,7 @@ static void link_manager_task(void *arg)
                          * attempt happens after LINK_TIMEOUT_MS, not after
                          * several pointless ECM retries). */
                         if (enum_reset_attempts < CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS) {
-                            bool retried = false;
                             if (usb_modem_reset()) {
-                                retried = true;
-                            } else if (usb_stack_restart() == ESP_OK) {
-                                retried = true;
-                            }
-                            if (retried) {
                                 enum_reset_attempts++;
                                 cpe_status_set_state(CPE_STATE_BOOT, "re-enumerating the USB modem");
                                 wait_start_us = 0;
