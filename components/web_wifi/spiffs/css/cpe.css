@@ -464,3 +464,67 @@
         min-width: 0;
     }
 }
+
+/* ---- Firmware upgrade page (Phase 3 P3-1) ------------------------------ */
+.upgrade-note {
+    margin: 0 0 14px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #f5f7fa;
+    color: #4a5568;
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.upgrade-note code {
+    font-family: Consolas, Menlo, monospace;
+    background: #eef1f5;
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.progress-wrap {
+    margin: 14px 0;
+}
+
+.progress-track {
+    height: 10px;
+    border-radius: 6px;
+    background: #e6eaf0;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0;
+    background: #2f6fed;
+    transition: width 0.2s linear;
+}
+
+.progress-text {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #4a5568;
+}
+
+.upgrade-status {
+    min-height: 22px;
+    font-size: 14px;
+    color: #2f855a;
+    word-break: break-all;
+}
+
+.upgrade-status.error {
+    color: #c53030;
+}
+
+#ota-file {
+    max-width: 100%;
+    margin-right: 12px;
+}
+
+.save-btn:disabled,
+#ota-file:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

@@ -237,6 +237,14 @@ var CPE = (function () {
         body_too_large: '请求内容过大',
         invalid_json: '请求格式不正确',
         invalid_request: '请求参数不正确',
+        invalid_firmware_image: '所选文件不是有效的 ESP32 固件',
+        image_too_large: '固件大小超过 OTA 分区容量',
+        upload_interrupted: '上传中断，请重试',
+        upload_timeout: '上传超时，请重试',
+        ota_busy: '已有升级任务正在进行，请稍后再试',
+        pending_verify: '当前固件尚未完成启动验证，请等待约 1 分钟后再试',
+        ota_begin_failed: '无法开始升级，请重试',
+        ota_info_failed: '读取固件信息失败',
         network_error: '网络连接失败，设备可能正在重启',
         bad_response: '设备响应异常'
     };

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0">
+  <title>ESP-CPE 管理后台 - 系统升级</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/cpe.css">
+  <link rel="icon" href="./img/favicon.ico">
+</head>
+
+<body>
+  <div class="home-base">
+    <div class="header-base flex flex-jcb">
+      <img class="header-logo" src="./img/logoBlack.png" alt="logo">
+      <div class="header-menu" id="menuBtn"></div>
+    </div>
+    <div class="content-base flex">
+      <div class="left-base" id="leftMenu">
+        <ul>
+          <li>
+            <a href="index.html">系统状态</a>
+          </li>
+          <li>
+            <a href="wlan.html">WLAN设置</a>
+          </li>
+          <li>
+            <a href="upgrade.html" class="content">系统升级</a>
+          </li>
+        </ul>
+      </div>
+      <div class="right-base">
+        <div class="page-header">
+          <span class="header-title-one active-title">系统升级</span>
+        </div>
+        <div class="status-banner" id="status-banner"></div>
+        <div class="page-content">
+          <div class="page-title">当前固件</div>
+          <div class="detail-grid">
+            <div class="detail-item">
+              <span class="detail-label">版本</span>
+              <span class="detail-value" id="ota-version">--</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">运行分区</span>
+              <span class="detail-value" id="ota-partition">--</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">下次启动分区</span>
+              <span class="detail-value" id="ota-next">--</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">启动验证</span>
+              <span class="detail-value" id="ota-pending">--</span>
+            </div>
+            <div class="detail-item detail-item-wide">
+              <span class="detail-label">镜像上限</span>
+              <span class="detail-value" id="ota-max">--</span>
+            </div>
+          </div>
+
+          <div class="page-title">上传新固件</div>
+          <div class="upgrade-note">
+            请选择本仓库构建出的 <code>usb_ecm_4g_module.bin</code>。上传过程中请勿断电、勿关闭页面；
+            写入完成校验通过后设备会自动重启，Wi-Fi 会短暂断开，约 1 分钟后重新连接即可。
+            若新固件启动异常，带回滚保护的 bootloader 会自动回到旧版本。
+          </div>
+          <div class="line-base-btn flex flex-ac">
+            <input type="file" id="ota-file" accept=".bin,application/octet-stream">
+            <button class="save-btn" type="button" id="btn-upload">上传并升级</button>
+          </div>
+          <div class="progress-wrap" id="progress-wrap" hidden>
+            <div class="progress-track">
+              <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <div class="progress-text" id="progress-text">0%</div>
+          </div>
+          <div class="upgrade-status" id="upgrade-status"></div>
+
+          <div class="page-title">其它操作</div>
+          <div class="line-base-btn flex flex-ac">
+            <button class="save-btn" type="button" id="btn-reboot">重启设备</button>
+            <button class="cancel-btn" type="button" id="btn-back">返回状态页</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="js/api.js"></script>
+  <script src="js/upgrade.js"></script>
+</body>
+
+</html>

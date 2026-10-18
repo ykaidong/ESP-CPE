@@ -63,11 +63,13 @@
 - 上传过程中断电：新分区写坏，bootloader 仍从旧分区启动（otadata 未切换）；
 - OTA 进行中再次上传 → 409，避免并发写同一分区。
 
-### 3.4 Web 页面（下一步）
+### 3.4 Web 页面
 
-- 新增"系统升级"页：显示当前版本/分区、选择 `.bin` 上传、进度条、确认对话框；
-- 上传期间禁用其它操作，避免升级中改配置；
-- 升级完成提示"设备将重启，请等待约 1 分钟并重新连接 AP"。
+- 新增 `upgrade.html`（左侧菜单"系统升级"）：显示当前版本/运行分区/下次启动分区/启动验证状态/镜像上限；
+  选择 `.bin` → 确认框 → 上传进度条（XHR `upload.onprogress`）→ 成功后提示"设备正在重启"；
+  失败按错误码给出中文提示（`invalid_firmware_image`、`image_too_large`、`upload_interrupted`、
+  `ota_busy`、`pending_verify` 等）；页面另带"重启设备"按钮（调用 `/api/system/reboot`）。
+- 上传期间禁用页面按钮，避免升级中改配置；`api.js` 的 `ERROR_TEXT` 补充 OTA 错误码。
 
 ### 3.5 后续（可选）
 
@@ -124,3 +126,4 @@
 | 2026-10-18 | 建立 Phase 3 计划，确定 P3-1~P3-4 里程碑与 OTA 设计 | 待提交 |
 | 2026-10-18 | P3-1 后端：`cpe_ota`（流式写入/回滚保护/健康后 mark-valid）、`/api/ota/status`、`/api/ota/upload`、`/api/system/reboot`；启用 `BOOTLOADER_APP_ROLLBACK_ENABLE` | 待提交 |
 | 2026-10-18 | 首轮 curl 验收：鉴权 401/403、合法固件上传并重启 PASS；非法文件错误码修正（先校验镜像 magic 再写 flash）；回滚需先整片重烧含新 bootloader | 待提交 |
+| 2026-10-18 | P3-1 前端：新增 `upgrade.html` + `js/upgrade.js`（版本信息、文件选择、上传进度、确认框、出错提示、重启按钮），左侧菜单加入口，`api.js` 补充 OTA 错误码 | 待提交 |

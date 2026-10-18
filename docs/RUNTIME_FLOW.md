@@ -278,6 +278,9 @@ for (;;) {
 
 ### 9.1 本地升级流程
 
+管理面入口：左侧菜单"系统升级"→ `http://192.168.4.1/upgrade.html`（选择 `.bin`、进度条、确认框、
+出错提示、"重启设备"按钮）。等价的命令行流程：
+
 1. PC 连上 SoftAP，登录管理面（需先完成首次改密）；
 2. `GET /api/ota/status` 读取当前版本/分区/上传上限；
 3. `POST /api/ota/upload` 上传完整 app 镜像（`application/octet-stream`，body 即 `.bin`，
