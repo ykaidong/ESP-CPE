@@ -70,7 +70,7 @@
 | M2.1 | Web 加固：绑定 AP 网口、请求体公共函数、会话/限速 | 已完成（httpd 绑定 AP、登录指数退避、default netif 提前；请求体公共函数/`json_parse_end` 为 Phase 1 已有，复核通过） |
 | M2.2 | 驱动加固第一批：ECM deinit/通知长度、per-port IN 重试、NEW_DEV 生命周期 | 已完成（Phase 1 已实现，本阶段复核并补充 CDC 周期重扫） |
 | M2.3 | 驱动加固第二批：Union/EC 描述符、usb 栈事件/超时、TOCTOU refcount | 部分完成：Union/EC 描述符、NEW_DEV 生命周期已落地；新增周期重扫兜底事件丢失；TOCTOU/HCD 超时评估后按“接受风险”处理（见第 5 节） |
-| M2.4 | 无 RESET 线恢复收口 + 上板回归 | Web 自动化项全部通过；串口首轮日志 PASS（正常启动/上网、无 panic、无周期重扫刷屏、boot counter 清零）；热插拔/复位/长时间故障场景待补 |
+| M2.4 | 无 RESET 线恢复收口 + 上板回归 | Web 自动化项全部通过；串口/热插拔日志 PASS：7 次枚举、6 次上线、每次 18~20s 恢复；堆水位 6 轮稳定（free≈175.3KB、largest=126976），无逐轮泄漏；无 panic/重扫刷屏。待补：ESP32 复位 ×10、无 SIM/无模组长时间、20 轮循环 |
 | M2.5 | 构建卫生、测试脚本、Phase 2 测试报告 | 进行中：Python 版 Web 回归脚本、串口日志脚本、`PHASE2_TEST_PLAN.md` 已添加 |
 | M2.6 | AT 诊断与状态页（Phase 2 完成后单独立项） | 待开始 |
 
@@ -91,7 +91,8 @@
 | 2026-10-18 | M2.2/M2.3：CDC 周期重扫兜底 NEW_DEV 丢失；复核 Union/EC 描述符、NEW_DEV 生命周期 | `9654112` |
 | 2026-10-18 | M2.4/M2.5：新增 Phase 2 验收清单与日志/Web 回归脚本 | `8a3a140` |
 | 2026-10-18 | Web 自动化回归：401/超长 body/登录/CSRF/畸形 JSON/弱口令全部通过；改用 Python 脚本；状态变更项因 must_change 待补测 | `f66b533` |
-| 2026-10-18 | Web 自动化回归补测通过：临时改密后 wlan CSRF/畸形 JSON/channel 999/XSS 白名单/登录锁定 60s 均 PASS | 待提交 |
+| 2026-10-18 | Web 自动化回归补测通过：临时改密后 wlan CSRF/畸形 JSON/channel 999/XSS 白名单/登录锁定 60s 均 PASS | `4cd94f4` |
+| 2026-10-18 | 新增堆水位日志（link 事件必打、周期可配）；热插拔 6 轮堆水位稳定，无逐轮泄漏 | 待提交 |
 
 ## 5. 已知接受风险（Phase 2 内不再改）
 

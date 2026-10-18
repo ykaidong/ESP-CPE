@@ -109,6 +109,16 @@ menu "CPE Application Configuration"
         default 120
         range 10 3600
 
+    config CPE_HEAP_LOG_PERIOD_S
+        int "Heap watermark log period (seconds, 0 = disabled)"
+        default 0
+        range 0 3600
+        help
+            Log free heap, historical minimum free heap and the largest free
+            internal block every N seconds. Useful for hot-plug/reset leak and
+            fragmentation tests. Link up/down and got/lost-IP transitions are
+            always logged regardless of this option.
+
     config CPE_USB_PORT_POWER_CYCLE
         bool "Power-cycle the USB root port during recovery"
         default n

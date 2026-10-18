@@ -30,6 +30,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "dhcpserver/dhcpserver.h"
 #include "lwip/lwip_napt.h"
@@ -45,6 +46,18 @@
 #include "iot_usbh_ecm.h"
 
 static const char *TAG = "cpe";
+
+/* Heap watermark helper: free heap alone is not enough to spot a leak or
+ * fragmentation, so also log the historical minimum and the largest internal
+ * block. Called on link transitions and periodically when enabled. */
+static void log_heap(const char *reason)
+{
+    ESP_LOGI(TAG, "heap (%s): free=%u min=%u largest_internal=%u",
+             reason,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
 
 #define ECM_NETIF_KEY       "ECM0"
 #define ECM_NETIF_DESC      "usb-ecm"
@@ -527,6 +540,7 @@ static void link_manager_task(void *arg)
     uint32_t dhcp_restarts = 0;
     int64_t wait_start_us = 0;
     int64_t online_start_us = 0;
+    int64_t next_heap_log_us = 0;
     bool was_online = false;
     bool last_link_up = false;
     bool last_got_ip = false;
@@ -561,6 +575,7 @@ static void link_manager_task(void *arg)
         if (st.link_up != last_link_up) {
             wait_start_us = now;
             last_link_up = st.link_up;
+            log_heap(st.link_up ? "link up" : "link down");
         }
         if (st.got_ip != last_got_ip) {
             wait_start_us = now;
@@ -571,7 +586,17 @@ static void link_manager_task(void *arg)
             } else {
                 cpe_link_offline();
             }
+            log_heap(st.got_ip ? "got ip" : "lost ip");
         }
+
+#if CONFIG_CPE_HEAP_LOG_PERIOD_S > 0
+        if (next_heap_log_us == 0) {
+            next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
+        } else if (now >= next_heap_log_us) {
+            log_heap("periodic");
+            next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
+        }
+#endif
 
         if (st.link_up && st.got_ip) {
             /* Healthy. Clear the persistent boot/recovery counter once stable. */
@@ -819,4 +844,5 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "CPE started, management console on http://192.168.4.1");
+    log_heap("boot");
 }

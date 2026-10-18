@@ -55,14 +55,26 @@ idf.py -p COM6 flash monitor
 
 | # | 测试 | 期望 | 结果 |
 | --- | --- | --- | --- |
-| 2.1 | 正常启动接模组 | 枚举成功、`ECM driver ready`、`4G WAN IP`、`CPE online` | ☐ |
-| 2.2 | 反复热插拔模组 20 次 | 每次恢复 link/IP；无 panic；无重复端口打开错误 | ☐ |
-| 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机** | ☐ |
-| 2.4 | 无 SIM 持续 10 分钟 | `link up but no IP` → FAULT，AP/Web 可用，无重启 | ☐ |
-| 2.5 | 不接模组上电 10 分钟 | no-device FAULT，AP/Web 可用，无重启 | ☐ |
-| 2.6 | 正常运行时观察 10 分钟日志 | **不出现** `Replaying the CONNECTED event for N existing device(s)` 周期刷屏；无 `CHECK_SHORT_DEV_DESC` 后卡死 | ☐ |
-| 2.7 | 在线稳定 2 分钟 | `Healthy for 120 s, boot counter cleared`（仅首次有计数时打印） | ☐ |
-| 2.8 | 连续 20 次插拔后的堆水位 | 无明显持续下降（日志/`heap` 诊断） | ☐ |
+| 2.1 | 正常启动接模组 | 枚举成功、`ECM driver ready`、`4G WAN IP`、`CPE online` | ✅ 通过 |
+| 2.2 | 反复热插拔模组 20 次 | 每次恢复 link/IP；无 panic；无重复端口打开错误 | ✅ 初步通过（7 次，恢复 18~20s；建议补到 20 次） |
+| 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机** | ☐ 待补 |
+| 2.4 | 无 SIM 持续 10 分钟 | `link up but no IP` → FAULT，AP/Web 可用，无重启 | ☐ 待补 |
+| 2.5 | 不接模组上电 10 分钟 | no-device FAULT，AP/Web 可用，无重启 | ☐ 待补 |
+| 2.6 | 正常运行时观察 10 分钟日志 | **不出现** `Replaying the CONNECTED event for N existing device(s)` 周期刷屏；无 `CHECK_SHORT_DEV_DESC` 后卡死 | ✅ 通过（0 次刷屏） |
+| 2.7 | 在线稳定 2 分钟 | `Healthy for 120 s, boot counter cleared`（仅首次有计数时打印） | ✅ 通过 |
+| 2.8 | 连续 20 次插拔后的堆水位 | 每次插拔后 `free` 回到同一水平、`min` 不持续下降、`largest_internal` 不持续变小 | ✅ 初步通过（6 轮稳定，建议补到 20 次） |
+
+堆水位日志：
+
+- 固件在 `link up/down`、`got/lost IP` 时**总是**打印：
+  `heap (link down): free=... min=... largest_internal=...`
+- 周期性日志由 `CPE Application Configuration → Heap watermark log period (seconds)`
+  控制（默认 0=关闭；本机测试 sdkconfig 已设为 10 秒）。
+- 判读方法：
+  - `free`：当前空闲堆；每轮插拔后应回到相近值；
+  - `min`：开机以来历史最低值；反复插拔后若持续创新低，说明有内存未释放或碎片化；
+  - `largest_internal`：最大连续内部块；持续下降说明碎片化。
+- 需要更细的堆信息时，可在临时诊断代码里调用 `heap_caps_print_heap_info(MALLOC_CAP_INTERNAL)`。
 
 串口日志检查：
 
@@ -70,6 +82,29 @@ idf.py -p COM6 flash monitor
 # 先保存 monitor 输出到 build_log.txt，再运行
 .\scripts\serial_log_check.ps1 -LogFile .\build_log.txt
 ```
+
+### 2.y 热插拔与堆水位记录（2026-10-18，`adf7f61` + 堆日志）
+
+- 日志统计：`New device connected` 7 次、`CPE online` 6 次；每次拔插约 **18~20s** 恢复 link+IP；
+- 无 panic/assert/watchdog；`CHECK_SHORT_DEV_DESC` 0 次；`Replaying ... existing device(s)` 刷屏 0 次；
+- 堆水位（`free` / `min` / `largest_internal`）：
+
+| 阶段 | free | min | largest |
+| --- | --- | --- | --- |
+| 开机 | 210556 | 210556 | 167936 |
+| 首次 got IP | 178456 | 178440 | 135168 |
+| 第 2 次插拔后 got IP | 175364 | 102596 | 126976 |
+| 第 3 次插拔后 got IP | 175360 | 102596 | 126976 |
+| 第 5 次插拔后 got IP | 175332 | 102596 | 126976 |
+| 第 6 次插拔后 got IP | 175332 | 102596 | 126976 |
+| 重新上电后首次 got IP | 178456 | 178440 | 135168 |
+
+- 结论：**没有逐次下降**，free 稳定在 ~175.3KB、largest 稳定在 126976，未发现每轮泄漏；`min` 一次性降到 102596 是 Web 客户端/HTTP 会话造成的，之后保持稳定；重新上电后基线完全复现。
+- 一次异常：第 4 次枚举后 0.78s 设备即断开（随后第 5 次正常），无错误日志，疑似插拔接触抖动；若复现需查连接器/线缆。
+- 观察项（不影响功能）：
+  - 每次重新枚举都会配置 ECM 两次（`Parsed MAC`/`packet filter`/`alt setting` 各出现两次）；
+  - 拔模组时 `USB HOST: EP command error: ESP_ERR_INVALID_STATE`（清理在途 URB，预期）。
+- 仍待补：2.3（ESP32 复位、模组不断电 10 次）、2.4（无 SIM 10 分钟）、2.5（不接模组 10 分钟）、2.2 达到 20 次循环。
 
 ### 2.x 串口日志首轮记录（2026-10-18，固件 `8a3a140` / `iot_usbh_cdc 3.1.2`）
 
