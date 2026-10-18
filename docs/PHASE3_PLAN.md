@@ -88,6 +88,22 @@
 | 4.7 | 新版启动后人为制造 boot loop（如断点测试） | bootloader 回滚到旧版本 |
 | 4.8 | 未登录/无 CSRF 调用 OTA 接口 | 401/403 |
 
+### 4.x 首轮 curl 验收记录（2026-10-18，固件 `6f4dac7`，设备 `ESP-CPE-F2BD`）
+
+| 项 | 结果 |
+| --- | --- |
+| 4.8 未登录 `GET /api/ota/status` | ✅ 401 |
+| 4.8 无 CSRF `POST /api/system/reboot` | ✅ 403 `csrf_invalid` |
+| 4.8 无 CSRF `POST /api/ota/upload` | ✅ 403（服务端不读 body 直接关闭；大 body 时客户端可能看到连接重置） |
+| 4.1 上传合法固件（`build/usb_ecm_4g_module.bin`） | ✅ `200 {"status":"ok","message":"ota_ready","reboot":true}`，耗时 2.27s，设备重启 |
+| 4.4 上传非固件文件 | ⚠️ 返回 400，但错误码是 `upload_interrupted`；根因是 `esp_ota_write()` 在首个字节不是 `0xE9` 时返回 `ESP_ERR_OTA_VALIDATE_FAILED`。已改进：先读首块校验 magic 再动 flash，并映射为 `400 invalid_firmware_image`（待重新构建验证） |
+| 4.1/4.2 重启后状态确认 | ⏳ 设备 OTA 重启后 PC 的 Wi-Fi 自动切回了原来的网络（192.168.1.x），未能继续用 curl 确认 `ota_1` 与 60s 后的 mark-valid；需要重新连接 `ESP-CPE-F2BD` 后补测 |
+| 4.5/4.6/4.3 | ⏳ 待补 |
+
+注意：回滚保护需要**带 `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 的 bootloader**。当前设备上的 bootloader 是开启该选项之前烧录的，
+所以本轮 OTA 虽然能切换分区，但 `PENDING_VERIFY`/回滚状态机要到用 `idf.py -p COM6 flash` 整片重烧一次（含 bootloader）后才真正生效；
+之后再用 OTA 升级即具备回滚能力。
+
 ## 5. 风险与约束
 
 1. **模组挂死**：OTA 重启后 4G 可能挂死（见 2.w），升级后需要人工插拔模组——这是当前硬件限制，
@@ -103,3 +119,4 @@
 | --- | --- | --- |
 | 2026-10-18 | 建立 Phase 3 计划，确定 P3-1~P3-4 里程碑与 OTA 设计 | 待提交 |
 | 2026-10-18 | P3-1 后端：`cpe_ota`（流式写入/回滚保护/健康后 mark-valid）、`/api/ota/status`、`/api/ota/upload`、`/api/system/reboot`；启用 `BOOTLOADER_APP_ROLLBACK_ENABLE` | 待提交 |
+| 2026-10-18 | 首轮 curl 验收：鉴权 401/403、合法固件上传并重启 PASS；非法文件错误码修正（先校验镜像 magic 再写 flash）；回滚需先整片重烧含新 bootloader | 待提交 |

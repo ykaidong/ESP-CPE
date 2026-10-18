@@ -291,9 +291,11 @@ for (;;) {
 
 失败/异常处理：
 
-- 请求无 body、超过分区大小 → 400/413；非固件内容 → `esp_ota_end()` 拒绝，返回 400，旧版本不变；
+- 请求无 body、超过分区大小 → 400/413；
+- 上传内容首字节不是 `0xE9`（ESP 镜像 magic）→ 在写 flash 之前直接 `400 invalid_firmware_image`，非活动分区不被擦除；
+- 镜像校验（`esp_ota_end`）失败 → 400 `invalid_firmware_image`，旧版本不变；
 - 上传中拔电/断网 → `otadata` 未切换，重启仍进旧版本；重新上传即可；
-- 上传进行中再次上传 → 409（同一分区不允许并发写）；
+- 上传进行中再次上传 → 409 `ota_busy`；当前运行镜像处于 `PENDING_VERIFY`（尚未跑满健康判定）→ 409 `pending_verify`；
 - `POST /api/system/reboot`：运维用重启接口（会话 + CSRF）。
 
 > `idf.py flash` 直接烧录的镜像不走 OTA 状态机，不受回滚影响。

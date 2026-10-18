@@ -1524,26 +1524,71 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
         return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
     }
 
-    err = cpe_ota_begin(req->content_len);
-    if (err == ESP_ERR_INVALID_SIZE) {
-        return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
-    }
-    if (err != ESP_OK) {
-        return send_error_response(req, HTTPD_500_STR, "ota_begin_failed", true);
-    }
-
     uint8_t *buf = malloc(OTA_CHUNK_SIZE);
     if (buf == NULL) {
-        cpe_ota_abort();
         return send_error_response(req, HTTPD_500_STR, "out_of_memory", true);
     }
 
+    /* Read the first chunk before touching flash: it carries the image magic
+     * byte, so a wrong file (HTML page, wrong binary, ...) is rejected without
+     * erasing the inactive OTA partition. */
     size_t remaining = req->content_len;
     int64_t start_us = esp_timer_get_time();
+    int first_len = 0;
+    for (;;) {
+        first_len = httpd_req_recv(req, (char *)buf,
+                                   remaining > OTA_CHUNK_SIZE ? OTA_CHUNK_SIZE : remaining);
+        if (first_len == HTTPD_SOCK_ERR_TIMEOUT) {
+            if (esp_timer_get_time() - start_us > OTA_UPLOAD_TIMEOUT_US) {
+                free(buf);
+                return send_error_response(req, HTTPD_408_STR, "upload_timeout", true);
+            }
+            continue;
+        }
+        break;
+    }
+    if (first_len <= 0) {
+        free(buf);
+        return send_error_response(req, HTTPD_400, "upload_interrupted", true);
+    }
+    if (buf[0] != 0xE9) { /* ESP_IMAGE_HEADER_MAGIC */
+        ESP_LOGW(TAG, "Rejected upload: not an ESP32 firmware image (magic 0x%02x)", buf[0]);
+        free(buf);
+        return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
+    }
+
+    err = cpe_ota_begin(req->content_len);
+    if (err == ESP_ERR_INVALID_SIZE) {
+        free(buf);
+        return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
+    }
+    if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+        /* The running image was installed by OTA and has not been validated
+         * yet (cpe_ota validates it CPE_OTA_VALIDATE_DELAY_MS after boot). */
+        free(buf);
+        return send_error_response(req, HTTPD_409_STR, "pending_verify", true);
+    }
+    if (err == ESP_ERR_OTA_ALREADY_IN_PROGRESS) {
+        free(buf);
+        return send_error_response(req, HTTPD_409_STR, "ota_busy", true);
+    }
+    if (err != ESP_OK) {
+        free(buf);
+        return send_error_response(req, HTTPD_500_STR, "ota_begin_failed", true);
+    }
+
     esp_err_t upload_err = ESP_OK;
-    while (remaining > 0) {
-        size_t to_read = (remaining > OTA_CHUNK_SIZE) ? OTA_CHUNK_SIZE : remaining;
-        int received = httpd_req_recv(req, (char *)buf, to_read);
+    while (first_len > 0 && remaining > 0) {
+        upload_err = cpe_ota_write(buf, (size_t)first_len);
+        if (upload_err != ESP_OK) {
+            break;
+        }
+        remaining -= (size_t)first_len;
+        if (remaining == 0) {
+            break;
+        }
+        int received = httpd_req_recv(req, (char *)buf,
+                                      remaining > OTA_CHUNK_SIZE ? OTA_CHUNK_SIZE : remaining);
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
             if (esp_timer_get_time() - start_us > OTA_UPLOAD_TIMEOUT_US) {
                 upload_err = ESP_ERR_TIMEOUT;
@@ -1555,17 +1600,16 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
             upload_err = ESP_FAIL;
             break;
         }
-        upload_err = cpe_ota_write(buf, (size_t)received);
-        if (upload_err != ESP_OK) {
-            break;
-        }
-        remaining -= (size_t)received;
+        first_len = received;
     }
     free(buf);
 
     if (upload_err != ESP_OK) {
         cpe_ota_abort();
-        ESP_LOGE(TAG, "Firmware upload interrupted: %s", esp_err_to_name(upload_err));
+        ESP_LOGE(TAG, "Firmware upload failed: %s", esp_err_to_name(upload_err));
+        if (upload_err == ESP_ERR_OTA_VALIDATE_FAILED) {
+            return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
+        }
         return send_error_response(req,
                                    upload_err == ESP_ERR_TIMEOUT ? HTTPD_408_STR : HTTPD_400,
                                    "upload_interrupted", true);
