@@ -2092,7 +2092,7 @@ static void cpe_wifi_event_handler(void *arg, esp_event_base_t event_base,
 static esp_err_t init_fs(void)
 {
     esp_vfs_spiffs_conf_t conf = {
-        .base_path = CONFIG_EXAMPLE_WEB_MOUNT_POINT,
+        .base_path = CONFIG_CPE_WEB_MOUNT_POINT,
         .partition_label = NULL,
         .max_files = 4,
         .format_if_mount_failed = true,
@@ -2200,7 +2200,7 @@ esp_err_t modem_http_start(void)
         goto fail;
     }
     snprintf(s_rest_context->base_path, sizeof(s_rest_context->base_path),
-             "%s", CONFIG_EXAMPLE_WEB_MOUNT_POINT);
+             "%s", CONFIG_CPE_WEB_MOUNT_POINT);
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 16;

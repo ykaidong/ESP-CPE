@@ -17,7 +17,7 @@ menu "4G Modem WiFi Config"
             Only used when an optional upstream STA SSID is configured through
             cpe_config. The product WAN is the USB ECM link.
 
-    config EXAMPLE_WEB_MOUNT_POINT
+    config CPE_WEB_MOUNT_POINT
         string "Website mount point in VFS"
         default "/spiffs"
         help

@@ -76,5 +76,5 @@ Get-Content components\iot_usbh_cdc\idf_component.yml, components\iot_usbh_ecm\i
 - OTA 升级接口与回滚（分区已就绪，接口未接）；
 - Secure Boot / Flash 加密 / NVS 加密；
 - HTTPS；
-- iperf/AT/network_test 诊断功能（默认从主流程剥离）；
+- iperf/AT/network_test 诊断功能（示例代码已删除，阶段二按需重新接入）；
 - 长时间稳定性与并发 Web 压测。

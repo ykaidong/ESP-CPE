@@ -40,7 +40,9 @@
 | 1.7 | Web 认证与默认安全值改造（由 `components/web_wifi` 工作流完成） | P0-3、P1-12、P1-13、P1-14、P1-15、P1-16、P1-17 | 无固定凭据；401 `Connection: close`；超大 Content-Length 提前 413；参数校验；XSS/CSRF 修复 |
 | 1.8 | 构建验证 + 文档（本文件、README 更新、凭据/恢复策略说明） | 8.3-#5 | `idf.py build` 0 error；生成 bin 可烧录 |
 
-> 阶段一允许暂不删除全部示例功能：AT/light-sleep/iperf/network_test 从主流程剥离，默认关闭，不影响 CPE 启动。
+> 阶段一已删除示例诊断组件与配置残留：`components/network_test`（PING/公网 IP/测速）、
+> `sdkconfig.ci.at`、`sdkconfig.ci.p4fullspeed`、`sdkconfig.defaults.esp32s2/.esp32p4`；
+> 阶段二如需诊断能力（公网 IP/测速/AT），按审计条目重新接入并修缺陷。
 
 ### 阶段二：驱动与 Web 全面加固（下一阶段）
 
@@ -48,7 +50,7 @@
 - ECM：`itf+1`/IAD 解析改为按 Union/EC 功能描述符定位；通知长度校验；`wMaxSegmentSize` 上限钳制；deinit 幂等。
 - `espressif__usb`：评估升级/补丁（枚举 FSM SECOND_RESET 卡死、无传输超时、事件队列满）。
 - Web：请求体读取公共函数（长度上限/NUL/分片）、JSON 转义、站点链表加锁、登录限速与锁定、`json_parse_end()`、网络 IO 去 `ESP_ERROR_CHECK`、CSP/nosniff。
-- iperf/`network_test`/`modem_at`：仅作为诊断功能按需启用并修对应缺陷（P1-18、R-04/R-05、R-15 等）。
+- iperf/`network_test`/`modem_at`：阶段一已删除示例实现；阶段二按需重新接入，并先修对应缺陷（P1-18、R-04/R-05、R-15 等）。
 
 ### 阶段三：产品化（再下一阶段）
 
@@ -166,7 +168,7 @@ app_main
 - 端口句柄 TOCTOU（审计 C2）未做引用计数，仅收窄窗口；
 - 上游控制传输无 HCD 超时（H-1），极端设备可能拖住 ECM 恢复；
 - Web "重启设备"独立接口未新增（仅有恢复出厂）；HTTPS/Secure Cookie 留待阶段三；
-- AT/light-sleep/iperf/network_test 从主流程剥离，默认关闭。
+- AT/light-sleep/iperf/network_test 示例代码已从仓库删除（阶段二如需诊断能力再按需接入）。
 
 ### 6.4 复核期补充（构建等待期间）
 
@@ -198,6 +200,8 @@ app_main
 | 3 | Web 后台：状态页"客户端数量/已连接数/剩余连接数"一直显示 `--`；登录页图标显示为方框（iconfont 字体未随 SPIFFS 打包）；登录框偏左、页面空旷；新标签页/刷新后"退出登录"无反应 | ① 4s 轮询只在客户端页签激活时启动，初始化时不再拉取列表；② `style.css` 引用 `fonts/iconfont.*` 但 SPIFFS 无该字体；③ 旧 CSS 把登录卡绝对定位在 left:15%/top:20%；④ CSRF token 只存 sessionStorage（按标签页），新标签页取不到 → POST 403 被静默吞掉 | ① 页面加载时拉取一次客户端数量（不启动隐藏轮询）；② 登录页改用已有图片、去掉 iconfont；③ cpe.css 覆盖登录/状态页布局（居中卡片、白底分区卡片、移动端适配）；④ 服务端下发非 HttpOnly 的 `CPE_CSRF` Cookie（SameSite=Strict，双提交），登出不再强制 CSRF 且失败时前端提示；启动计数清零后同步刷新状态 |
 | 4 | 状态页排版不美观：基本状态三个点位被推到页面两端、网络详情"标签在左、值贴右边缘" | 旧布局用 `flex:1` 的占位线段把三项撑满整行；`.status-row{justify-content:space-between}` 使值总是贴右 | 基本状态改为三张等宽状态卡（图标 + 标签 + 值，间距 12px）；设备状态改为三块指标卡；网络详情改为两列键值网格，值左对齐紧跟标签；≤720px 自动单列 |
 | 5 | 复位后 ECM 枚举/配置正常、`4G link up`，但反复出现 `Link up but no IP after 20000 ms`，每轮都拆 ECM 重建 | ① 默认 IP 超时只有 20s，而模组在 USB 复位后重新附着网络（PDP/DHCP 服务器就绪）可能需要数十秒；② 超时立即 `ecm_teardown()` 会重置模组 USB 接口，下一轮又只给 20s，形成"重建—超时—再重建"循环，反而让 DHCP 永远等不到可用窗口 | `CPE_IP_TIMEOUT_MS` 默认改为 90s；新增 `CPE_IP_DHCP_RESTARTS`（默认 2）：链路保持、仅重启 DHCP 客户端并打印其状态，仍无 IP 才重建 ECM；链路断开/拿到 IP 时重置计数 |
+
+| 6 | 仓库残留官方示例的 PING/诊断组件与其它芯片配置：`components/network_test`（每 5s ping 8.8.8.8、公网 IP、上传/下载测速）、`sdkconfig.ci.at`、`sdkconfig.ci.p4fullspeed`、`sdkconfig.defaults.esp32s2/.esp32p4`，以及 `EXAMPLE_WEB_MOUNT_POINT`、未实现的 `CPE_FACTORY_RESET_GPIO` | 示例改造为产品时未清理：`network_test` 已不被 `main` 引用（map 中无 ping 符号）但仍参与编译；示例 CI 引用的 `CONFIG_EXAMPLE_*` 在任何 Kconfig 中都已不存在；其它芯片的 defaults 与 ESP32-S3 产品无关 | 删除 `components/network_test`、两个 `sdkconfig.ci.*`、`sdkconfig.defaults.esp32s2/.esp32p4`；`EXAMPLE_WEB_MOUNT_POINT` → `CPE_WEB_MOUNT_POINT`；删除未实现的 `CPE_FACTORY_RESET_GPIO`；文档同步 |
 
 > 现场结论：对外部供电的 4G 模组，产品硬件必须提供 RESET_N→GPIO 或受控供电，否则主机复位后可能枚举失败。README 已补充接线说明。
 

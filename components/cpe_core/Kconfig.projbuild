@@ -25,11 +25,4 @@ menu "CPE Core Configuration"
         string "Default device name"
         default "ESP-CPE"
 
-    config CPE_FACTORY_RESET_GPIO
-        int "Factory reset button GPIO (-1 to disable)"
-        default -1
-        help
-            GPIO connected to a button to GND. Hold for CPE_FACTORY_RESET_HOLD_MS
-            at boot to restore factory settings. Implemented in a later phase.
-
 endmenu
