@@ -23,6 +23,16 @@
 extern "C" {
 #endif
 
+/* OTA specific error codes (user error range).
+ *
+ * The esp_ota_* errors are translated inside cpe_ota.c on purpose: callers
+ * (e.g. the web component) must not need app_update headers, and the HTTP layer
+ * maps these codes to status codes / JSON error names. */
+#define CPE_OTA_ERR_BASE            (0x40000)
+#define CPE_OTA_ERR_BUSY            (CPE_OTA_ERR_BASE + 1) /*!< Another upload is in progress */
+#define CPE_OTA_ERR_PENDING_VERIFY  (CPE_OTA_ERR_BASE + 2) /*!< Running image not validated yet */
+#define CPE_OTA_ERR_INVALID_IMAGE   (CPE_OTA_ERR_BASE + 3) /*!< Not a valid firmware image */
+
 /** Information about the running image and a possible pending update. */
 typedef struct {
     char running_version[32];   /*!< Version string of the running app */

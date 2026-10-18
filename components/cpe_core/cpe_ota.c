@@ -90,7 +90,7 @@ esp_err_t cpe_ota_get_info(cpe_ota_info_t *info)
 esp_err_t cpe_ota_begin(size_t expected_size)
 {
     if (s_upload_in_progress) {
-        return ESP_ERR_INVALID_STATE;
+        return CPE_OTA_ERR_BUSY;
     }
 
     const esp_partition_t *partition = esp_ota_get_next_update_partition(NULL);
@@ -108,6 +108,14 @@ esp_err_t cpe_ota_begin(size_t expected_size)
     esp_err_t err = esp_ota_begin(partition, expected_size > 0 ? expected_size : OTA_SIZE_UNKNOWN, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
+        if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+            /* The running image is still PENDING_VERIFY and must be validated
+             * first (see cpe_ota_mark_running_valid()). */
+            return CPE_OTA_ERR_PENDING_VERIFY;
+        }
+        if (err == ESP_ERR_OTA_ALREADY_IN_PROGRESS) {
+            return CPE_OTA_ERR_BUSY;
+        }
         return err;
     }
 
@@ -128,6 +136,10 @@ esp_err_t cpe_ota_write(const void *data, size_t len)
     esp_err_t err = esp_ota_write(s_update_handle, data, len);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
+        if (err == ESP_ERR_OTA_VALIDATE_FAILED) {
+            /* esp_ota_write() validates the image magic of the first chunk. */
+            return CPE_OTA_ERR_INVALID_IMAGE;
+        }
         return err;
     }
     s_written += len;
@@ -146,7 +158,7 @@ esp_err_t cpe_ota_end(void)
         ESP_LOGE(TAG, "esp_ota_end failed: %s (image rejected)", esp_err_to_name(err));
         s_upload_in_progress = false;
         s_update_partition = NULL;
-        return err;
+        return CPE_OTA_ERR_INVALID_IMAGE;
     }
 
     err = esp_ota_set_boot_partition(s_update_partition);

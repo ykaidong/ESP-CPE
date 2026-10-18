@@ -1562,13 +1562,13 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
         free(buf);
         return send_error_response(req, HTTPD_413_STR, "image_too_large", true);
     }
-    if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
+    if (err == CPE_OTA_ERR_PENDING_VERIFY) {
         /* The running image was installed by OTA and has not been validated
          * yet (cpe_ota validates it CPE_OTA_VALIDATE_DELAY_MS after boot). */
         free(buf);
         return send_error_response(req, HTTPD_409_STR, "pending_verify", true);
     }
-    if (err == ESP_ERR_OTA_ALREADY_IN_PROGRESS) {
+    if (err == CPE_OTA_ERR_BUSY) {
         free(buf);
         return send_error_response(req, HTTPD_409_STR, "ota_busy", true);
     }
@@ -1607,7 +1607,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     if (upload_err != ESP_OK) {
         cpe_ota_abort();
         ESP_LOGE(TAG, "Firmware upload failed: %s", esp_err_to_name(upload_err));
-        if (upload_err == ESP_ERR_OTA_VALIDATE_FAILED) {
+        if (upload_err == CPE_OTA_ERR_INVALID_IMAGE) {
             return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
         }
         return send_error_response(req,
