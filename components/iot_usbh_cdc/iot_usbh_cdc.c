@@ -808,9 +808,6 @@ static void _cdc_replay_existing_devices(dev_event_cb_t *registered_cb)
     if (num_dev > (int)sizeof(dev_addr_list)) {
         num_dev = sizeof(dev_addr_list);
     }
-    if (num_dev > 0) {
-        ESP_LOGI(TAG, "Replaying the CONNECTED event for %d existing device(s)", num_dev);
-    }
     if (!_cdc_dispatch_begin()) {
         return;
     }
@@ -851,6 +848,49 @@ static void _cdc_replay_existing_devices(dev_event_cb_t *registered_cb)
             }
         }
         _cdc_desc_copy_release(&desc_copy);
+    }
+    _cdc_dispatch_end();
+}
+
+/**
+ * @brief Periodically replay CONNECTED events for devices already on the bus.
+ *
+ * The USB Host client event queue is a fixed-size queue; if it ever fills up
+ * (e.g. a burst of connect/disconnect events), NEW_DEV can be dropped and a
+ * device would stay unhandled forever. The registration-time replay covers
+ * the common case; this periodic rescan is a cheap safety net. It only
+ * dispatches devices that were not delivered to that callback yet.
+ *
+ * Runs in the client task; the outer dispatch section keeps callbacks from
+ * being freed while the snapshot is iterated.
+ */
+static void _cdc_rescan_existing_devices(void)
+{
+    if (p_usbh_cdc_obj == NULL) {
+        return;
+    }
+    if (!_cdc_dispatch_begin()) {
+        return;
+    }
+
+    dev_event_cb_t *cbs[8];
+    int num_cbs = 0;
+    xSemaphoreTake(p_usbh_cdc_obj->dev_event_mutex, portMAX_DELAY);
+    dev_event_cb_t *cb = NULL;
+    SLIST_FOREACH(cb, &p_usbh_cdc_obj->dev_event_cb_list, list_entry) {
+        if (num_cbs < (int)(sizeof(cbs) / sizeof(cbs[0]))) {
+            cbs[num_cbs++] = cb;
+        }
+    }
+    xSemaphoreGive(p_usbh_cdc_obj->dev_event_mutex);
+
+    for (int i = 0; i < num_cbs; i++) {
+        xSemaphoreTake(p_usbh_cdc_obj->dev_event_mutex, portMAX_DELAY);
+        bool removed = cbs[i]->removed;
+        xSemaphoreGive(p_usbh_cdc_obj->dev_event_mutex);
+        if (!removed) {
+            _cdc_replay_existing_devices(cbs[i]);
+        }
     }
     _cdc_dispatch_end();
 }
@@ -1400,9 +1440,16 @@ static void usbh_cdc_client_task(void *arg)
     TickType_t teardown_start = 0;
     // Start handling client's events
     while (1) {
-        esp_err_t ret = usb_host_client_handle_events(usbh_cdc_obj->cdc_client_hdl, portMAX_DELAY);
+        /* Use a timeout instead of portMAX_DELAY so the periodic device rescan
+         * below can recover a NEW_DEV event that was lost when the client
+         * event queue was full. */
+        esp_err_t ret = usb_host_client_handle_events(usbh_cdc_obj->cdc_client_hdl,
+                                                      pdMS_TO_TICKS(5000));
         if (ret != ESP_OK && ret != ESP_ERR_TIMEOUT) {
             ESP_LOGE(TAG, "usb_host_client_handle_events failed: %s", esp_err_to_name(ret));
+        }
+        if (ret == ESP_ERR_TIMEOUT) {
+            _cdc_rescan_existing_devices();
         }
         // Release the ports whose completion callbacks were just serviced
         _cdc_process_free_pending();

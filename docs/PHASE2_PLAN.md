@@ -67,9 +67,9 @@
 
 | 里程碑 | 内容 | 状态 |
 | --- | --- | --- |
-| M2.1 | Web 加固：绑定 AP 网口、请求体公共函数、会话/限速 | 进行中（绑定 AP 网口、登录指数退避、default netif 提前已改；请求体公共函数 Phase 1 已完成，待复核） |
-| M2.2 | 驱动加固第一批：ECM deinit/通知长度、per-port IN 重试、NEW_DEV 生命周期 | 复核中（Phase 1 已实现大部分，待构建/上板验证） |
-| M2.3 | 驱动加固第二批：Union/EC 描述符、usb 栈事件/超时、TOCTOU refcount | 待开始 |
+| M2.1 | Web 加固：绑定 AP 网口、请求体公共函数、会话/限速 | 已完成（httpd 绑定 AP、登录指数退避、default netif 提前；请求体公共函数/`json_parse_end` 为 Phase 1 已有，复核通过） |
+| M2.2 | 驱动加固第一批：ECM deinit/通知长度、per-port IN 重试、NEW_DEV 生命周期 | 已完成（Phase 1 已实现，本阶段复核并补充 CDC 周期重扫） |
+| M2.3 | 驱动加固第二批：Union/EC 描述符、usb 栈事件/超时、TOCTOU refcount | 部分完成：Union/EC 描述符、NEW_DEV 生命周期已落地；新增周期重扫兜底事件丢失；TOCTOU/HCD 超时评估后按“接受风险”处理（见第 5 节） |
 | M2.4 | 无 RESET 线恢复收口 + 上板回归 | 待开始 |
 | M2.5 | 构建卫生、测试脚本、Phase 2 测试报告 | 待开始 |
 | M2.6 | AT 诊断与状态页（Phase 2 完成后单独立项） | 待开始 |
@@ -87,4 +87,16 @@
 | 日期 | 内容 | 提交 |
 | --- | --- | --- |
 | 2026-10-18 | 建立 Phase 2 计划（驱动 + Web 先行，AT 延后） | `b5712c4` |
-| 2026-10-18 | M2.1 第一批：httpd 只绑定 SoftAP 网口、登录失败指数退避、ECM netif 提前设为默认网卡 | 待提交 |
+| 2026-10-18 | M2.1 第一批：httpd 只绑定 SoftAP 网口、登录失败指数退避、ECM netif 提前设为默认网卡 | `bc130d0` |
+| 2026-10-18 | M2.2/M2.3：CDC 周期重扫兜底 NEW_DEV 丢失；复核 Union/EC 描述符、NEW_DEV 生命周期 | 待提交 |
+
+## 5. 已知接受风险（Phase 2 内不再改）
+
+| 风险 | 现状/缓解 | 后续 |
+| --- | --- | --- |
+| 端口句柄 TOCTOU（审计 C2） | `is_port_opened()` 检查与使用之间仍可能被 close 打断；两阶段延迟释放 + `to_close` 标志把窗口收窄；ECM 上层已串行化 open/close | Phase 3 若引入端口引用计数，需要改公开 API 语义 |
+| 上游控制传输无 HCD 超时（H-1） | 极端设备"在但不响应"可长期占用；链路管理器有 30s/90s 上层超时，但阻塞在驱动内部时无法打断 | 依赖上游 `usb` 组件升级/补丁 |
+| `iot_eth_install()` 失败路径泄漏 driver 对象（API 限制） | `ecm_bring_up()` 失败后不会重复高频重试（有 60s 退避），实际触发概率低 | 若 fork `iot_eth` 可修 |
+| HCD 用 assert/abort 处理可恢复错误（H-2） | 属上游 managed 组件，未 fork | Phase 3 评估 |
+
+

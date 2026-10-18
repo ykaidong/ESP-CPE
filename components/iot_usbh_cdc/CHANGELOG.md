@@ -1,5 +1,15 @@
 # ChangeLog
 
+## v3.1.2 - 2026-10-18
+
+Local ESP-CPE fork (not an upstream release). Bug fixes:
+
+* Replay `CONNECTED` events for devices already on the bus every 5 seconds
+  (client task timeout) as a safety net for a NEW_DEV event lost when the USB
+  Host client event queue is full; already delivered devices are skipped
+  cheaply (address-bit check) before any descriptor is loaded. A summary log
+  is only emitted when a device is actually replayed (no periodic log spam).
+
 ## v3.1.1 - 2026-10-17
 
 Local ESP-CPE fork (not an upstream release). Bug fixes:
