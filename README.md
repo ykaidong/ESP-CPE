@@ -94,8 +94,8 @@ idf.py -p COMx flash monitor
 # 串口日志统计（保存 monitor 输出到 build_log.txt 后运行）
 .\scripts\serial_log_check.ps1 -LogFile .\build_log.txt
 
-# 管理面安全回归（PC 连接设备 SoftAP 后运行）
-.\scripts\web_security_test.ps1 -Password '<admin 口令>'
+# 管理面安全回归（PC 连接设备 SoftAP 后运行，默认 192.168.4.1）
+python .\scripts\web_security_test.py --password '<admin 口令>'
 ```
 
 Phase 2 验收清单见 [docs/PHASE2_TEST_PLAN.md](docs/PHASE2_TEST_PLAN.md)。

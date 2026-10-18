@@ -5,7 +5,7 @@
 >
 > 辅助脚本：
 > - `scripts/serial_log_check.ps1`：串口日志统计与异常检测
-> - `scripts/web_security_test.ps1`：管理面安全回归（HTTP）
+> - `scripts/web_security_test.py`：管理面安全回归（HTTP，Python 标准库）
 
 ## 0. 构建与烧录
 
@@ -35,7 +35,14 @@ idf.py -p COM6 flash monitor
 | 1.11 | 客户端名称 XSS 载荷 `"><img src=x onerror=alert(1)>` | 页面纯文本显示，无脚本执行 | ☐ |
 | 1.12 | 恢复出厂后 | AP 凭据保留；管理员口令 = AP 口令；启动计数清零 | ☐ |
 
-自动化：`scripts/web_security_test.ps1` 覆盖 1.4~1.9（锁定测试会真的锁 60s，默认需要 `-IncludeLockout` 才执行）。
+自动化：`scripts/web_security_test.py` 覆盖 1.4~1.9（锁定测试会真的锁 60s，默认需要 `--include-lockout` 才执行）。
+
+### 1.x 自动化执行记录（2026-10-18）
+
+- 设备地址：用户提供 192.168.1.4 不可达；实际设备 SoftAP 为 **192.168.4.1**（PC 在 192.168.4.2），测试按 192.168.4.1 执行。
+- 默认凭据 `admin` / `FooTdEh2F4jv` 登录成功（`must_change=true`，说明尚未完成首次改密）。
+- 结果：未登录 401 + `Connection: close`、超长 Content-Length 被快速断开且服务器仍存活、登录/会话/CSRF、无 CSRF 403、畸形 JSON 400、弱口令 400 —— **全部 PASS**。
+- 因 `must_change=true`，`/wlan_advance` 等状态变更接口被强制改密拦截（403 `password_change_required`），相应校验项（1.8）待改密后补测。
 
 ## 2. 驱动与枚举（M2.2/M2.3）
 
