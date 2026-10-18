@@ -192,6 +192,7 @@ app_main
 | 1 | ECM 模组（VID 2CA3/PID 4006）枚举成功、接口/端点找到，但 `Failed to parse the MAC address descriptor (len 26)` → 3 次后 link down | fork 的 `_parse_mac_descriptor()` 把"字节数"与"hex 字符数"混淆：每 2 个字符才累加 1（最大 6），却用 `== 12` 判断成功 → 永远失败 | 修正为 6 字节判断；MAC 读取/解析失败不再中止 ECM 配置，改用本地管理 MAC 回退（fork 0.4.2） |
 | 2 | ESP32 运行中复位（4G 模组独立供电、不断电）→ `USBH: Dev 0 EP 0 Error` / `CHECK_SHORT_DEV_DESC FAILED`，之后无法恢复 | 模组 USB 栈未随 ESP32 复位而复位；ESP-IDF 枚举失败后不会自行重试 | 新增 `CPE_MODULE_RESET_GPIO`（启动时 + 枚举恢复时脉冲模组 RESET，需硬件接线）；无 RESET 线时按 `CPE_USB_ENUM_RESET_ATTEMPTS` 先尝试 VBUS 掉电（若启用），最后**重启 USB Host 栈**（卸载 host 撤掉总线端接让模组感知断开，再重新安装触发一次全新枚举）；二者都不可用时进入 FAULT（AP/Web 可用） |
 | 3 | Web 后台：状态页"客户端数量/已连接数/剩余连接数"一直显示 `--`；登录页图标显示为方框（iconfont 字体未随 SPIFFS 打包）；登录框偏左、页面空旷；新标签页/刷新后"退出登录"无反应 | ① 4s 轮询只在客户端页签激活时启动，初始化时不再拉取列表；② `style.css` 引用 `fonts/iconfont.*` 但 SPIFFS 无该字体；③ 旧 CSS 把登录卡绝对定位在 left:15%/top:20%；④ CSRF token 只存 sessionStorage（按标签页），新标签页取不到 → POST 403 被静默吞掉 | ① 页面加载时拉取一次客户端数量（不启动隐藏轮询）；② 登录页改用已有图片、去掉 iconfont；③ cpe.css 覆盖登录/状态页布局（居中卡片、白底分区卡片、移动端适配）；④ 服务端下发非 HttpOnly 的 `CPE_CSRF` Cookie（SameSite=Strict，双提交），登出不再强制 CSRF 且失败时前端提示；启动计数清零后同步刷新状态 |
+| 4 | 状态页排版不美观：基本状态三个点位被推到页面两端、网络详情"标签在左、值贴右边缘" | 旧布局用 `flex:1` 的占位线段把三项撑满整行；`.status-row{justify-content:space-between}` 使值总是贴右 | 基本状态改为三张等宽状态卡（图标 + 标签 + 值，间距 12px）；设备状态改为三块指标卡；网络详情改为两列键值网格，值左对齐紧跟标签；≤720px 自动单列 |
 
 > 现场结论：对外部供电的 4G 模组，产品硬件必须提供 RESET_N→GPIO 或受控供电，否则主机复位后可能枚举失败。README 已补充接线说明。
 
