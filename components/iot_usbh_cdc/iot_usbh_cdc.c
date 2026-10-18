@@ -62,6 +62,7 @@ typedef struct dev_event_cb_s {
 typedef struct {
     TaskHandle_t install_task;
     bool (*enum_filter_cb)(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue);
+    bool fsls_only;
 } usb_lib_task_ctx_t;
 
 typedef struct {
@@ -208,6 +209,7 @@ static void usb_lib_task(void *arg)
     // the installer may free the driver object when the notification times out.
     TaskHandle_t install_task = ctx->install_task;
     bool (*enum_filter_cb)(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue) = ctx->enum_filter_cb;
+    const bool fsls_only = ctx->fsls_only;
     free(ctx);
 
     esp_err_t ret = ESP_OK;
@@ -221,6 +223,7 @@ static void usb_lib_task(void *arg)
             .skip_phy_setup = false,
             .intr_flags = ESP_INTR_FLAG_LEVEL1,
             .enum_filter_cb = enum_filter_cb,
+            .fsls_only = fsls_only,
         };
         ret = usb_host_install(&host_config);
         if (ret != ESP_OK) {
@@ -707,7 +710,23 @@ static void _cdc_dispatch_disconnected(uint8_t dev_addr, usb_device_handle_t dev
 typedef struct {
     usb_device_desc_t *device_desc;
     usb_config_desc_t *config_desc;
+    usb_speed_t speed;
+    bool speed_valid;
 } cdc_desc_copy_t;
+
+static const char *_cdc_speed_str(usb_speed_t speed)
+{
+    switch (speed) {
+    case USB_SPEED_LOW:
+        return "low (1.5 Mbit/s)";
+    case USB_SPEED_FULL:
+        return "full (12 Mbit/s)";
+    case USB_SPEED_HIGH:
+        return "high (480 Mbit/s)";
+    default:
+        return "unknown";
+    }
+}
 
 static void _cdc_desc_copy_release(cdc_desc_copy_t *copy)
 {
@@ -734,6 +753,8 @@ static esp_err_t _cdc_load_descriptors(uint8_t dev_addr, cdc_desc_copy_t *copy)
     }
     copy->device_desc = NULL;
     copy->config_desc = NULL;
+    copy->speed = USB_SPEED_FULL;
+    copy->speed_valid = false;
 
     usb_device_handle_t dev_hdl = NULL;
     const usb_device_desc_t *device_desc = NULL;
@@ -753,6 +774,11 @@ static esp_err_t _cdc_load_descriptors(uint8_t dev_addr, cdc_desc_copy_t *copy)
             return ret;
         }
         opened_here = true;
+    }
+    usb_device_info_t dev_info;
+    if (usb_host_device_info(dev_hdl, &dev_info) == ESP_OK) {
+        copy->speed = dev_info.speed;
+        copy->speed_valid = true;
     }
     ret = usb_host_get_device_descriptor(dev_hdl, &device_desc);
     if (ret == ESP_OK) {
@@ -934,13 +960,15 @@ static void usb_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg
     switch (event_msg->event) {
     case USB_HOST_CLIENT_EVENT_NEW_DEV: {
         uint8_t dev_addr = event_msg->new_dev.address;
-        ESP_LOGI(TAG, "New device connected, address: %d", dev_addr);
         cdc_desc_copy_t desc_copy;
         esp_err_t err = _cdc_load_descriptors(dev_addr, &desc_copy);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Could not get the descriptors of device %d: %s", dev_addr, esp_err_to_name(err));
+            ESP_LOGE(TAG, "New device connected, address: %d, but its descriptors could not be loaded: %s",
+                     dev_addr, esp_err_to_name(err));
             return;
         }
+        ESP_LOGI(TAG, "New device connected, address: %d, speed: %s", dev_addr,
+                 desc_copy.speed_valid ? _cdc_speed_str(desc_copy.speed) : "unknown");
         if (desc_copy.device_desc->bDeviceClass == USB_CLASS_HUB) {
             ESP_LOGD(TAG, "Detect hub device, skip");
             _cdc_desc_copy_release(&desc_copy);
@@ -1510,6 +1538,7 @@ esp_err_t usbh_cdc_driver_install(const usbh_cdc_driver_config_t *config)
         }
         lib_ctx->install_task = xTaskGetCurrentTaskHandle();
         lib_ctx->enum_filter_cb = config->enum_filter_cb;
+        lib_ctx->fsls_only = config->fsls_only;
         BaseType_t core_id = (CONFIG_USBH_TASK_CORE_ID < 0) ? tskNO_AFFINITY : CONFIG_USBH_TASK_CORE_ID;
         BaseType_t task_created = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, lib_ctx,
                                                           CONFIG_USBH_TASK_BASE_PRIORITY, NULL, core_id);

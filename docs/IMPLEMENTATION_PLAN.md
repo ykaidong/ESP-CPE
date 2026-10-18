@@ -152,7 +152,7 @@ app_main
 | 产品核心组件 | `components/cpe_core/` | 配置存储/校验、随机凭据、PBKDF2 口令、会话+CSRF、状态机、NVS 启动计数、恢复出厂 |
 | 新启动架构 | `main/main.c` | AP/Web 先行；USB Host 只装一次；后台链路管理器（L1 ECM 重建 / L2 端口掉电 / L3 有界重启 / FAULT 保底） |
 | 分区与构建 | `partitions_16m_ota.csv`、`sdkconfig.defaults*`、`.gitignore` | 16MB 双 OTA；`sdkconfig` 不再入库；关键补丁配置进 defaults |
-| 驱动本地 fork | `components/iot_usbh_cdc/`（3.1.1）、`components/iot_usbh_ecm/`（0.4.1） | P0-1/P1-2~P1-8/P1-11 逐条修复；NEW_DEV 补发；DEFER_DATA_POLL；enum_filter_cb 透传 |
+| 驱动本地 fork | `components/iot_usbh_cdc/`（3.1.3）、`components/iot_usbh_ecm/`（0.4.2） | P0-1/P1-2~P1-8/P1-11 逐条修复；NEW_DEV 补发；DEFER_DATA_POLL；enum_filter_cb/fsls_only 透传；枚举速度日志 |
 | Web 管理面 | `components/web_wifi/` | 会话+CSRF 认证、参数校验、DoS/XSS/CSRF/口令回显修复、状态/故障页、恢复出厂 |
 | 文档/脚本 | `README.md`、`docs/PHASE1_TEST_PLAN.md`、`scripts/build.ps1` | 首次登录流程、恢复策略、上板验收清单、构建辅助 |
 

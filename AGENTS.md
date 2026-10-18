@@ -24,4 +24,4 @@
 - 设备/模组：ESP32-S3 + 16MB Flash + 通用 USB ECM 模组（无 AT 依赖）。
 - 阶段推进：每阶段 `idf.py build` 通过（用户手动或代理执行，取决于每次询问结果）后再进入下一阶段；当前进度见 `docs/IMPLEMENTATION_PLAN.md`。
 - 不提交 `sdkconfig`/`sdkconfig.old`；关键配置写入 `sdkconfig.defaults*`。
-- 本地 fork：`components/iot_usbh_cdc`（3.1.1）、`components/iot_usbh_ecm`（0.4.1），修改需更新 CHANGELOG 与版本。
+- 本地 fork：`components/iot_usbh_cdc`（3.1.3）、`components/iot_usbh_ecm`（0.4.2），修改需更新 CHANGELOG 与版本。

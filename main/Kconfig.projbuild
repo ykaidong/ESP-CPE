@@ -164,6 +164,17 @@ menu "CPE Application Configuration"
             Give the module time to boot its USB stack after the reset pulse
             is released.
 
+    config CPE_USB_FSLS_ONLY
+        bool "Force the USB host to full-speed only mode"
+        default n
+        help
+            Install the USB Host Library with fsls_only=1: the host does not
+            perform the high-speed chirp handshake, so high-speed capable
+            devices enumerate at full speed (12 Mbit/s). Use this to check
+            whether a modem that stops responding after an ESP32 reset hangs in
+            the HS chirp state. Full speed is sufficient for 4G ECM traffic but
+            caps the WAN throughput (roughly 9-10 Mbit/s).
+
     config CPE_USB_ENUM_RESET_ATTEMPTS
         int "USB modem reset attempts before giving up"
         default 3

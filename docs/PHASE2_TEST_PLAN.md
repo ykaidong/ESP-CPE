@@ -157,6 +157,44 @@ I (...) cpe: 4G link up / 4G WAN IP: ...
 判定：只要掉电/上电后能重新枚举并恢复 link/IP，且**不再出现 panic**，该兜底即有效；
 若 3 次尝试后仍枚举失败，则确认该模组不响应主机侧断开，只能加 `RESET_N` 或控制供电。
 
+### 2.w 模组 USB 控制器挂死：主机侧已验证，模组侧无解（2026-10-18）
+
+硬件事实：4G 模组只有 USB 口，无 `RESET_N`/其它引线；VBUS 由模组外部电源提供，ESP32 无法控制。
+
+现象（复位 ESP32、模组不断电）：
+
+```
+E (1083) HUB: Root port reset failed
+（或）E (1082) ENUM: CHECK_SHORT_DEV_DESC FAILED
+W (31301) cpe: No USB link after 30000 ms (attempt 1)
+W (31301) cpe: Power-cycling the USB root port to force re-enumeration
+I (31301) cpe: USB root port powered off for 1000 ms
+（之后没有任何 New device connected，直到物理插拔模组才恢复）
+```
+
+判定依据：
+
+1. **主机侧正常**：同一固件、同一端口，接 SanDisk U 盘（VID 0781）反复复位 ESP32 均稳定枚举，
+   仅打印 `No ECM interface found for device VID: 0781, ... ignore it`（ECM 驱动正常跳过非 ECM 设备）。
+2. **模组侧挂死**：`Root port reset failed` 表示主机在 `RESET_HOLD+HOLD_RECOVERY`
+   （默认 30+30ms）后端口没有进入 enabled，即模组在总线复位期间自己掉线且不再回来；
+   `CHECK_SHORT_DEV_DESC FAILED` 则是复位完成但读不到描述符。
+3. **主机侧断开起不到作用**：`usb_host_lib_set_root_port_power(false)` 只 deinit ESP32 的
+   HCD 端口并清 `HPRT.PP`；VBUS 外部供电时它撤不掉模组电源，对模组最多算"总线挂起"，
+   不会让模组重初始化 USB 控制器。
+4. 物理插拔会切断 D+/D-/VBUS，模组 USB 栈才会重启 → 唯一有效的恢复手段。
+
+结论：**纯软件无法复位挂死的模组 USB 控制器**。固件只能保证不 panic、AP/Web 可用、周期性重试；
+根治需要模组固件/换模组，或下一版硬件增加模组 `RESET_N` 或受控供电。
+
+尝试中的实验（均为降低挂死概率，不保证解决）：
+
+| 实验 | 改动 | 判读 |
+| --- | --- | --- |
+| A 加长主机复位 | `CONFIG_USB_HOST_RESET_HOLD_MS=100`、`CONFIG_USB_HOST_RESET_RECOVERY_MS=100`（仅本地 sdkconfig） | 复位后能重新枚举 → 模组只是需要更长复位；日志仍 `Root port reset failed` → 无效 |
+| B 强制全速 | `CPE_USB_FSLS_ONLY=y`（安装 Host 时 `fsls_only=1`，跳过 HS chirp） | 能恢复 → 模组是挂在 HS chirp；用 `New device connected ... speed: full` 确认 |
+| 观察 | 新版会打印枚举速度（`speed: high/full/low`） | 先确认模组当前是 HS 还是 FS，决定 B 是否有意义 |
+
 ### 2.x 串口日志首轮记录（2026-10-18，固件 `8a3a140` / `iot_usbh_cdc 3.1.2`）
 
 `serial_log_check.ps1` 结果：**PASS**

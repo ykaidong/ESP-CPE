@@ -20,4 +20,4 @@ targets:
 - esp32s31
 - esp32p4
 url: https://github.com/espressif/esp-iot-solution/tree/master/components/usb/iot_usbh_cdc
-version: 3.1.2
+version: 3.1.3
