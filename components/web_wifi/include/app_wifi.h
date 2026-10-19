@@ -56,6 +56,20 @@ esp_err_t app_wifi_apply(const cpe_config_t *cfg);
  */
 esp_netif_t *app_wifi_get_ap_netif(void);
 
+/**
+ * @brief Deauthenticate every station associated with the SoftAP.
+ *
+ * Call this shortly before esp_restart(). Without an explicit deauth, a quick
+ * reboot lets a station (notably Windows) keep its pre-reboot association when
+ * the same BSSID reappears within a couple of seconds: it keeps using the old
+ * keys, the AP silently drops its frames, and the management console stays
+ * unreachable until the user reconnects Wi-Fi manually.
+ *
+ * Blocks for ~200 ms so the deauth frame(s) can leave the radio. Calling it
+ * while Wi-Fi is not started only logs a warning.
+ */
+void app_wifi_deauth_all_stations(void);
+
 #ifdef __cplusplus
 }
 #endif

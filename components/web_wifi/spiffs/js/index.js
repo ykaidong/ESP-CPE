@@ -11,6 +11,8 @@
     var STATION_URL = '/system/station_state';
     var CHANGE_NAME_URL = '/system/station_state/change_name';
     var DELETE_DEVICE_URL = '/system/station_state/delete_device';
+    /* Keep in sync with cpe_status.h (CPE_STATE_FAULT). */
+    var STATE_FAULT = 4;
 
     var stationList = [];
     var stationTimer = null;
@@ -63,7 +65,7 @@
         return cell;
     }
 
-    function renderStationRow(station, index, nowTime) {
+    function renderStationRow(station, index) {
         var row = document.createElement('tr');
 
         var nameCell = document.createElement('td');
@@ -80,7 +82,7 @@
         row.appendChild(makeCell(typeof station.mac_str === 'string' ? station.mac_str : ''));
         row.appendChild(makeCell(typeof station.ip_str === 'string' ? station.ip_str : ''));
 
-        var onlineSeconds = (nowTime - Number(station.online_time_s)) / 1000000;
+        var onlineSeconds = Number(station.online_time_s) || 0;
         row.appendChild(makeCell(formatDuration(onlineSeconds)));
 
         var actionCell = document.createElement('td');
@@ -144,10 +146,9 @@
             body.removeChild(body.firstChild);
         }
         stationList = updateStationCounts(data);
-        var nowTime = Number(data.now_time) || Date.now() * 1000;
 
         stationList.forEach(function (station, index) {
-            body.appendChild(renderStationRow(station, index, nowTime));
+            body.appendChild(renderStationRow(station, index));
         });
     }
 
@@ -242,7 +243,7 @@
 
         var banner = byId('status-banner');
         if (banner) {
-            if (status.state === 4) {
+            if (status.state === STATE_FAULT) {
                 banner.textContent = '当前处于故障状态：4G 链路未就绪，系统会自动重试。' +
                     '您仍可以通过本页面修改 WLAN 配置或恢复出厂设置。';
                 banner.className = 'status-banner status-banner-warn';

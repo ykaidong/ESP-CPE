@@ -52,6 +52,10 @@ esp_err_t cpe_ota_get_info(cpe_ota_info_t *info);
 /**
  * @brief Start a streaming update into the inactive OTA partition.
  *
+ * @note begin/write/end/abort form one state machine and must be called from
+ *       the same task (the HTTP server task). cpe_ota_get_info() is the only
+ *       function safe to call from another task.
+ *
  * @param[in] expected_size Image size announced by the uploader (0 = unknown).
  *                          When non zero it is validated against the partition
  *                          size before anything is written.

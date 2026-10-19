@@ -362,12 +362,14 @@ static void _ecm_config_attempt(usbh_ecm_t *ecm)
         }
     } else {
         bool give_up;
+        int attempts;
         ECM_LOCK(ecm);
         ecm->intf_configured = false;
-        give_up = (ecm->config_attempts >= ECM_CONFIG_RETRY_COUNT);
+        attempts = ecm->config_attempts;
+        give_up = (attempts >= ECM_CONFIG_RETRY_COUNT);
         ECM_UNLOCK(ecm);
         ESP_LOGE(TAG, "Failed to configure the ECM interface (attempt %d): %s",
-                 (int)ecm->config_attempts, esp_err_to_name(ret));
+                 attempts, esp_err_to_name(ret));
         if (give_up) {
             ESP_LOGE(TAG, "Giving up configuring the ECM interface, reporting link down");
         }
@@ -404,6 +406,11 @@ static void _usbh_ecm_recv_data_cb(usbh_cdc_port_handle_t cdc_port_handle, void 
     if (usbh_cdc_get_rx_buffer_size(cdc_port_handle, &rx_length) != ESP_OK || rx_length == 0) {
         return;
     }
+
+    /* The iot_eth stack takes ownership of this buffer: esp_netif_receive()
+     * wraps it in a pbuf and frees it through driver_free_rx_buffer
+     * (eth_l2_free -> free()) when the pbuf is released. It must therefore be
+     * a fresh allocation per packet, not a shared scratch buffer. */
     uint8_t *buf = malloc(rx_length);
     if (buf == NULL) {
         ESP_LOGE(TAG, "Failed to allocate %u bytes for the RX packet", (unsigned)rx_length);
@@ -653,8 +660,6 @@ static void _usbh_ecm_dev_event_cb(usbh_cdc_device_event_t event, usbh_cdc_devic
         ECM_UNLOCK(ecm);
 
         xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
-
-        xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
     } break;
 
     case CDC_HOST_DEVICE_EVENT_DISCONNECTED: {
@@ -808,7 +813,16 @@ static esp_err_t usbh_ecm_init(iot_eth_driver_t *handle)
         goto err_unregister;
     }
 
-    ecm->mediator->on_stage_changed(ecm->mediator, IOT_ETH_STAGE_LL_INIT, NULL);
+    iot_eth_mediator_t *mediator;
+    ECM_LOCK(ecm);
+    mediator = ecm->mediator;
+    ECM_UNLOCK(ecm);
+    if (mediator == NULL) {
+        ESP_LOGE(TAG, "No iot_eth mediator registered, cannot report the LL init stage");
+        ret = ESP_ERR_INVALID_STATE;
+        goto err_unregister;
+    }
+    mediator->on_stage_changed(mediator, IOT_ETH_STAGE_LL_INIT, NULL);
     ESP_LOGI(TAG, "USB ECM network interface init success");
     return ESP_OK;
 

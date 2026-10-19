@@ -731,6 +731,7 @@ static void link_manager_task(void *arg)
                                      boot_count, CONFIG_CPE_MAX_REBOOTS);
                             cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
                             vTaskDelay(pdMS_TO_TICKS(1000));
+                            app_wifi_deauth_all_stations();
                             esp_restart();
                         }
                         ESP_LOGE(TAG, "ECM link stuck, keeping AP/Web alive (fault mode)");

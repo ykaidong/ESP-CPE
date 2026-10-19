@@ -1,5 +1,31 @@
 # ChangeLog
 
+## v0.4.4 - 2026-10-19
+
+Local ESP-CPE fork. Bug fix (crash right after link up):
+
+* Revert the per-instance RX scratch buffer introduced in v0.4.3. The `iot_eth`
+  input path hands the frame to `esp_netif_receive()`, which takes ownership of
+  the buffer and releases it later through `driver_free_rx_buffer`
+  (`eth_l2_free()` -> `free()`). Reusing one buffer made lwIP free the same
+  pointer more than once, aborting in `tlsf_free()` ("block already marked as
+  free") during the first DHCP exchange. Allocate a fresh buffer per packet
+  again, as upstream does, and free it on every error path.
+
+## v0.4.3 - 2026-10-19
+
+Local ESP-CPE fork. Robustness fixes:
+
+* Reuse one RX scratch buffer per ECM instance (grown on demand) instead of
+  calling `malloc()`/`free()` for every received packet, removing RX-path heap
+  churn. The buffer is released in `usbh_ecm_deinit()`.
+* Read `config_attempts` under the state lock when logging a failed interface
+  configuration (it was read outside the lock).
+* Check `mediator` for NULL before reporting `IOT_ETH_STAGE_LL_INIT`; return
+  `ESP_ERR_INVALID_STATE` from `usbh_ecm_init()` instead of dereferencing it.
+* Remove a duplicated `xEventGroupSetBits(ECM_DEV_CONNECTED)` call in the
+  device-connected event handler.
+
 ## v0.4.2 - 2026-10-17
 
 Local ESP-CPE fork. Field bug fix found on real hardware (ECM module VID 2CA3/PID 4006):

@@ -27,6 +27,8 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_random.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "lwip/ip_addr.h"
 
@@ -210,6 +212,48 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
 /* Public API                                                                */
 /* ------------------------------------------------------------------------- */
 
+/*
+ * Give the SoftAP a fresh BSSID after an abrupt reset.
+ *
+ * A reset that never runs our restart path (reset button, panic, watchdog,
+ * brownout, quick power cycle) cannot deauthenticate the stations first. If the
+ * AP then comes back with the same BSSID a moment later, a station (notably
+ * Windows) may keep its old association and stale keys: beacons from the same
+ * BSSID keep the link "alive", the AP drops every frame, and the web console
+ * stays unreachable until the user reconnects manually. A new locally
+ * administered BSSID makes the old association unverifiable, so the station
+ * detects the loss and reconnects by itself.
+ *
+ * Controlled restarts already call app_wifi_deauth_all_stations() and keep the
+ * factory BSSID.
+ */
+static void use_fresh_bssid_after_abrupt_reset(void)
+{
+    esp_reset_reason_t reason = esp_reset_reason();
+    if (reason == ESP_RST_SW || reason == ESP_RST_DEEPSLEEP) {
+        return;
+    }
+
+    uint8_t mac[6];
+    uint32_t rnd = esp_random();
+    mac[0] = 0x02; /* locally administered, unicast */
+    mac[1] = (uint8_t)(rnd >> 24);
+    mac[2] = (uint8_t)(rnd >> 16);
+    mac[3] = (uint8_t)(rnd >> 8);
+    mac[4] = (uint8_t)rnd;
+    mac[5] = (uint8_t)(esp_random() >> 24);
+
+    esp_err_t err = esp_wifi_set_mac(WIFI_IF_AP, mac);
+    if (err != ESP_OK) {
+        /* Non-fatal: keep the factory BSSID and start the AP anyway. */
+        ESP_LOGW(TAG, "Failed to use a fresh AP BSSID (%s), keeping the factory MAC",
+                 esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "Abrupt reset detected, using BSSID " MACSTR " for this boot",
+             MAC2STR(mac));
+}
+
 esp_err_t app_wifi_start(void)
 {
     if (s_wifi_started) {
@@ -281,6 +325,10 @@ esp_err_t app_wifi_start(void)
         ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
         goto fail_wifi;
     }
+
+    /* Must happen before esp_wifi_start(): esp_wifi_set_mac() only works while
+     * the interface is disabled. */
+    use_fresh_bssid_after_abrupt_reset();
 
     /* cpe_config is the single source of truth: do not let the Wi-Fi driver
      * keep a second plaintext copy of the credentials in NVS. */
@@ -421,4 +469,16 @@ esp_err_t app_wifi_apply(const cpe_config_t *cfg)
 esp_netif_t *app_wifi_get_ap_netif(void)
 {
     return s_ap_netif;
+}
+
+void app_wifi_deauth_all_stations(void)
+{
+    esp_err_t err = esp_wifi_deauth_sta(0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to deauthenticate stations before restart: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+    /* Let the deauth frame(s) reach the air before the caller resets the radio. */
+    vTaskDelay(pdMS_TO_TICKS(200));
 }

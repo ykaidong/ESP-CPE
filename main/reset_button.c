@@ -31,6 +31,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
+#include "app_wifi.h"
 #include "cpe_config.h"
 #include "reset_button.h"
 
@@ -133,6 +134,7 @@ static void reset_button_task(void *arg)
             ESP_LOGW(TAG, "Rebooting; double-click within %d ms after boot to print "
                      "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
             vTaskDelay(pdMS_TO_TICKS(300));
+            app_wifi_deauth_all_stations();
             esp_restart();
         }
 

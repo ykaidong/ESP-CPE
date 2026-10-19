@@ -244,6 +244,8 @@ var CPE = (function () {
         ota_busy: '已有升级任务正在进行，请稍后再试',
         pending_verify: '当前固件尚未完成启动验证，请等待约 1 分钟后再试',
         ota_begin_failed: '无法开始升级，请重试',
+        ota_write_failed: '固件写入失败，请重试',
+        ota_finalize_failed: '固件写入完成但切换启动分区失败，请重试',
         ota_info_failed: '读取固件信息失败',
         network_error: '网络连接失败，设备可能正在重启',
         bad_response: '设备响应异常'

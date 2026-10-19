@@ -130,6 +130,11 @@ typedef struct usbh_cdc_port_s {
 } usbh_cdc_port_t;
 
 static usbh_cdc_obj_t *p_usbh_cdc_obj = NULL;
+/* Set by usb_lib_task() when that task installed the USB Host library itself.
+ * The driver-install error path uses it to roll the library back so a retry
+ * starts from a clean state. The driver is a singleton, so a plain flag is
+ * enough. */
+static volatile bool s_usb_host_installed_by_driver = false;
 
 static void _cdc_transfers_free(usbh_cdc_port_t *cdc_port);
 static esp_err_t _cdc_dev_ctrl_allocate(usbh_cdc_dev_t *cdc_dev);
@@ -225,6 +230,8 @@ static void usb_lib_task(void *arg)
         ret = usb_host_install(&host_config);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to install USB Host library: %s", esp_err_to_name(ret));
+        } else {
+            s_usb_host_installed_by_driver = true;
         }
     } else {
         ESP_LOGE(TAG, "usb_host_lib_info failed: %s", esp_err_to_name(res));
@@ -234,7 +241,10 @@ static void usb_lib_task(void *arg)
     // Signalize the usbh_cdc_driver_install(): 1 == success, 0 == failure
     xTaskNotify(install_task, (ret == ESP_OK) ? 1 : 0, eSetValueWithOverwrite);
     if (ret != ESP_OK) {
-        vTaskDelete(NULL);
+        /* Do not self-delete: the installer owns this task and deletes it while
+         * rolling back the partial install. Self-deletion would leave the
+         * installer with a dangling task handle. */
+        vTaskSuspend(NULL);
         return;
     }
 
@@ -1516,7 +1526,11 @@ esp_err_t usbh_cdc_driver_install(const usbh_cdc_driver_config_t *config)
     usbh_cdc_obj->open_close_mutex = xSemaphoreCreateMutex();
     usbh_cdc_obj->dev_event_mutex = xSemaphoreCreateMutex();
     usbh_cdc_obj->dispatch_idle_sem = xSemaphoreCreateBinary();
+    /* Reset before any error path can run; the flag only ever describes this
+     * install call. */
+    s_usb_host_installed_by_driver = false;
     TaskHandle_t driver_task_h = NULL;
+    TaskHandle_t lib_task_h = NULL;
     bool client_registered = false;
     usb_host_client_handle_t usb_client = NULL;
 
@@ -1537,7 +1551,7 @@ esp_err_t usbh_cdc_driver_install(const usbh_cdc_driver_config_t *config)
         lib_ctx->enum_filter_cb = config->enum_filter_cb;
         BaseType_t core_id = (CONFIG_USBH_TASK_CORE_ID < 0) ? tskNO_AFFINITY : CONFIG_USBH_TASK_CORE_ID;
         BaseType_t task_created = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, lib_ctx,
-                                                          CONFIG_USBH_TASK_BASE_PRIORITY, NULL, core_id);
+                                                          CONFIG_USBH_TASK_BASE_PRIORITY, &lib_task_h, core_id);
         if (task_created != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreatePinnedToCore failed");
             free(lib_ctx);
@@ -1580,6 +1594,13 @@ esp_err_t usbh_cdc_driver_install(const usbh_cdc_driver_config_t *config)
     return ESP_OK;
 
 err:
+    /* Stop our event-loop task before touching the host library: otherwise it
+     * could observe NO_CLIENTS while the client is deregistered and uninstall
+     * the library under our feet. */
+    if (lib_task_h) {
+        vTaskDelete(lib_task_h);
+        lib_task_h = NULL;
+    }
     if (client_registered) {
         esp_err_t err = usb_host_client_deregister(usb_client);
         if (err != ESP_OK) {
@@ -1588,6 +1609,16 @@ err:
     }
     if (driver_task_h) {
         vTaskDelete(driver_task_h);
+    }
+    /* Roll back the library only when this install call brought it up. Without
+     * this, a retry would find it already installed and start a second
+     * usb_lib_task, i.e. two tasks calling usb_host_lib_handle_events(). */
+    if (s_usb_host_installed_by_driver) {
+        esp_err_t err = usb_host_uninstall();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to roll back the USB Host library: %s", esp_err_to_name(err));
+        }
+        s_usb_host_installed_by_driver = false;
     }
     if (usbh_cdc_obj->event_group) {
         vEventGroupDelete(usbh_cdc_obj->event_group);

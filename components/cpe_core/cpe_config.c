@@ -87,8 +87,16 @@ static bool is_printable_ascii(const char *s, size_t len)
 
 static void random_password(char *buf, size_t len)
 {
+    const uint32_t alphabet_len = (uint32_t)(sizeof(PASSWORD_ALPHABET) - 1);
+    /* 2^32 is not a multiple of alphabet_len: reject the low values so that
+     * the modulo below stays unbiased. */
+    const uint32_t threshold = (0u - alphabet_len) % alphabet_len;
     for (size_t i = 0; i < len; i++) {
-        buf[i] = PASSWORD_ALPHABET[esp_random() % (sizeof(PASSWORD_ALPHABET) - 1)];
+        uint32_t r;
+        do {
+            r = esp_random();
+        } while (r < threshold);
+        buf[i] = PASSWORD_ALPHABET[r % alphabet_len];
     }
     buf[len] = '\0';
 }
@@ -197,7 +205,7 @@ esp_err_t cpe_config_validate_device_name(const char *name)
 /* Defaults / persistence                                                    */
 /* ------------------------------------------------------------------------- */
 
-static void apply_defaults_locked(bool regenerate_credentials)
+static esp_err_t apply_defaults_locked(bool regenerate_credentials)
 {
     cpe_config_t *cfg = &s_cfg.cfg;
     memset(cfg, 0, sizeof(*cfg));
@@ -219,14 +227,20 @@ static void apply_defaults_locked(bool regenerate_credentials)
     snprintf(cfg->device_name, sizeof(cfg->device_name), "%s", CONFIG_CPE_DEVICE_NAME);
 
     if (regenerate_credentials) {
-        if (pbkdf2_sha256(cfg->ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
-                          s_cfg.adm_hash) != ESP_OK) {
+        esp_err_t err = pbkdf2_sha256(cfg->ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
+                                      s_cfg.adm_hash);
+        if (err != ESP_OK) {
+            /* Never persist an all-zero hash: the admin account would be
+             * permanently unusable. Fail the boot instead. */
             memset(s_cfg.adm_hash, 0, sizeof(s_cfg.adm_hash));
+            ESP_LOGE(TAG, "Cannot derive the initial admin password hash");
+            return err;
         }
         /* The initial admin password equals the AP password: whoever can join
          * the AP can log in, and is then forced to change it. */
         s_cfg.adm_must_change = true;
     }
+    return ESP_OK;
 }
 
 static esp_err_t persist_locked(void)
@@ -386,7 +400,10 @@ esp_err_t cpe_config_init(void)
         /* If the namespace was found but invalid, module-level defaults keep
          * the read values; regenerate everything to a known-good state. */
         esp_fill_random(s_cfg.adm_salt, CPE_ADMIN_SALT_LEN);
-        apply_defaults_locked(true);
+        err = apply_defaults_locked(true);
+        if (err != ESP_OK) {
+            return err;
+        }
         generated = true;
         err = persist_locked();
         if (err != ESP_OK) {
@@ -650,15 +667,21 @@ esp_err_t cpe_config_factory_reset(void)
     }
     if (err == ESP_OK) {
         esp_fill_random(s_cfg.adm_salt, CPE_ADMIN_SALT_LEN);
-        apply_defaults_locked(false);
+        err = apply_defaults_locked(false);
+    }
+    if (err == ESP_OK) {
         memcpy(s_cfg.cfg.ap_ssid, keep_ssid, sizeof(keep_ssid));
         memcpy(s_cfg.cfg.ap_password, keep_password, sizeof(keep_password));
         /* The admin credential must match the (kept) AP password again. */
-        if (pbkdf2_sha256(s_cfg.cfg.ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
-                          s_cfg.adm_hash) != ESP_OK) {
+        err = pbkdf2_sha256(s_cfg.cfg.ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
+                            s_cfg.adm_hash);
+        if (err != ESP_OK) {
+            /* Fail closed: do not persist an all-zero hash. */
             memset(s_cfg.adm_hash, 0, sizeof(s_cfg.adm_hash));
         }
         s_cfg.adm_must_change = true;
+    }
+    if (err == ESP_OK) {
         err = persist_locked();
     }
     if (err == ESP_OK) {

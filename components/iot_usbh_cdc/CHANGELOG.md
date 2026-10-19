@@ -1,5 +1,17 @@
 # ChangeLog
 
+## v3.1.4 - 2026-10-19
+
+Local ESP-CPE fork (not an upstream release). Bug fix:
+
+* Roll back a partially completed `usbh_cdc_driver_install()`: on an error after
+  the USB Host library was brought up, the internal `usb_lib` task is now
+  stopped, the library is uninstalled, and the CDC object is freed. Previously
+  the library and its event-loop task stayed alive, so a retry found the library
+  "already installed" and started a second `usb_lib_task` — two tasks calling
+  `usb_host_lib_handle_events()` concurrently. The library task no longer
+  self-deletes on install failure; the installer owns its lifetime.
+
 ## v3.1.3 - 2026-10-18
 
 Local ESP-CPE fork (not an upstream release). Changes:

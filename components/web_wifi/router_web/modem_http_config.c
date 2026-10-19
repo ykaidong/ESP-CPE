@@ -918,7 +918,7 @@ typedef struct sta_node {
     uint8_t mac[6];
     char name[STA_NAME_MAX_LEN + 1];
     esp_ip4_addr_t ip;
-    int64_t start_time;
+    int64_t start_time_us;  /* esp_timer_get_time() when the station connected */
 } sta_node_t;
 
 static SLIST_HEAD(sta_list_head, sta_node) s_sta_list = SLIST_HEAD_INITIALIZER(s_sta_list);
@@ -974,7 +974,7 @@ static void sta_add_node(const uint8_t mac[6])
         return;
     }
     memcpy(node->mac, mac, sizeof(node->mac));
-    node->start_time = esp_timer_get_time();
+    node->start_time_us = esp_timer_get_time();
     if (station_name_load(mac, node->name, sizeof(node->name)) != ESP_OK) {
         mac_to_hex(mac, node->name);
     }
@@ -1108,7 +1108,7 @@ typedef struct {
     char name[STA_NAME_MAX_LEN + 1];
     char mac[18];
     char ip[16];
-    int64_t start_time;
+    int64_t start_time_us;
 } sta_snapshot_t;
 
 static size_t sta_snapshot(sta_snapshot_t *out, size_t max)
@@ -1133,7 +1133,7 @@ static size_t sta_snapshot(sta_snapshot_t *out, size_t max)
         } else {
             snprintf(out[count].ip, sizeof(out[count].ip), "0.0.0.0");
         }
-        out[count].start_time = node->start_time;
+        out[count].start_time_us = node->start_time_us;
         count++;
     }
     xSemaphoreGive(s_sta_mutex);
@@ -1439,6 +1439,7 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 
     /* Give the response a chance to leave the socket before restarting. */
     vTaskDelay(pdMS_TO_TICKS(500));
+    app_wifi_deauth_all_stations();
     esp_restart();
     return err;
 }
@@ -1448,7 +1449,9 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 /* ------------------------------------------------------------------------- */
 
 #define OTA_CHUNK_SIZE              4096
-#define OTA_UPLOAD_TIMEOUT_US       (180LL * 1000 * 1000)
+/* Maximum time between two successfully received chunks (not the total upload
+ * duration): a slow but progressing client is never aborted. */
+#define OTA_UPLOAD_IDLE_TIMEOUT_US  (180LL * 1000 * 1000)
 #define OTA_DRAIN_TIMEOUT_US        (5LL * 1000 * 1000)
 
 /*
@@ -1487,7 +1490,7 @@ static esp_err_t api_ota_status_get_handler(httpd_req_t *req)
 
     sbuf_t sb;
     sbuf_init(&sb, 512);
-    sbuf_append(&sb, "{\"status\":\"200\",\"version\":");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"version\":");
     sbuf_append_json_string(&sb, info.running_version);
     sbuf_append(&sb, ",\"partition\":");
     sbuf_append_json_string(&sb, info.running_partition);
@@ -1569,13 +1572,17 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
      * byte, so a wrong file (HTML page, wrong binary, ...) is rejected without
      * erasing the inactive OTA partition. */
     size_t remaining = req->content_len;
-    int64_t start_us = esp_timer_get_time();
+    int64_t last_rx_us = esp_timer_get_time();
     int first_len = 0;
     for (;;) {
         first_len = httpd_req_recv(req, (char *)buf,
                                    remaining > OTA_CHUNK_SIZE ? OTA_CHUNK_SIZE : remaining);
         if (first_len == HTTPD_SOCK_ERR_TIMEOUT) {
-            if (esp_timer_get_time() - start_us > OTA_UPLOAD_TIMEOUT_US) {
+            if (esp_timer_get_time() - last_rx_us > OTA_UPLOAD_IDLE_TIMEOUT_US) {
+                /* Drain before answering, like every other error path: the
+                 * browser is still sending and would otherwise report a
+                 * network error instead of the real 408. */
+                ota_drain_unread_body(req, remaining);
                 free(buf);
                 return send_error_response(req, HTTPD_408_STR, "upload_timeout", true);
             }
@@ -1587,6 +1594,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
         free(buf);
         return send_error_response(req, HTTPD_400, "upload_interrupted", true);
     }
+    last_rx_us = esp_timer_get_time();
     if (buf[0] != 0xE9) { /* ESP_IMAGE_HEADER_MAGIC */
         ESP_LOGW(TAG, "Rejected upload: not an ESP32 firmware image (magic 0x%02x)", buf[0]);
         free(buf);
@@ -1619,19 +1627,21 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     }
 
     esp_err_t upload_err = ESP_OK;
-    while (first_len > 0 && remaining > 0) {
+    while (first_len > 0) {
+        /* Account the bytes already read from the socket before writing them,
+         * so remaining stays "still unread" on every error path below. */
+        remaining -= (size_t)first_len;
         upload_err = cpe_ota_write(buf, (size_t)first_len);
         if (upload_err != ESP_OK) {
             break;
         }
-        remaining -= (size_t)first_len;
         if (remaining == 0) {
             break;
         }
         int received = httpd_req_recv(req, (char *)buf,
                                       remaining > OTA_CHUNK_SIZE ? OTA_CHUNK_SIZE : remaining);
         if (received == HTTPD_SOCK_ERR_TIMEOUT) {
-            if (esp_timer_get_time() - start_us > OTA_UPLOAD_TIMEOUT_US) {
+            if (esp_timer_get_time() - last_rx_us > OTA_UPLOAD_IDLE_TIMEOUT_US) {
                 upload_err = ESP_ERR_TIMEOUT;
                 break;
             }
@@ -1641,6 +1651,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
             upload_err = ESP_FAIL;
             break;
         }
+        last_rx_us = esp_timer_get_time();
         first_len = received;
     }
     free(buf);
@@ -1648,18 +1659,31 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     if (upload_err != ESP_OK) {
         cpe_ota_abort();
         ESP_LOGE(TAG, "Firmware upload failed: %s", esp_err_to_name(upload_err));
+        if (remaining > 0) {
+            ota_drain_unread_body(req, remaining);
+        }
         if (upload_err == CPE_OTA_ERR_INVALID_IMAGE) {
             return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
         }
-        return send_error_response(req,
-                                   upload_err == ESP_ERR_TIMEOUT ? HTTPD_408_STR : HTTPD_400,
-                                   "upload_interrupted", true);
+        if (upload_err == ESP_ERR_TIMEOUT) {
+            return send_error_response(req, HTTPD_408_STR, "upload_timeout", true);
+        }
+        if (upload_err == ESP_FAIL) {
+            /* httpd_req_recv() <= 0: the client went away mid-upload. */
+            return send_error_response(req, HTTPD_400, "upload_interrupted", true);
+        }
+        /* A real write/finalization error, not a bad image or a dropped link. */
+        return send_error_response(req, HTTPD_500_STR, "ota_write_failed", true);
     }
 
     err = cpe_ota_end();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Firmware image rejected: %s", esp_err_to_name(err));
-        return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
+        ESP_LOGE(TAG, "Firmware image rejected or boot partition switch failed: %s",
+                 esp_err_to_name(err));
+        if (err == CPE_OTA_ERR_INVALID_IMAGE) {
+            return send_error_response(req, HTTPD_400, "invalid_firmware_image", true);
+        }
+        return send_error_response(req, HTTPD_500_STR, "ota_finalize_failed", true);
     }
 
     sbuf_t sb;
@@ -1670,6 +1694,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     /* Let the response leave the socket, then boot the new image. */
     ESP_LOGW(TAG, "Firmware update stored, restarting into the new image");
     vTaskDelay(pdMS_TO_TICKS(800));
+    app_wifi_deauth_all_stations();
     esp_restart();
     return err;
 }
@@ -1700,6 +1725,7 @@ static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
 
     ESP_LOGW(TAG, "Reboot requested from the web console");
     vTaskDelay(pdMS_TO_TICKS(500));
+    app_wifi_deauth_all_stations();
     esp_restart();
     return err;
 }
@@ -1727,7 +1753,7 @@ static esp_err_t wlan_general_get_handler(httpd_req_t *req)
 
     sbuf_t sb;
     sbuf_init(&sb, 384);
-    sbuf_append(&sb, "{\"status\":\"200\",\"ssid\":");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"ssid\":");
     sbuf_append_json_string(&sb, cfg.ap_ssid);
     sbuf_appendf(&sb, ",\"if_hide_ssid\":\"%s\",\"auth_mode\":\"WPA2_PSK\",\"has_password\":%s",
                  cfg.ap_hidden ? "true" : "false",
@@ -1924,7 +1950,7 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
 
     sbuf_t sb;
     sbuf_init(&sb, 96);
-    sbuf_append(&sb, "{\"status\":\"200\",\"message\":\"settings_applied\"}");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"settings_applied\"}");
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
@@ -1949,7 +1975,7 @@ static esp_err_t wlan_advance_get_handler(httpd_req_t *req)
     }
     sbuf_t sb;
     sbuf_init(&sb, 96);
-    sbuf_appendf(&sb, "{\"status\":\"200\",\"bandwidth\":\"%u\",\"channel\":\"%u\"}",
+    sbuf_appendf(&sb, "{\"status\":\"ok\",\"bandwidth\":\"%u\",\"channel\":\"%u\"}",
                  (unsigned)cfg.ap_bandwidth, (unsigned)cfg.ap_channel);
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
@@ -2027,7 +2053,7 @@ static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
              channel, bandwidth);
     sbuf_t sb;
     sbuf_init(&sb, 96);
-    sbuf_append(&sb, "{\"status\":\"200\",\"message\":\"settings_applied\"}");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"settings_applied\"}");
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
@@ -2054,7 +2080,7 @@ static esp_err_t system_station_get_handler(httpd_req_t *req)
 
     sbuf_t sb;
     sbuf_init(&sb, 512);
-    sbuf_append(&sb, "{\"status\":\"200\",\"station_list\":[");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"station_list\":[");
     for (size_t i = 0; i < count; i++) {
         if (i > 0) {
             sbuf_append(&sb, ",");
@@ -2065,10 +2091,13 @@ static esp_err_t system_station_get_handler(httpd_req_t *req)
         sbuf_append_json_string(&sb, snapshot[i].mac);
         sbuf_append(&sb, ",\"ip_str\":");
         sbuf_append_json_string(&sb, snapshot[i].ip);
-        sbuf_appendf(&sb, ",\"online_time_s\":%lld}", (long long)snapshot[i].start_time);
+        int64_t online_s = (esp_timer_get_time() - snapshot[i].start_time_us) / 1000000;
+        if (online_s < 0) {
+            online_s = 0;
+        }
+        sbuf_appendf(&sb, ",\"online_time_s\":%lld}", (long long)online_s);
     }
-    sbuf_appendf(&sb, "],\"now_time\":%lld,\"max_sta\":%u}",
-                 (long long)esp_timer_get_time(),
+    sbuf_appendf(&sb, "],\"max_sta\":%u}",
                  (unsigned)(cfg_ok ? cfg.max_sta : CPE_MAX_STA_MAX));
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
@@ -2127,7 +2156,7 @@ static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Station " MACSTR " was disconnected from the web console", MAC2STR(mac));
     sbuf_t sb;
     sbuf_init(&sb, 64);
-    sbuf_append(&sb, "{\"status\":\"200\",\"message\":\"station_disconnected\"}");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"station_disconnected\"}");
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
@@ -2186,7 +2215,7 @@ static esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Station " MACSTR " renamed from the web console", MAC2STR(mac));
     sbuf_t sb;
     sbuf_init(&sb, 64);
-    sbuf_append(&sb, "{\"status\":\"200\",\"message\":\"station_renamed\"}");
+    sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"station_renamed\"}");
     return send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
