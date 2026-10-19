@@ -7,6 +7,7 @@ set(PRIV_REQ esp_wifi esp_event esp_system esp_hw_support esp_timer
 
 idf_component_register(SRC_DIRS "." "router_web"
                 INCLUDE_DIRS "." "include" "router_web"
+                PRIV_INCLUDE_DIRS "router_web/private_include"
                 REQUIRES cpe_core esp_netif
                 PRIV_REQUIRES ${PRIV_REQ})
 

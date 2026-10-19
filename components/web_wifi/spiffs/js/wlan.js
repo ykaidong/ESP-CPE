@@ -11,6 +11,11 @@
     var GENERAL_URL = '/wlan_general';
     var ADVANCE_URL = '/wlan_advance';
 
+    /* Saving may restart the SoftAP and drop the connection before the reply is
+     * read; waiting less keeps the dead socket from occupying the browser
+     * connection pool. */
+    var SAVE_TIMEOUT_MS = 4000;
+
     var currentMaxSta = 8;
 
     function showMessage(text, isError) {
@@ -106,7 +111,7 @@
             body.device_name = deviceName;
         }
 
-        CPE.postJson(GENERAL_URL, body).then(function () {
+        CPE.postJson(GENERAL_URL, body, SAVE_TIMEOUT_MS).then(function () {
             passwordInput.value = '';
             showMessage('基本设置已保存。若修改了 WLAN 名称或密码，请使用新参数重新连接 Wi-Fi。', false);
         }).catch(function (error) {
@@ -142,7 +147,7 @@
         CPE.postJson(ADVANCE_URL, {
             bandwidth: bandwidth,
             channel: channel
-        }).then(function () {
+        }, SAVE_TIMEOUT_MS).then(function () {
             showMessage('高级设置已保存。信道/带宽变更可能需要重新连接 Wi-Fi。', false);
         }).catch(function (error) {
             if (error.message === 'network_error') {

@@ -30,6 +30,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "esp_heap_caps.h"
 #include "driver/gpio.h"
 #include "dhcpserver/dhcpserver.h"
@@ -460,6 +461,30 @@ static void cpe_link_offline(void)
     }
 }
 
+/* Reconfiguring the SoftAP restarts it, and the Wi-Fi default handler removes
+ * and re-adds the lwIP netif. netif_add() resets netif->napt to 0, and
+ * ip_napt_forward() is a no-op unless the input netif has napt set, so every
+ * LAN packet would leave the WAN untranslated: the console stays reachable but
+ * all internet traffic (including ICMP and DNS) dies. This handler is
+ * registered after app_wifi_start(), so the default handler has already put
+ * the netif back on netif_list when it runs. */
+static void on_ap_start_reapply_napt(void *arg, esp_event_base_t base,
+                                     int32_t event_id, void *event_data)
+{
+    (void)arg;
+    (void)base;
+    (void)event_id;
+    (void)event_data;
+
+    cpe_status_t st;
+    cpe_status_get(&st);
+    if (!st.got_ip) {
+        return;
+    }
+    ESP_LOGI(TAG, "SoftAP restarted; re-applying NAPT and upstream DNS");
+    cpe_link_online();
+}
+
 /* ------------------------------------------------------------------------- */
 /* 4G module reset / USB enumeration recovery                                */
 /* ------------------------------------------------------------------------- */
@@ -819,6 +844,14 @@ void app_main(void)
     err = app_wifi_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "SoftAP start failed: %s", esp_err_to_name(err));
+    }
+    /* Must come after app_wifi_start(): the default Wi-Fi handler that re-adds
+     * the AP netif has to run before this one re-enables NAPT on it. */
+    err = esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_START,
+                                     on_ap_start_reapply_napt, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to register AP start NAPT handler: %s",
+                 esp_err_to_name(err));
     }
     err = modem_http_start();
     if (err != ESP_OK) {

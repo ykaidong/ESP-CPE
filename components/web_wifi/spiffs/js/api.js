@@ -17,6 +17,14 @@ var CPE = (function () {
     var CSRF_COOKIE_NAME = 'CPE_CSRF';
     var csrfToken = null;
 
+    /* Every console request is small and answered within milliseconds. A hard
+     * timeout matters when the SoftAP restarts (SSID/password/channel change)
+     * or the device reboots: the TCP connection is then half-open, the browser
+     * never sees a FIN/RST and keeps the socket in its per-origin pool. Six
+     * such sockets block every later request, including a page reload, which
+     * looks exactly like "the console is unreachable" while the device is fine. */
+    var REQUEST_TIMEOUT_MS = 8000;
+
     /* The server stores the CSRF token in a non-HttpOnly SameSite=Strict
      * cookie, so it is available after a reload and in new tabs. */
     function readCookie(name) {
@@ -122,10 +130,11 @@ var CPE = (function () {
         }
     }
 
-    function request(method, url, body) {
+    function request(method, url, body, timeoutMs) {
         return new Promise(function (resolve, reject) {
             var xhr = new XMLHttpRequest();
             xhr.open(method, url, true);
+            xhr.timeout = timeoutMs || REQUEST_TIMEOUT_MS;
             xhr.setRequestHeader('Accept', 'application/json');
             if (body !== undefined && body !== null) {
                 xhr.setRequestHeader('Content-Type', 'application/json');
@@ -177,16 +186,21 @@ var CPE = (function () {
             xhr.onerror = function () {
                 reject(new Error('network_error'));
             };
+            xhr.ontimeout = function () {
+                /* Aborting on timeout also closes the socket, so a dead
+                 * connection cannot keep occupying a browser connection slot. */
+                reject(new Error('network_error'));
+            };
             xhr.send(body === undefined || body === null ? null : JSON.stringify(body));
         });
     }
 
-    function getJson(url) {
-        return request('GET', url);
+    function getJson(url, timeoutMs) {
+        return request('GET', url, undefined, timeoutMs);
     }
 
-    function postJson(url, body) {
-        return request('POST', url, body || {});
+    function postJson(url, body, timeoutMs) {
+        return request('POST', url, body || {}, timeoutMs);
     }
 
     function getStatus() {
