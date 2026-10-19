@@ -12,24 +12,9 @@
 
 <body>
   <div class="home-base">
-    <div class="header-base flex flex-jcb">
-        <img class="header-logo" src="./img/logoBlack.png" alt="logo">
-        <div class="header-menu" id="menuBtn"></div>
-    </div>
+    <div class="header-base" id="app-header"></div>
     <div class="content-base flex">
-      <div class="left-base" id="leftMenu">
-        <ul>
-          <li>
-            <a href="index.html" class="content">系统状态</a>
-          </li>
-          <li>
-            <a href="wlan.html">WLAN设置</a>
-          </li>
-          <li>
-            <a href="upgrade.html">系统升级</a>
-          </li>
-        </ul>
-      </div>
+      <div class="left-base" id="leftMenu"></div>
       <div class="right-base">
         <div class="page-header">
           <span class="header-title-one active-title" id="tab-network">网络状态</span>
@@ -126,6 +111,7 @@
       </div>
     </div>
   </div>
+  <script src="js/layout.js"></script>
   <script src="js/api.js"></script>
   <script src="js/index.js"></script>
 </body>

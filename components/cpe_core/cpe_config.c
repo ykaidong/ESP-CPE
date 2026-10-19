@@ -38,8 +38,6 @@ static const char *TAG = "cpe_config";
 #define NVS_KEY_AP_BW       "ap_bw"
 #define NVS_KEY_AP_HIDDEN   "ap_hid"
 #define NVS_KEY_AP_MAX_STA  "ap_max"
-#define NVS_KEY_STA_SSID    "sta_ssid"
-#define NVS_KEY_STA_PASS    "sta_pass"
 #define NVS_KEY_DEV_NAME    "dev_name"
 #define NVS_KEY_ADM_USER    "adm_user"
 #define NVS_KEY_ADM_SALT    "adm_salt"
@@ -213,8 +211,6 @@ static esp_err_t apply_defaults_locked(bool regenerate_credentials)
     cfg->ap_bandwidth = 40;
     cfg->ap_hidden = false;
     cfg->max_sta = CONFIG_CPE_MAX_STA_DEFAULT;
-    cfg->sta_ssid[0] = '\0';
-    cfg->sta_password[0] = '\0';
     snprintf(cfg->admin_user, sizeof(cfg->admin_user), "%s", CONFIG_CPE_ADMIN_USERNAME);
     snprintf(cfg->device_name, sizeof(cfg->device_name), "%s", CONFIG_CPE_DEVICE_NAME);
 
@@ -256,12 +252,6 @@ static esp_err_t persist_locked(void)
     }
     if (err == ESP_OK) {
         err = nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_MAX_STA, cfg->max_sta);
-    }
-    if (err == ESP_OK) {
-        err = nvs_write_str(s_cfg.nvs, NVS_KEY_STA_SSID, cfg->sta_ssid);
-    }
-    if (err == ESP_OK) {
-        err = nvs_write_str(s_cfg.nvs, NVS_KEY_STA_PASS, cfg->sta_password);
     }
     if (err == ESP_OK) {
         err = nvs_write_str(s_cfg.nvs, NVS_KEY_DEV_NAME, cfg->device_name);
@@ -313,13 +303,7 @@ static bool load_locked(bool *found)
     cfg->ap_hidden = u8 != 0;
     ok &= (nvs_get_u8(s_cfg.nvs, NVS_KEY_AP_MAX_STA, &u8) == ESP_OK);
     cfg->max_sta = u8;
-    /* STA and device name are optional; fall back to defaults. */
-    if (nvs_read_str(s_cfg.nvs, NVS_KEY_STA_SSID, cfg->sta_ssid, sizeof(cfg->sta_ssid)) != ESP_OK) {
-        cfg->sta_ssid[0] = '\0';
-    }
-    if (nvs_read_str(s_cfg.nvs, NVS_KEY_STA_PASS, cfg->sta_password, sizeof(cfg->sta_password)) != ESP_OK) {
-        cfg->sta_password[0] = '\0';
-    }
+    /* Device name is optional; fall back to the default. */
     if (nvs_read_str(s_cfg.nvs, NVS_KEY_DEV_NAME, cfg->device_name, sizeof(cfg->device_name)) != ESP_OK) {
         snprintf(cfg->device_name, sizeof(cfg->device_name), "%s", CONFIG_CPE_DEVICE_NAME);
     }
@@ -493,36 +477,6 @@ esp_err_t cpe_config_set_ap(const char *ssid, const char *password,
     s_cfg.cfg.ap_hidden = hidden;
     s_cfg.cfg.max_sta = (uint8_t)max_sta;
     err = persist_locked();
-    if (err != ESP_OK) {
-        s_cfg.cfg = backup;
-    }
-    xSemaphoreGiveRecursive(s_cfg.lock);
-    return err;
-}
-
-esp_err_t cpe_config_set_sta(const char *ssid, const char *password)
-{
-    if (!s_cfg.inited) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (ssid == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    size_t ssid_len = strlen(ssid);
-    if (ssid_len > CPE_SSID_MAX_LEN || !is_printable_ascii(ssid, ssid_len)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (ssid_len > 0 && password != NULL && strlen(password) > 0) {
-        if (cpe_config_validate_wifi_password(password) != ESP_OK) {
-            return ESP_ERR_INVALID_ARG;
-        }
-    }
-
-    xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-    cpe_config_t backup = s_cfg.cfg;
-    snprintf(s_cfg.cfg.sta_ssid, sizeof(s_cfg.cfg.sta_ssid), "%s", ssid);
-    snprintf(s_cfg.cfg.sta_password, sizeof(s_cfg.cfg.sta_password), "%s", password ? password : "");
-    esp_err_t err = persist_locked();
     if (err != ESP_OK) {
         s_cfg.cfg = backup;
     }

@@ -13,12 +13,8 @@
 
     var currentMaxSta = 8;
 
-    function byId(id) {
-        return document.getElementById(id);
-    }
-
     function showMessage(text, isError) {
-        var node = byId('wlan-msg');
+        var node = CPE.byId('wlan-msg');
         if (!node) {
             return;
         }
@@ -27,7 +23,7 @@
     }
 
     function clearMessage() {
-        var node = byId('wlan-msg');
+        var node = CPE.byId('wlan-msg');
         if (node) {
             node.textContent = '';
             node.className = 'wlan-msg';
@@ -36,10 +32,10 @@
 
     function loadGeneral() {
         return CPE.getJson(GENERAL_URL).then(function (data) {
-            var ssid = byId('wlanName');
-            var password = byId('password');
-            var hidden = byId('select');
-            var deviceName = byId('deviceName');
+            var ssid = CPE.byId('wlanName');
+            var password = CPE.byId('password');
+            var hidden = CPE.byId('select');
+            var deviceName = CPE.byId('deviceName');
 
             if (ssid) {
                 ssid.value = typeof data.ssid === 'string' ? data.ssid : '';
@@ -63,8 +59,8 @@
 
     function loadAdvance() {
         return CPE.getJson(ADVANCE_URL).then(function (data) {
-            var bandwidth = byId('broadband');
-            var channel = byId('channel');
+            var bandwidth = CPE.byId('broadband');
+            var channel = CPE.byId('channel');
             if (bandwidth) {
                 bandwidth.value = String(data.bandwidth);
             }
@@ -76,10 +72,10 @@
 
     function saveBasic() {
         clearMessage();
-        var ssidInput = byId('wlanName');
-        var passwordInput = byId('password');
-        var hiddenInput = byId('select');
-        var deviceNameInput = byId('deviceName');
+        var ssidInput = CPE.byId('wlanName');
+        var passwordInput = CPE.byId('password');
+        var hiddenInput = CPE.byId('select');
+        var deviceNameInput = CPE.byId('deviceName');
         if (!ssidInput || !passwordInput) {
             return;
         }
@@ -127,8 +123,8 @@
 
     function saveAdvance() {
         clearMessage();
-        var bandwidthInput = byId('broadband');
-        var channelInput = byId('channel');
+        var bandwidthInput = CPE.byId('broadband');
+        var channelInput = CPE.byId('channel');
         if (!bandwidthInput || !channelInput) {
             return;
         }
@@ -158,37 +154,15 @@
     }
 
     function switchTab(showBasic) {
-        var basicPanel = byId('baseShow');
-        var advancePanel = byId('highShow');
-        var basicTab = byId('tab-basic');
-        var advanceTab = byId('tab-advance');
-        if (!basicPanel || !advancePanel || !basicTab || !advanceTab) {
-            return;
-        }
-        basicPanel.style.display = showBasic ? 'block' : 'none';
-        advancePanel.style.display = showBasic ? 'none' : 'block';
-        basicTab.className = showBasic ? 'header-title-one active-title' : 'header-title-one';
-        advanceTab.className = showBasic ? 'header-title-two' : 'header-title-two active-title';
-    }
-
-    function bindMenu() {
-        var menuButton = byId('menuBtn');
-        var menu = byId('leftMenu');
-        if (!menuButton || !menu) {
-            return;
-        }
-        menuButton.addEventListener('click', function () {
-            var hidden = menu.style.display === 'none';
-            menu.style.display = hidden ? 'block' : 'none';
-        });
+        CPE.showTab(showBasic, 'baseShow', 'highShow', 'tab-basic', 'tab-advance');
     }
 
     function init() {
-        bindMenu();
-        var basicTab = byId('tab-basic');
-        var advanceTab = byId('tab-advance');
-        var saveBasicButton = byId('btn-save-basic');
-        var saveAdvanceButton = byId('btn-save-advance');
+        CPE.bindMenu();
+        var basicTab = CPE.byId('tab-basic');
+        var advanceTab = CPE.byId('tab-advance');
+        var saveBasicButton = CPE.byId('btn-save-basic');
+        var saveAdvanceButton = CPE.byId('btn-save-advance');
         if (basicTab) {
             basicTab.addEventListener('click', function () {
                 switchTab(true);

@@ -37,19 +37,13 @@
 
 static const char *TAG = "app_wifi";
 
-/* Bounded STA reconnect attempts (STA is only enabled when a STA SSID is
- * configured in cpe_config; the product WAN is the USB ECM link). */
-#define APP_WIFI_STA_RETRY_MAX      CONFIG_ESP_MAXIMUM_RETRY
-
 #define APP_WIFI_BW_20              WIFI_BW20
 #define APP_WIFI_BW_40              WIFI_BW40
 
 static bool s_wifi_inited;
 static bool s_wifi_started;
 static bool s_handlers_registered;
-static int s_sta_retry;
 static esp_netif_t *s_ap_netif;
-static esp_netif_t *s_sta_netif;
 
 /* ------------------------------------------------------------------------- */
 /* Helpers                                                                   */
@@ -91,31 +85,6 @@ static esp_err_t build_ap_config(const cpe_config_t *cfg, wifi_config_t *out)
     out->ap.channel = cfg->ap_channel;
     out->ap.ssid_hidden = cfg->ap_hidden ? 1 : 0;
     out->ap.max_connection = cfg->max_sta;
-    return ESP_OK;
-}
-
-static esp_err_t build_sta_config(const cpe_config_t *cfg, wifi_config_t *out)
-{
-    if (cfg == NULL || out == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    size_t ssid_len = strlen(cfg->sta_ssid);
-    if (ssid_len == 0 || ssid_len > CPE_SSID_MAX_LEN) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    memset(out, 0, sizeof(*out));
-    memcpy(out->sta.ssid, cfg->sta_ssid, ssid_len);
-
-    size_t pass_len = strlen(cfg->sta_password);
-    if (pass_len == 0) {
-        out->sta.threshold.authmode = WIFI_AUTH_OPEN;
-    } else if (pass_len >= CPE_WIFI_PASS_MIN_LEN && pass_len <= CPE_WIFI_PASS_MAX_LEN) {
-        memcpy(out->sta.password, cfg->sta_password, pass_len);
-        out->sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-    } else {
-        return ESP_ERR_INVALID_ARG;
-    }
     return ESP_OK;
 }
 
@@ -172,22 +141,6 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
 
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
-        case WIFI_EVENT_STA_START:
-            if (esp_wifi_connect() != ESP_OK) {
-                ESP_LOGW(TAG, "STA connect request failed");
-            }
-            break;
-        case WIFI_EVENT_STA_DISCONNECTED:
-            if (s_sta_retry < APP_WIFI_STA_RETRY_MAX) {
-                s_sta_retry++;
-                ESP_LOGW(TAG, "STA disconnected, retry %d/%d", s_sta_retry, APP_WIFI_STA_RETRY_MAX);
-                if (esp_wifi_connect() != ESP_OK) {
-                    ESP_LOGW(TAG, "STA reconnect request failed");
-                }
-            } else {
-                ESP_LOGW(TAG, "STA reconnect attempts exhausted");
-            }
-            break;
         case WIFI_EVENT_AP_STACONNECTED: {
             wifi_event_ap_staconnected_t *event = (wifi_event_ap_staconnected_t *)event_data;
             ESP_LOGI(TAG, "Station " MACSTR " joined, AID=%d", MAC2STR(event->mac), event->aid);
@@ -201,10 +154,6 @@ static void app_wifi_event_handler(void *arg, esp_event_base_t event_base,
         default:
             break;
         }
-    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
-        ESP_LOGI(TAG, "STA got IP " IPSTR, IP2STR(&event->ip_info.ip));
-        s_sta_retry = 0;
     }
 }
 
@@ -273,25 +222,10 @@ esp_err_t app_wifi_start(void)
         return err;
     }
 
-    wifi_config_t sta_cfg = { 0 };
-    bool has_sta = cfg.sta_ssid[0] != '\0';
-    if (has_sta && build_sta_config(&cfg, &sta_cfg) != ESP_OK) {
-        ESP_LOGW(TAG, "Ignoring invalid STA configuration, starting AP only");
-        has_sta = false;
-    }
-
     s_ap_netif = esp_netif_create_default_wifi_ap();
     if (s_ap_netif == NULL) {
         ESP_LOGE(TAG, "Failed to create AP netif");
         return ESP_ERR_NO_MEM;
-    }
-    if (has_sta) {
-        s_sta_netif = esp_netif_create_default_wifi_sta();
-        if (s_sta_netif == NULL) {
-            ESP_LOGE(TAG, "Failed to create STA netif");
-            err = ESP_ERR_NO_MEM;
-            goto fail_netif;
-        }
     }
 
     err = ap_apply_static_ip(s_ap_netif);
@@ -313,14 +247,8 @@ esp_err_t app_wifi_start(void)
         goto fail_wifi;
     }
     s_handlers_registered = true;
-    err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, app_wifi_event_handler, NULL);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register IP event handler: %s", esp_err_to_name(err));
-        goto fail_wifi;
-    }
 
-    wifi_mode_t mode = has_sta ? WIFI_MODE_APSTA : WIFI_MODE_AP;
-    err = esp_wifi_set_mode(mode);
+    err = esp_wifi_set_mode(WIFI_MODE_AP);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
         goto fail_wifi;
@@ -343,13 +271,6 @@ esp_err_t app_wifi_start(void)
         ESP_LOGE(TAG, "Failed to apply AP configuration: %s", esp_err_to_name(err));
         goto fail_wifi;
     }
-    if (has_sta) {
-        err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to apply STA configuration: %s", esp_err_to_name(err));
-        }
-    }
-
     err = esp_wifi_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
@@ -371,7 +292,6 @@ esp_err_t app_wifi_start(void)
 
 fail_wifi:
     if (s_handlers_registered) {
-        (void)esp_event_handler_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, app_wifi_event_handler);
         (void)esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, app_wifi_event_handler);
         s_handlers_registered = false;
     }
@@ -380,10 +300,6 @@ fail_wifi:
         s_wifi_inited = false;
     }
 fail_netif:
-    if (s_sta_netif != NULL) {
-        esp_netif_destroy(s_sta_netif);
-        s_sta_netif = NULL;
-    }
     if (s_ap_netif != NULL) {
         esp_netif_destroy(s_ap_netif);
         s_ap_netif = NULL;

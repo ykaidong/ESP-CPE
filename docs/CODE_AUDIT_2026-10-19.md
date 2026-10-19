@@ -7,10 +7,19 @@
 ## 修复状态（2026-10-19）
 
 - **D1–D10 已修复**（D8 同时修复了 B5）。
-- 验证阶段发现并修复了两个不在原始 D 列表中的运行时问题：
+- **B4、B6、B7 已修复**：
+  - B4：新增 `cpe_ct.c`，合并 `cpe_config.c` 与 `cpe_auth.c` 的常量时间比较。
+  - B6：`upgrade.js` 改用 `/api/ota/status` 返回的 `max_image_size`，删除硬编码的 3MB。
+  - B7：删除 `style.css` 中指向不存在的 `images/`、`fonts/` 的变量与相关死规则，消除控制台 404。
+- 验证阶段发现并修复了三个不在原始列表中的运行时问题：
   - **ECM RX 双释放崩溃**：v0.4.3 的 RX 缓冲复用违反了 `iot_eth` 的缓冲区所有权约定，链路 up 后首次 DHCP 交换即触发 `tlsf_free` 断言。v0.4.4 已回退为每包分配，详见 D8。
   - **重启后 Windows 保留陈旧 Wi-Fi 关联**：受控重启前没有主动 deauth，异常复位后 AP 又以同一 BSSID 立即重建，导致终端显示已连接但流量被丢弃。已新增 `app_wifi_deauth_all_stations()`（受控重启路径）和异常复位后的随机 BSSID；SSID、密码、IP 均不变。
-- **待处理**：B1–B7（建议顺序见第六节）、第三节死代码。死代码中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留；`cpe_config_set_sta` 取决于 A5 决策。
+  - **未登录时的 401 探测**：首页与登录页在浏览器没有 CSRF token 时不再请求 `/api/status`，未登录访问/刷新不再产生 401。
+- **B2、B3 已修复**：
+  - B2：`byId`、`bindMenu` 与双 tab 切换逻辑收进 `CPE`（`api.js`），各页面只保留业务逻辑。
+  - B3：新增 `layout.js` 统一生成 header 与左侧导航，四个 HTML 页面只保留占位节点。
+- **A5 已处理（删除 STA 半成品）**：移除 `cpe_config_t` 的 `sta_ssid/sta_password`、相关 NVS 键与 `cpe_config_set_sta()`，以及 `app_wifi.c` 的 `build_sta_config()`、APSTA 分支和 STA 事件处理。产品上行仍是 USB ECM；将来需要 Wi-Fi 上行时再完整引入配置 API、状态与 UI。
+- **待处理**：B1、第三节死代码。死代码中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
 
 ---
 
@@ -47,9 +56,11 @@
 
 `main/main.c` 的 `link_manager_task()` 把在线判定、ECM 重建、根端口掉电、模组复位、NVS 计数、受控重启全部塞在一个函数里，状态迁移靠局部变量和 sleep 表达。建议抽成显式状态表（状态/事件/动作/超时），每种恢复动作独立函数，便于单测与日志追踪。
 
-### A5. STA 功能半成品
+### A5. STA 功能半成品（已处理：删除）
 
 `app_wifi.c` 有完整的 `build_sta_config()` 路径，`cpe_config_set_sta()` 也存在，但无任何配置入口、无 UI、无状态上报。要么删掉，要么补齐；现在属于“看起来支持、实际不可用”的架构负债。
+
+**处理结果**：已删除全部 STA 半成品代码。`cpe_config_set_sta()` 无调用方且默认 STA SSID 为空，STA 实际永远不会启用；产品上行仍是 USB ECM。若将来需要 Wi-Fi 上行，应完整引入配置 API、运行时应用、状态上报与 UI，而不是恢复这段未接线的代码。
 
 ---
 
@@ -119,7 +130,6 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
 | `cpe_status_set_public_ip()` | `cpe_status.c:93` | 从未调用，但 `/api/status` 仍序列化 `public_ip/has_public_ip`（`modem_http_config.c:1362-1364`） |
 | `cpe_status_set_rssi()` | `cpe_status.c:109` | 从未调用，`/api/status` 仍输出 `rssi/rssi_valid`（1365-1366） |
 | `modem_model` / `modem_fw` | `/api/status` 1367-1369 | 无任何 setter，永远为空串 |
-| `cpe_config_set_sta()` | `cpe_config.c:494` | 无调用方 |
 | `modem_http_stop()` | `modem_http_config.c:2553` | 声明并实现，从未调用 |
 | `usb_ecm_get_cdc_port_handle()` | `iot_usbh_ecm.c:961` | 无调用方 |
 
@@ -203,9 +213,11 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
 
 1. ~~先修：D1、D2、D3、D5（OTA 与状态接口的实际行为缺陷），D7（驱动重试竞态）。~~
    已完成，D1–D10 全部修复（含 B5）。
-2. **下一步**：B6（OTA 容量前后端一致）、B7（静态资源 404）、B4（常量时间比较去重）。
-3. **随后**：B2/B3（前端公共函数与布局去重），需要浏览器逐页验证。
-4. **与 A1 合并**：B1（先拆文件，再抽 handler 模板），避免在单一巨型文件中改两遍。
-5. **待决策**：A5（STA 补齐或删除）、第三节死代码。
+2. ~~B6（OTA 容量前后端一致）、B7（静态资源 404）、B4（常量时间比较去重）。~~
+   已完成并验证。
+3. ~~B2/B3（前端公共函数与布局去重），需要浏览器逐页验证。~~
+   已完成。
+4. **下一步**：B1（先拆文件，再抽 handler 模板），与 A1 合并处理，避免在单一巨型文件中改两遍。
+5. **随后**：第三节剩余死代码（已分类的预留项保持不动）。
 
-B5 已随 D8 修复；B6/B7/B4 为当前批次；B1/B2/B3 保持待处理。
+B5 已随 D8 修复；B4/B6/B7 与 B2/B3 已完成；A5 已按删除处理；B1 与其余死代码待处理。

@@ -37,8 +37,6 @@ typedef struct {
     uint8_t ap_bandwidth;                      /*!< 20 or 40 */
     bool ap_hidden;                            /*!< Hide SSID */
     uint8_t max_sta;                           /*!< 1..10 */
-    char sta_ssid[CPE_SSID_MAX_LEN + 1];       /*!< Optional upstream STA SSID */
-    char sta_password[CPE_WIFI_PASS_MAX_LEN + 1];
     char admin_user[CPE_ADMIN_USER_MAX_LEN + 1];
     char device_name[CPE_DEVICE_NAME_MAX_LEN + 1];
 } cpe_config_t;
@@ -92,11 +90,6 @@ esp_err_t cpe_config_validate_device_name(const char *name);
  */
 esp_err_t cpe_config_set_ap(const char *ssid, const char *password,
                             int channel, int bandwidth, bool hidden, int max_sta);
-
-/**
- * @brief Update optional upstream STA settings (empty SSID disables STA).
- */
-esp_err_t cpe_config_set_sta(const char *ssid, const char *password);
 
 esp_err_t cpe_config_set_device_name(const char *name);
 

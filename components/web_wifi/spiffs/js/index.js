@@ -21,12 +21,8 @@
      * the table, otherwise the input is wiped every 4 s. */
     var stationEditing = false;
 
-    function byId(id) {
-        return document.getElementById(id);
-    }
-
     function setText(id, text) {
-        var node = byId(id);
+        var node = CPE.byId(id);
         if (node) {
             node.textContent = text;
         }
@@ -138,7 +134,7 @@
             /* Do not destroy the row the administrator is editing. */
             return;
         }
-        var body = byId('tbody');
+        var body = CPE.byId('tbody');
         if (!body) {
             return;
         }
@@ -241,7 +237,7 @@
         var apSsid = status.ap && typeof status.ap.ssid === 'string' ? status.ap.ssid : '';
         setText('wifi-state', apSsid ? ('2.4 GHz Wi-Fi 正常（' + apSsid + '）') : '2.4 GHz Wi-Fi 正常');
 
-        var banner = byId('status-banner');
+        var banner = CPE.byId('status-banner');
         if (banner) {
             if (status.state === STATE_FAULT) {
                 banner.textContent = '当前处于故障状态：4G 链路未就绪，系统会自动重试。' +
@@ -272,17 +268,10 @@
     }
 
     function switchTab(showNetwork) {
-        var networkPanel = byId('networkShow');
-        var clientPanel = byId('customerShow');
-        var networkTab = byId('tab-network');
-        var clientTab = byId('tab-clients');
-        if (!networkPanel || !clientPanel || !networkTab || !clientTab) {
+        if (!CPE.showTab(showNetwork, 'networkShow', 'customerShow',
+                         'tab-network', 'tab-clients')) {
             return;
         }
-        networkPanel.style.display = showNetwork ? 'block' : 'none';
-        clientPanel.style.display = showNetwork ? 'none' : 'block';
-        networkTab.className = showNetwork ? 'header-title-one active-title' : 'header-title-one';
-        clientTab.className = showNetwork ? 'header-title-two' : 'header-title-two active-title';
         if (showNetwork) {
             /* Leaving the client tab abandons a pending edit and stops polling. */
             stationEditing = false;
@@ -295,26 +284,14 @@
         }
     }
 
-    function bindMenu() {
-        var menuButton = byId('menuBtn');
-        var menu = byId('leftMenu');
-        if (!menuButton || !menu) {
-            return;
-        }
-        menuButton.addEventListener('click', function () {
-            var hidden = menu.style.display === 'none';
-            menu.style.display = hidden ? 'block' : 'none';
-        });
-    }
-
     function bindActions() {
-        var changePassword = byId('btn-change-password');
+        var changePassword = CPE.byId('btn-change-password');
         if (changePassword) {
             changePassword.addEventListener('click', function () {
                 CPE.openPasswordModal(false).catch(function () {});
             });
         }
-        var logout = byId('btn-logout');
+        var logout = CPE.byId('btn-logout');
         if (logout) {
             logout.addEventListener('click', function () {
                 CPE.logout().catch(function (error) {
@@ -324,7 +301,7 @@
                 });
             });
         }
-        var factoryReset = byId('btn-factory-reset');
+        var factoryReset = CPE.byId('btn-factory-reset');
         if (factoryReset) {
             factoryReset.addEventListener('click', function () {
                 CPE.factoryReset().catch(function () {});
@@ -339,10 +316,10 @@
             window.location.href = '/login.html';
             return;
         }
-        bindMenu();
+        CPE.bindMenu();
         bindActions();
-        var networkTab = byId('tab-network');
-        var clientTab = byId('tab-clients');
+        var networkTab = CPE.byId('tab-network');
+        var clientTab = CPE.byId('tab-clients');
         if (networkTab) {
             networkTab.addEventListener('click', function () {
                 switchTab(true);

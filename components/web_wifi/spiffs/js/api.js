@@ -258,6 +258,41 @@ var CPE = (function () {
         return ERROR_TEXT[error.code] || ERROR_TEXT[error.message] || '操作失败，请重试';
     }
 
+    function byId(id) {
+        return document.getElementById(id);
+    }
+
+    /* Collapsible left menu, shared by every console page. */
+    function bindMenu() {
+        var menuButton = byId('menuBtn');
+        var menu = byId('leftMenu');
+        if (!menuButton || !menu) {
+            return;
+        }
+        menuButton.addEventListener('click', function () {
+            var hidden = menu.style.display === 'none';
+            menu.style.display = hidden ? 'block' : 'none';
+        });
+    }
+
+    /* Show one of two tab panels and mark the matching tab as active. Returns
+     * false when any of the elements is missing. Page-specific side effects
+     * (polling, pending edits) stay in the caller. */
+    function showTab(showFirst, firstPanelId, secondPanelId, firstTabId, secondTabId) {
+        var firstPanel = byId(firstPanelId);
+        var secondPanel = byId(secondPanelId);
+        var firstTab = byId(firstTabId);
+        var secondTab = byId(secondTabId);
+        if (!firstPanel || !secondPanel || !firstTab || !secondTab) {
+            return false;
+        }
+        firstPanel.style.display = showFirst ? 'block' : 'none';
+        secondPanel.style.display = showFirst ? 'none' : 'block';
+        firstTab.className = showFirst ? 'header-title-one active-title' : 'header-title-one';
+        secondTab.className = showFirst ? 'header-title-two' : 'header-title-two active-title';
+        return true;
+    }
+
     function createElement(tag, props) {
         var node = document.createElement(tag);
         if (props) {
@@ -413,6 +448,9 @@ var CPE = (function () {
         factoryReset: factoryReset,
         openPasswordModal: openPasswordModal,
         errorText: errorText,
-        createElement: createElement
+        createElement: createElement,
+        byId: byId,
+        bindMenu: bindMenu,
+        showTab: showTab
     };
 }());

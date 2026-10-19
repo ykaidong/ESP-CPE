@@ -8,12 +8,8 @@
 'use strict';
 
 (function () {
-    function byId(id) {
-        return document.getElementById(id);
-    }
-
     function setError(text) {
-        var node = byId('login-error');
+        var node = CPE.byId('login-error');
         if (node) {
             node.textContent = text || '';
         }
@@ -23,9 +19,9 @@
         if (event) {
             event.preventDefault();
         }
-        var usernameInput = byId('username');
-        var passwordInput = byId('password');
-        var submitButton = byId('btn-login');
+        var usernameInput = CPE.byId('username');
+        var passwordInput = CPE.byId('password');
+        var submitButton = CPE.byId('btn-login');
         if (!usernameInput || !passwordInput) {
             return;
         }
@@ -55,8 +51,8 @@
     }
 
     function init() {
-        var form = byId('login-form');
-        var submitButton = byId('btn-login');
+        var form = CPE.byId('login-form');
+        var submitButton = CPE.byId('btn-login');
         if (form) {
             form.addEventListener('submit', submitLogin);
         } else if (submitButton) {

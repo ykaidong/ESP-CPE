@@ -14,12 +14,8 @@
     var maxOtaSize = 0;
     var uploading = false;
 
-    function byId(id) {
-        return document.getElementById(id);
-    }
-
     function setStatus(message, isError) {
-        var node = byId('upgrade-status');
+        var node = CPE.byId('upgrade-status');
         if (!node) {
             return;
         }
@@ -37,26 +33,14 @@
         return value + ' 字节';
     }
 
-    function bindMenu() {
-        var menuButton = byId('menuBtn');
-        var menu = byId('leftMenu');
-        if (!menuButton || !menu) {
-            return;
-        }
-        menuButton.addEventListener('click', function () {
-            var hidden = menu.style.display === 'none';
-            menu.style.display = hidden ? 'block' : 'none';
-        });
-    }
-
     function refreshInfo() {
         CPE.getJson('/api/ota/status').then(function (info) {
-            byId('ota-version').textContent = info.version || '--';
-            byId('ota-partition').textContent = info.partition || '--';
-            byId('ota-next').textContent = info.next_partition ? info.next_partition : '（保持当前分区）';
-            byId('ota-pending').textContent = info.pending_verify ? '待验证（约 1 分钟内自动完成）' : '已确认';
+            CPE.byId('ota-version').textContent = info.version || '--';
+            CPE.byId('ota-partition').textContent = info.partition || '--';
+            CPE.byId('ota-next').textContent = info.next_partition ? info.next_partition : '（保持当前分区）';
+            CPE.byId('ota-pending').textContent = info.pending_verify ? '待验证（约 1 分钟内自动完成）' : '已确认';
             maxOtaSize = Number(info.max_image_size) || 0;
-            byId('ota-max').textContent = formatBytes(maxOtaSize);
+            CPE.byId('ota-max').textContent = formatBytes(maxOtaSize);
         }).catch(function (error) {
             if (error && error.message === 'unauthorized') {
                 return;
@@ -67,14 +51,14 @@
 
     function setBusy(busy) {
         uploading = busy;
-        byId('btn-upload').disabled = busy;
-        byId('ota-file').disabled = busy;
-        byId('btn-reboot').disabled = busy;
+        CPE.byId('btn-upload').disabled = busy;
+        CPE.byId('ota-file').disabled = busy;
+        CPE.byId('btn-reboot').disabled = busy;
     }
 
     function failUpload(code) {
         setBusy(false);
-        byId('progress-wrap').hidden = true;
+        CPE.byId('progress-wrap').hidden = true;
         var error = new Error(code || 'upload_failed');
         error.code = code || null;
         setStatus('升级失败：' + CPE.errorText(error), true);
@@ -109,7 +93,7 @@
         if (uploading) {
             return;
         }
-        var input = byId('ota-file');
+        var input = CPE.byId('ota-file');
         if (!input || !input.files || input.files.length === 0) {
             setStatus('请先选择固件文件（.bin）', true);
             return;
@@ -144,9 +128,9 @@
 
         setBusy(true);
         setStatus('正在上传…', false);
-        byId('progress-wrap').hidden = false;
-        byId('progress-bar').style.width = '0%';
-        byId('progress-text').textContent = '0%';
+        CPE.byId('progress-wrap').hidden = false;
+        CPE.byId('progress-bar').style.width = '0%';
+        CPE.byId('progress-text').textContent = '0%';
 
         var xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/ota/upload', true);
@@ -159,8 +143,8 @@
                 return;
             }
             var percent = Math.round((event.loaded * 100) / event.total);
-            byId('progress-bar').style.width = percent + '%';
-            byId('progress-text').textContent = percent + '%（' +
+            CPE.byId('progress-bar').style.width = percent + '%';
+            CPE.byId('progress-text').textContent = percent + '%（' +
                 formatBytes(event.loaded) + ' / ' + formatBytes(event.total) + '）';
         };
 
@@ -175,8 +159,8 @@
             }
             if (xhr.status >= 200 && xhr.status < 300) {
                 setBusy(false);
-                byId('progress-bar').style.width = '100%';
-                byId('progress-text').textContent = '100%';
+                CPE.byId('progress-bar').style.width = '100%';
+                CPE.byId('progress-text').textContent = '100%';
                 setStatus('升级包已写入并通过校验，设备正在重启… 请等待约 1 分钟，重新连接 Wi-Fi 后刷新页面。', false);
                 return;
             }
@@ -215,16 +199,16 @@
     }
 
     function init() {
-        bindMenu();
-        var uploadButton = byId('btn-upload');
+        CPE.bindMenu();
+        var uploadButton = CPE.byId('btn-upload');
         if (uploadButton) {
             uploadButton.addEventListener('click', upload);
         }
-        var rebootButton = byId('btn-reboot');
+        var rebootButton = CPE.byId('btn-reboot');
         if (rebootButton) {
             rebootButton.addEventListener('click', reboot);
         }
-        var backButton = byId('btn-back');
+        var backButton = CPE.byId('btn-back');
         if (backButton) {
             backButton.addEventListener('click', function () {
                 window.location.href = '/index.html';
