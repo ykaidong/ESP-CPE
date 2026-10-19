@@ -17,6 +17,7 @@
 
 #include "cpe_auth.h"
 #include "cpe_config.h"
+#include "cpe_ct.h"
 
 static const char *TAG = "cpe_auth";
 
@@ -53,23 +54,6 @@ static void random_token(char *out, size_t out_len)
     out[out_len - 1] = '\0';
 }
 
-static bool token_equal(const char *a, const char *b)
-{
-    if (a == NULL || b == NULL) {
-        return false;
-    }
-    size_t la = strlen(a);
-    size_t lb = strlen(b);
-    if (la != lb || la == 0) {
-        return false;
-    }
-    uint8_t diff = 0;
-    for (size_t i = 0; i < la; i++) {
-        diff |= (uint8_t)(a[i] ^ b[i]);
-    }
-    return diff == 0;
-}
-
 /* Must be called with s_lock held. */
 static cpe_session_t *find_session(const char *token)
 {
@@ -86,7 +70,7 @@ static cpe_session_t *find_session(const char *token)
             memset(s, 0, sizeof(*s));
             continue;
         }
-        if (token_equal(s->token, token)) {
+        if (cpe_ct_equal_str(s->token, token)) {
             return s;
         }
     }
@@ -138,7 +122,7 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
         return CPE_AUTH_ERR_CREDENTIALS;
     }
 
-    bool ok = (username != NULL) && token_equal(username, cfg.admin_user);
+    bool ok = (username != NULL) && cpe_ct_equal_str(username, cfg.admin_user);
     if (ok) {
         ok = cpe_config_check_admin_password(password);
     }
@@ -222,7 +206,7 @@ bool cpe_auth_csrf_valid(const char *session, const char *csrf)
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     cpe_session_t *s = find_session(session);
-    bool ok = (s != NULL) && token_equal(s->csrf, csrf);
+    bool ok = (s != NULL) && cpe_ct_equal_str(s->csrf, csrf);
     if (ok) {
         s->last_used_us = esp_timer_get_time();
     }

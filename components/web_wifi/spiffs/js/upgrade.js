@@ -8,7 +8,10 @@
 'use strict';
 
 (function () {
-    var MAX_OTA_SIZE = 3 * 1024 * 1024; /* keep in sync with the 3MB OTA partitions */
+    /* The limit comes from /api/ota/status (max_image_size), which is derived
+     * from the partition table; 0 means "not known yet" and lets the server
+     * decide. */
+    var maxOtaSize = 0;
     var uploading = false;
 
     function byId(id) {
@@ -52,7 +55,8 @@
             byId('ota-partition').textContent = info.partition || '--';
             byId('ota-next').textContent = info.next_partition ? info.next_partition : '（保持当前分区）';
             byId('ota-pending').textContent = info.pending_verify ? '待验证（约 1 分钟内自动完成）' : '已确认';
-            byId('ota-max').textContent = formatBytes(info.max_image_size);
+            maxOtaSize = Number(info.max_image_size) || 0;
+            byId('ota-max').textContent = formatBytes(maxOtaSize);
         }).catch(function (error) {
             if (error && error.message === 'unauthorized') {
                 return;
@@ -115,8 +119,8 @@
             setStatus('所选文件为空', true);
             return;
         }
-        if (file.size > MAX_OTA_SIZE) {
-            setStatus('所选文件超过 OTA 分区容量（' + formatBytes(MAX_OTA_SIZE) + '）', true);
+        if (maxOtaSize > 0 && file.size > maxOtaSize) {
+            setStatus('所选文件超过 OTA 分区容量（' + formatBytes(maxOtaSize) + '）', true);
             return;
         }
         fileMagicOk(file).then(function (ok) {

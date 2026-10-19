@@ -20,6 +20,7 @@
 
 #include "cpe_config.h"
 #include "cpe_recovery.h"
+#include "cpe_ct.h"
 
 static const char *TAG = "cpe_config";
 
@@ -65,15 +66,6 @@ static cpe_config_ctx_t s_cfg;
 /* ------------------------------------------------------------------------- */
 /* Small helpers                                                             */
 /* ------------------------------------------------------------------------- */
-
-static bool ct_equal(const uint8_t *a, const uint8_t *b, size_t len)
-{
-    uint8_t diff = 0;
-    for (size_t i = 0; i < len; i++) {
-        diff |= (uint8_t)(a[i] ^ b[i]);
-    }
-    return diff == 0;
-}
 
 static bool is_printable_ascii(const char *s, size_t len)
 {
@@ -568,7 +560,7 @@ bool cpe_config_check_admin_password(const char *password)
     uint8_t hash[CPE_ADMIN_HASH_LEN];
     bool ok = false;
     if (pbkdf2_sha256(password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN, hash) == ESP_OK) {
-        ok = ct_equal(hash, s_cfg.adm_hash, CPE_ADMIN_HASH_LEN);
+        ok = cpe_ct_equal(hash, s_cfg.adm_hash, CPE_ADMIN_HASH_LEN);
     }
     memset(hash, 0, sizeof(hash));
     xSemaphoreGiveRecursive(s_cfg.lock);
@@ -638,7 +630,7 @@ bool cpe_config_admin_password_is_ap_password(void)
     bool match = false;
     if (pbkdf2_sha256(s_cfg.cfg.ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
                       hash) == ESP_OK) {
-        match = ct_equal(hash, s_cfg.adm_hash, sizeof(hash));
+        match = cpe_ct_equal(hash, s_cfg.adm_hash, sizeof(hash));
     }
     memset(hash, 0, sizeof(hash));
     xSemaphoreGiveRecursive(s_cfg.lock);

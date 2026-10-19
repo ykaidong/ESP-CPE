@@ -333,6 +333,12 @@
     }
 
     function init() {
+        /* Without a CSRF token this browser has no session to probe; go to the
+         * login page directly instead of triggering a 401 on /api/status. */
+        if (!CPE.getCsrf()) {
+            window.location.href = '/login.html';
+            return;
+        }
         bindMenu();
         bindActions();
         var networkTab = byId('tab-network');

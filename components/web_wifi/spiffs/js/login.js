@@ -62,12 +62,16 @@
         } else if (submitButton) {
             submitButton.addEventListener('click', submitLogin);
         }
-        /* Already authenticated? Go straight to the status page. */
-        CPE.getStatus().then(function () {
-            window.location.href = '/index.html';
-        }).catch(function () {
-            /* Not logged in yet - stay on this page. */
-        });
+        /* Already authenticated? Go straight to the status page. When this
+         * browser holds no CSRF token it has never logged in, so the probe is
+         * skipped to avoid a guaranteed 401 on every visit/refresh. */
+        if (CPE.getCsrf()) {
+            CPE.getStatus().then(function () {
+                window.location.href = '/index.html';
+            }).catch(function () {
+                /* Not logged in yet - stay on this page. */
+            });
+        }
     }
 
     document.addEventListener('DOMContentLoaded', init);

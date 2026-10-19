@@ -20,26 +20,6 @@
     --light-blue-color-p-1: rgba(178, 178, 178, .1);
     --border-radius: 16px;
     --border-radius-small: 10px;
-    --bg-image: url('../images/bg.png');
-    --logo: var(--bg-image) -250px -10px;
-    --qr: var(--bg-image) -10px -10px;
-    --light: var(--bg-image) -75px -250px;
-    --light-online: var(--bg-image) -10px -250px;
-    --fan: var(--bg-image) -250px -151px;
-    --fan-online: var(--bg-image) -250px -86px;
-    --router: var(--bg-image) -205px -250px;
-    --router-online: var(--bg-image) -140px -250px;
-    --sensor: var(--bg-image) -326px -75px;
-    --sensor-online: var(--bg-image) -326px -10px;
-    --socket: var(--bg-image) -326px -205px;
-    --socket-online: var(--bg-image) -326px -140px;
-    --switch: var(--bg-image) -75px -315px;
-    --switch-online: var(--bg-image) -10px -315px;
-}
-@font-face {font-family: "iconfont";
-    src: url('../fonts/iconfont.woff2') format('woff2'),
-    url('../fonts/iconfont.woff') format('woff'),
-    url('../fonts/iconfont.ttf') format('truetype');
 }
 
 .iconfont {
@@ -629,25 +609,6 @@ th {
     height: 45px;
     transform: scale(.8);
 }
-.no-data .img-wrap .img .light {
-    background: var(--light);
-}
-.no-data .img-wrap .img .switch {
-    background: var(--switch);
-}
-.no-data .img-wrap .img .socket {
-    background: var(--socket);
-}
-.no-data .img-wrap .img .fan {
-    background: var(--fan);
-}
-.no-data .img-wrap .img .sensor {
-    background: var(--sensor)
-}
-.no-data .img-wrap .img .router {
-    background: var(--router);
-}
-
 .no-data .add-wrap {
     margin-top: 20px;
     text-align: center;
@@ -694,7 +655,6 @@ th {
     position: relative;
     margin: 0 auto;
     padding: 20px;
-    background: var(--qr);
     width: 70vw;
     height: 70vw;
     max-width: 220px;
@@ -723,8 +683,6 @@ th {
     min-height: 56px;
     min-width: 56px;
     transform: translate(-50%, -50%);
-    background: var(--logo);
-
 }
 .loading-wrap .text {
     font-size: var(--font-size-normal);
@@ -797,42 +755,6 @@ th {
     width: 45px;
     height: 45px;
 }
-.container-wrap .main-content .item-wrap .item .item-header .item-img > div.light {
-    background: var(--light);
-}
-.container-wrap .main-content .item-wrap .item .item-header.active .item-img > div.light {
-    background: var(--light-online);
-}
-.container-wrap .main-content .item-wrap .item .item-header .item-img > div.switch {
-    background: var(--switch);
-}
-.container-wrap .main-content .item-wrap .item .item-header.active .item-img > div.switch {
-    background: var(--switch-online);
-}
-.container-wrap .main-content .item-wrap .item .item-header .item-img > div.socket {
-    background: var(--socket);
-}
-.container-wrap .main-content .item-wrap .item .item-header.active .item-img > div.socket {
-    background: var(--socket-online);
-}
-.container-wrap .main-content .item-wrap .item .item-header .item-img > div.fan {
-    background: var(--fan);
-}
-.container-wrap .main-content .item-wrap .item .item-header.active .item-img > div.fan {
-    background: var(--fan-online);
-}
-.container-wrap .main-content .item-wrap .item .item-header .item-img > div.sensor {
-    background: var(--sensor);
-}
-.container-wrap .main-content .item-wrap .item .item-header.active .item-img > div.sensor {
-    background: var(--sensor-online);
-}
-.container-wrap .main-content .item-wrap .item .item-header .item-img > div.router {
-    background: var(--router);
-}
-.container-wrap .main-content .item-wrap .item .item-header.active .item-img > div.router {
-    background: var(--router-online);
-}
 .device-type-wrap {
     text-align: left;
     padding-bottom: 4px;
@@ -859,24 +781,6 @@ th {
     width: 45px;
     height: 45px;
     margin-right: 10px;
-}
-.device-type-wrap .item .img.light {
-    background: var(--light-online);
-}
-.device-type-wrap .item .img.switch {
-    background: var(--switch-online);
-}
-.device-type-wrap .item .img.socket {
-    background: var(--socket-online);
-}
-.device-type-wrap .item .img.fan {
-    background: var(--fan-online);
-}
-.device-type-wrap .item .img.sensor {
-    background: var(--sensor-online);
-}
-.device-type-wrap .item .img.router {
-    background: var(--router-online);
 }
 .device-type-wrap .item.disabled {
      background: var(--light-blue-color-p-1);
