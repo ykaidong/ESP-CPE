@@ -84,14 +84,30 @@ esp_err_t cpe_config_validate_max_sta(int max_sta);
 esp_err_t cpe_config_validate_device_name(const char *name);
 
 /**
- * @brief Update SoftAP settings (persisted only if all values are valid).
+ * @brief Callback used by cpe_config_update() to edit a working copy.
  *
- * @param password  New password, or NULL to keep the current one.
+ * Runs with the internal configuration lock held: only modify fields of
+ * @p cfg. Do not block, touch NVS or the radio, and do not call another
+ * configuration update from inside the callback.
+ *
+ * @return ESP_OK to commit the copy, or an error to abort the update.
  */
-esp_err_t cpe_config_set_ap(const char *ssid, const char *password,
-                            int channel, int bandwidth, bool hidden, int max_sta);
+typedef esp_err_t (*cpe_config_mutator_t)(cpe_config_t *cfg, void *ctx);
 
-esp_err_t cpe_config_set_device_name(const char *name);
+/**
+ * @brief Apply a configuration change as one transaction.
+ *
+ * The mutator edits a copy of the current configuration under the lock. The
+ * result is validated as a whole and only the changed NVS keys are written.
+ * Previously written keys are restored if a write fails, and the in-memory
+ * configuration is left untouched on any error.
+ *
+ * @param mutate  Callback that applies the change to the working copy.
+ * @param ctx     Opaque pointer passed to the callback.
+ * @return ESP_OK on success, ESP_ERR_INVALID_STATE before init or while a
+ *         factory reset is pending reboot, or another IDF error code.
+ */
+esp_err_t cpe_config_update(cpe_config_mutator_t mutate, void *ctx);
 
 /**
  * @brief Verify the admin password against the stored PBKDF2 hash (constant time).

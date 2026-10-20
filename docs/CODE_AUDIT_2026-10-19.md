@@ -22,6 +22,7 @@
 - **B1 已修复**：新增 `cpe_web_post_ctx_t` 与 `cpe_web_post_begin()` / `cpe_web_post_end()`（`http_common.c`），统一前置校验、会话/CSRF、读体、深度检查、解析与缓冲擦除；三个 API 文件中的 9 个 JSON POST handler 全部迁移。二进制 OTA 上传与 GET handler 不在模板范围内。
 - **JSON 解析层已迁移到 cJSON**：移除 `json_parser` 依赖，改用组件管理器提供的 `espressif/cjson`（1.7.19）。`cpe_web_post_ctx_t` 持有 `cJSON*`，三个取值 helper 保留原有语义（字符串/整数的严格类型判断、缺失与类型错误的区分）；解析仍要求单一顶层对象且无尾随数据。响应构造暂时保留 `sbuf`，输出层不在本次范围内。
 - **A4 已修复**：`link_manager_task()` 重构为显式状态机（`lm_phase_t` + `lm_ctx_t`），初始化、状态服务、IP/USB 等待与每种恢复动作拆成独立函数；500ms 轮询、全部阈值、阻塞时长、日志文本以及 NVS/NAPT 副作用顺序保持不变。
+- **A3 已修复**：新增 `cpe_config_update(mutate, ctx)` 事务接口，只写变更的 NVS key，失败时定向回滚；`api_wlan.c` 的两次手工“失败写回”已删除。详见 A3 小节。
 - **待处理**：第三节死代码。其中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
 
 ---
@@ -50,10 +51,20 @@
 
 ### A3. 配置持久化模型是“全量重写”
 
-`cpe_config.c:232 persist_locked()` 每次 setter 都把全部 NVS key 重写一遍（SSID、口令、信道、带宽、max_sta、STA、管理员 hash……）。改一个字段也触发几十次 `nvs_set_*`，失败时无法做单事务回滚，只能靠调用方手动“先应用、失败再写回”。建议：
+`cpe_config.c` 的 `persist_locked()`（修复前行号 236）每次 setter 都把全部 NVS key 重写一遍（SSID、口令、信道、带宽、max_sta、STA、管理员 hash……）。改一个字段也触发几十次 `nvs_set_*`，失败时无法做单事务回滚，只能靠调用方手动“先应用、失败再写回”。建议：
 
 - 提供单一的 `cpe_config_update(apply_fn)` 事务接口，或
 - 只写变更的 key，并集中处理失败回滚。
+
+**处理结果**：两条建议都已落地。
+
+- 新增 `cpe_config_update(cpe_config_mutator_t mutate, void *ctx)`：在锁内对当前配置的副本执行 mutator，整体校验后提交；成功才替换内存状态，失败时内存与 NVS 都保持原值。`api_wlan.c` 的两个 POST handler 改为一次性提交全部变更，删除了 `cpe_config_set_ap()` / `cpe_config_set_device_name()` 以及“先改设备名、失败再写回”的补偿代码。
+- 持久化拆为 `persist_full_locked()`（首次启动/恢复出厂）与 `persist_diff_locked()`（日常更新）。后者只写与旧状态不同的 key；任一步失败时按逆序把已尝试的 key 写回旧值。管理员改密也改为快照式 diff，只写 `adm_salt/adm_hash/adm_mc`。
+- 配置内存状态收进 `cpe_config_state_t` 快照，避免“改了半个结构体”的中间态。
+- 删除只写不读的 `cred_gen` 键。
+- 恢复出厂成功后置 `reset_pending_reboot`，拒绝复位到重启窗口内的并发配置写入，避免旧快照覆盖出厂设置。
+
+**边界说明**：ESP-IDF v6.1 的 NVS 为写穿模型（`nvs_set_*` 立即落盘，`nvs_commit()` 是 no-op），因此本实现是“逐 key 定向回滚”的 best-effort 事务，而不是跨 key 的原子提交；两次写入之间掉电仍可能留下部分新、部分旧的值。要获得严格原子性需要单 blob 或 A/B slot + 序号，成本与本项目收益不匹配，暂不实施。
 
 ### A4. 链路管理状态机是单函数 200 行
 
@@ -226,6 +237,8 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
    已完成。
 4. ~~**下一步**：B1（先拆文件，再抽 handler 模板）。~~
    已完成（POST 模板 + cJSON 解析层）。
-5. **随后**：A3（配置事务接口）、A2（组件职责拆分）；第三节剩余死代码（已分类的预留项保持不动）。
+5. ~~A3（配置事务接口）。~~
+   已完成。
+6. **下一步**：A2（把 `app_wifi` 与 Web 管理面拆成两个组件）；随后处理第三节剩余死代码（已分类的预留项保持不动）。
 
-B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A4 已完成；A5 已按删除处理；其余死代码待处理。
+B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A3、A4 已完成；A5 已按删除处理；A2 与其余死代码待处理。

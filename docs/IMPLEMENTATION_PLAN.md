@@ -87,7 +87,7 @@ app_main
 
 ### 3.1 共享接口契约（跨组件冻结）
 
-- `cpe_config.h`：`cpe_config_init()`, `cpe_config_get()`, `cpe_config_set_ap()`, `cpe_config_set_device_name()`, `cpe_config_factory_reset()`, 校验函数。
+- `cpe_config.h`：`cpe_config_init()`, `cpe_config_get()`, `cpe_config_update()`（mutator 事务接口）, `cpe_config_factory_reset()`, 校验函数。
 - `cpe_auth.h`：`cpe_auth_login()`, `cpe_auth_session_valid()`, `cpe_auth_csrf_valid()`, `cpe_auth_logout()`, `cpe_auth_change_password()`, `cpe_auth_must_change()`。
 - `cpe_status.h`：`cpe_status_get()`, `cpe_status_set_state()/set_usb()/set_link()/set_ip()/set_error()`。
 - `web_wifi`（由 Web 工作流负责实现）：

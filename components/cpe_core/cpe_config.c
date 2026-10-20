@@ -43,23 +43,60 @@ static const char *TAG = "cpe_config";
 #define NVS_KEY_ADM_SALT    "adm_salt"
 #define NVS_KEY_ADM_HASH    "adm_hash"
 #define NVS_KEY_ADM_MC      "adm_mc"
-#define NVS_KEY_CRED_GEN    "cred_gen"
 
 static const char PASSWORD_ALPHABET[] =
     "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+
+/* The whole persisted state in one snapshot: a transaction builds the next
+ * state locally and only publishes it after every NVS write succeeded. */
+typedef struct {
+    cpe_config_t cfg;
+    uint8_t adm_salt[CPE_ADMIN_SALT_LEN];
+    uint8_t adm_hash[CPE_ADMIN_HASH_LEN];
+    bool adm_must_change;
+} cpe_config_state_t;
 
 typedef struct {
     SemaphoreHandle_t lock;
     nvs_handle_t nvs;
     bool inited;
     bool first_boot;
-    cpe_config_t cfg;
-    uint8_t adm_salt[CPE_ADMIN_SALT_LEN];
-    uint8_t adm_hash[CPE_ADMIN_HASH_LEN];
-    bool adm_must_change;
+    bool reset_pending_reboot;
+    cpe_config_state_t state;
 } cpe_config_ctx_t;
 
 static cpe_config_ctx_t s_cfg;
+
+/* Keys written by a transaction. The schema version is only written while
+ * creating the namespace (first boot / factory reset), so it is not listed. */
+typedef enum {
+    CFG_KEY_AP_SSID = 0,
+    CFG_KEY_AP_PASS,
+    CFG_KEY_AP_CHANNEL,
+    CFG_KEY_AP_BW,
+    CFG_KEY_AP_HIDDEN,
+    CFG_KEY_AP_MAX_STA,
+    CFG_KEY_DEV_NAME,
+    CFG_KEY_ADM_USER,
+    CFG_KEY_ADM_SALT,
+    CFG_KEY_ADM_HASH,
+    CFG_KEY_ADM_MC,
+    CFG_KEY_COUNT,
+} cfg_key_t;
+
+static const char *const s_key_names[CFG_KEY_COUNT] = {
+    NVS_KEY_AP_SSID,
+    NVS_KEY_AP_PASS,
+    NVS_KEY_AP_CHANNEL,
+    NVS_KEY_AP_BW,
+    NVS_KEY_AP_HIDDEN,
+    NVS_KEY_AP_MAX_STA,
+    NVS_KEY_DEV_NAME,
+    NVS_KEY_ADM_USER,
+    NVS_KEY_ADM_SALT,
+    NVS_KEY_ADM_HASH,
+    NVS_KEY_ADM_MC,
+};
 
 /* ------------------------------------------------------------------------- */
 /* Small helpers                                                             */
@@ -195,9 +232,9 @@ esp_err_t cpe_config_validate_device_name(const char *name)
 /* Defaults / persistence                                                    */
 /* ------------------------------------------------------------------------- */
 
-static esp_err_t apply_defaults_locked(bool regenerate_credentials)
+static esp_err_t apply_defaults(cpe_config_state_t *st, bool regenerate_credentials)
 {
-    cpe_config_t *cfg = &s_cfg.cfg;
+    cpe_config_t *cfg = &st->cfg;
     memset(cfg, 0, sizeof(*cfg));
 
     uint8_t mac[6] = {0};
@@ -217,61 +254,89 @@ static esp_err_t apply_defaults_locked(bool regenerate_credentials)
     snprintf(cfg->device_name, sizeof(cfg->device_name), "%s", CONFIG_CPE_DEVICE_NAME);
 
     if (regenerate_credentials) {
-        esp_err_t err = pbkdf2_sha256(cfg->ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
-                                      s_cfg.adm_hash);
+        esp_err_t err = pbkdf2_sha256(cfg->ap_password, st->adm_salt, CPE_ADMIN_SALT_LEN,
+                                      st->adm_hash);
         if (err != ESP_OK) {
             /* Never persist an all-zero hash: the admin account would be
              * permanently unusable. Fail the boot instead. */
-            memset(s_cfg.adm_hash, 0, sizeof(s_cfg.adm_hash));
+            memset(st->adm_hash, 0, sizeof(st->adm_hash));
             ESP_LOGE(TAG, "Cannot derive the initial admin password hash");
             return err;
         }
         /* The initial admin password equals the AP password: whoever can join
          * the AP can log in, and is then forced to change it. */
-        s_cfg.adm_must_change = true;
+        st->adm_must_change = true;
     }
     return ESP_OK;
 }
 
-static esp_err_t persist_locked(void)
+static bool key_changed(cfg_key_t key, const cpe_config_state_t *a,
+                        const cpe_config_state_t *b)
 {
-    cpe_config_t *cfg = &s_cfg.cfg;
+    switch (key) {
+    case CFG_KEY_AP_SSID:
+        return strcmp(a->cfg.ap_ssid, b->cfg.ap_ssid) != 0;
+    case CFG_KEY_AP_PASS:
+        return strcmp(a->cfg.ap_password, b->cfg.ap_password) != 0;
+    case CFG_KEY_AP_CHANNEL:
+        return a->cfg.ap_channel != b->cfg.ap_channel;
+    case CFG_KEY_AP_BW:
+        return a->cfg.ap_bandwidth != b->cfg.ap_bandwidth;
+    case CFG_KEY_AP_HIDDEN:
+        return a->cfg.ap_hidden != b->cfg.ap_hidden;
+    case CFG_KEY_AP_MAX_STA:
+        return a->cfg.max_sta != b->cfg.max_sta;
+    case CFG_KEY_DEV_NAME:
+        return strcmp(a->cfg.device_name, b->cfg.device_name) != 0;
+    case CFG_KEY_ADM_USER:
+        return strcmp(a->cfg.admin_user, b->cfg.admin_user) != 0;
+    case CFG_KEY_ADM_SALT:
+        return memcmp(a->adm_salt, b->adm_salt, sizeof(a->adm_salt)) != 0;
+    case CFG_KEY_ADM_HASH:
+        return memcmp(a->adm_hash, b->adm_hash, sizeof(a->adm_hash)) != 0;
+    case CFG_KEY_ADM_MC:
+        return a->adm_must_change != b->adm_must_change;
+    default:
+        return false;
+    }
+}
+
+static esp_err_t write_key_locked(cfg_key_t key, const cpe_config_state_t *st)
+{
+    switch (key) {
+    case CFG_KEY_AP_SSID:
+        return nvs_write_str(s_cfg.nvs, NVS_KEY_AP_SSID, st->cfg.ap_ssid);
+    case CFG_KEY_AP_PASS:
+        return nvs_write_str(s_cfg.nvs, NVS_KEY_AP_PASS, st->cfg.ap_password);
+    case CFG_KEY_AP_CHANNEL:
+        return nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_CHANNEL, st->cfg.ap_channel);
+    case CFG_KEY_AP_BW:
+        return nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_BW, st->cfg.ap_bandwidth);
+    case CFG_KEY_AP_HIDDEN:
+        return nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_HIDDEN, st->cfg.ap_hidden ? 1 : 0);
+    case CFG_KEY_AP_MAX_STA:
+        return nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_MAX_STA, st->cfg.max_sta);
+    case CFG_KEY_DEV_NAME:
+        return nvs_write_str(s_cfg.nvs, NVS_KEY_DEV_NAME, st->cfg.device_name);
+    case CFG_KEY_ADM_USER:
+        return nvs_write_str(s_cfg.nvs, NVS_KEY_ADM_USER, st->cfg.admin_user);
+    case CFG_KEY_ADM_SALT:
+        return nvs_set_blob(s_cfg.nvs, NVS_KEY_ADM_SALT, st->adm_salt, sizeof(st->adm_salt));
+    case CFG_KEY_ADM_HASH:
+        return nvs_set_blob(s_cfg.nvs, NVS_KEY_ADM_HASH, st->adm_hash, sizeof(st->adm_hash));
+    case CFG_KEY_ADM_MC:
+        return nvs_set_u8(s_cfg.nvs, NVS_KEY_ADM_MC, st->adm_must_change ? 1 : 0);
+    default:
+        return ESP_ERR_INVALID_ARG;
+    }
+}
+
+/* Create (or recreate) the whole namespace: first boot and factory reset. */
+static esp_err_t persist_full_locked(const cpe_config_state_t *st)
+{
     esp_err_t err = nvs_set_u32(s_cfg.nvs, NVS_KEY_VERSION, CPE_CFG_VERSION);
-    if (err == ESP_OK) {
-        err = nvs_write_str(s_cfg.nvs, NVS_KEY_AP_SSID, cfg->ap_ssid);
-    }
-    if (err == ESP_OK) {
-        err = nvs_write_str(s_cfg.nvs, NVS_KEY_AP_PASS, cfg->ap_password);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_CHANNEL, cfg->ap_channel);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_BW, cfg->ap_bandwidth);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_HIDDEN, cfg->ap_hidden ? 1 : 0);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(s_cfg.nvs, NVS_KEY_AP_MAX_STA, cfg->max_sta);
-    }
-    if (err == ESP_OK) {
-        err = nvs_write_str(s_cfg.nvs, NVS_KEY_DEV_NAME, cfg->device_name);
-    }
-    if (err == ESP_OK) {
-        err = nvs_write_str(s_cfg.nvs, NVS_KEY_ADM_USER, cfg->admin_user);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_blob(s_cfg.nvs, NVS_KEY_ADM_SALT, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_blob(s_cfg.nvs, NVS_KEY_ADM_HASH, s_cfg.adm_hash, CPE_ADMIN_HASH_LEN);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(s_cfg.nvs, NVS_KEY_ADM_MC, s_cfg.adm_must_change ? 1 : 0);
-    }
-    if (err == ESP_OK) {
-        err = nvs_set_u8(s_cfg.nvs, NVS_KEY_CRED_GEN, 1);
+    for (int i = 0; err == ESP_OK && i < CFG_KEY_COUNT; i++) {
+        err = write_key_locked((cfg_key_t)i, st);
     }
     if (err == ESP_OK) {
         err = nvs_commit(s_cfg.nvs);
@@ -282,10 +347,59 @@ static esp_err_t persist_locked(void)
     return err;
 }
 
-static bool load_locked(bool *found)
+/* Write only the keys that differ from `old`. IDF v6.1 NVS is write-through
+ * (nvs_commit() is a no-op), so a failure halfway through has already changed
+ * flash: put every attempted key back to its old value before returning. */
+static esp_err_t persist_diff_locked(const cpe_config_state_t *old,
+                                     const cpe_config_state_t *next)
 {
-    cpe_config_t *cfg = &s_cfg.cfg;
-    memset(cfg, 0, sizeof(*cfg));
+    cfg_key_t attempted[CFG_KEY_COUNT];
+    size_t attempted_count = 0;
+    esp_err_t err = ESP_OK;
+
+    for (int i = 0; i < CFG_KEY_COUNT; i++) {
+        cfg_key_t key = (cfg_key_t)i;
+        if (!key_changed(key, old, next)) {
+            continue;
+        }
+        attempted[attempted_count++] = key;
+        err = write_key_locked(key, next);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to persist %s: %s", s_key_names[key], esp_err_to_name(err));
+            break;
+        }
+    }
+
+    if (err == ESP_OK && attempted_count > 0) {
+        err = nvs_commit(s_cfg.nvs);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to commit configuration: %s", esp_err_to_name(err));
+        }
+    }
+    if (err == ESP_OK) {
+        return ESP_OK;
+    }
+
+    while (attempted_count > 0) {
+        cfg_key_t key = attempted[--attempted_count];
+        esp_err_t rollback_err = write_key_locked(key, old);
+        if (rollback_err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to roll back %s: %s",
+                     s_key_names[key], esp_err_to_name(rollback_err));
+        }
+    }
+    esp_err_t rollback_err = nvs_commit(s_cfg.nvs);
+    if (rollback_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to commit configuration rollback: %s",
+                 esp_err_to_name(rollback_err));
+    }
+    return err;
+}
+
+static bool load_locked(cpe_config_state_t *st, bool *found)
+{
+    cpe_config_t *cfg = &st->cfg;
+    memset(st, 0, sizeof(*st));
 
     uint32_t ver = 0;
     if (nvs_get_u32(s_cfg.nvs, NVS_KEY_VERSION, &ver) != ESP_OK || ver != CPE_CFG_VERSION) {
@@ -312,13 +426,13 @@ static bool load_locked(bool *found)
     ok &= (nvs_read_str(s_cfg.nvs, NVS_KEY_ADM_USER, cfg->admin_user, sizeof(cfg->admin_user)) == ESP_OK);
 
     size_t blob_len = CPE_ADMIN_SALT_LEN;
-    ok &= (nvs_get_blob(s_cfg.nvs, NVS_KEY_ADM_SALT, s_cfg.adm_salt, &blob_len) == ESP_OK &&
+    ok &= (nvs_get_blob(s_cfg.nvs, NVS_KEY_ADM_SALT, st->adm_salt, &blob_len) == ESP_OK &&
            blob_len == CPE_ADMIN_SALT_LEN);
     blob_len = CPE_ADMIN_HASH_LEN;
-    ok &= (nvs_get_blob(s_cfg.nvs, NVS_KEY_ADM_HASH, s_cfg.adm_hash, &blob_len) == ESP_OK &&
+    ok &= (nvs_get_blob(s_cfg.nvs, NVS_KEY_ADM_HASH, st->adm_hash, &blob_len) == ESP_OK &&
            blob_len == CPE_ADMIN_HASH_LEN);
     ok &= (nvs_get_u8(s_cfg.nvs, NVS_KEY_ADM_MC, &u8) == ESP_OK);
-    s_cfg.adm_must_change = u8 != 0;
+    st->adm_must_change = u8 != 0;
 
     *found = true;
 
@@ -356,9 +470,6 @@ esp_err_t cpe_config_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    /* Random salt for the admin password must exist before the first hash. */
-    esp_fill_random(s_cfg.adm_salt, CPE_ADMIN_SALT_LEN);
-
     if (psa_crypto_init() != PSA_SUCCESS) {
         ESP_LOGE(TAG, "psa_crypto_init failed");
         return ESP_FAIL;
@@ -371,29 +482,34 @@ esp_err_t cpe_config_init(void)
     }
 
     bool found = false;
-    bool valid = load_locked(&found);
+    cpe_config_state_t state;
+    bool valid = load_locked(&state, &found);
     bool generated = false;
 
     if (!found || !valid) {
-        /* If the namespace was found but invalid, module-level defaults keep
-         * the read values; regenerate everything to a known-good state. */
-        esp_fill_random(s_cfg.adm_salt, CPE_ADMIN_SALT_LEN);
-        err = apply_defaults_locked(true);
+        /* If the namespace was found but invalid, regenerate everything to a
+         * known-good state instead of keeping the partially read values. */
+        memset(&state, 0, sizeof(state));
+        esp_fill_random(state.adm_salt, CPE_ADMIN_SALT_LEN);
+        err = apply_defaults(&state, true);
+        if (err == ESP_OK) {
+            err = persist_full_locked(&state);
+        }
         if (err != ESP_OK) {
+            memset(&state, 0, sizeof(state));
             return err;
         }
         generated = true;
-        err = persist_locked();
-        if (err != ESP_OK) {
-            return err;
-        }
     }
+    s_cfg.state = state;
+    memset(&state, 0, sizeof(state));
 
     s_cfg.first_boot = generated;
     s_cfg.inited = true;
 
     ESP_LOGI(TAG, "Configuration loaded: AP SSID \"%s\", channel %u, '%uMHz', admin \"%s\"",
-             s_cfg.cfg.ap_ssid, s_cfg.cfg.ap_channel, s_cfg.cfg.ap_bandwidth, s_cfg.cfg.admin_user);
+             s_cfg.state.cfg.ap_ssid, s_cfg.state.cfg.ap_channel, s_cfg.state.cfg.ap_bandwidth,
+             s_cfg.state.cfg.admin_user);
     if (generated) {
         cpe_config_print_credentials("first boot");
     }
@@ -406,7 +522,7 @@ esp_err_t cpe_config_get(cpe_config_t *out)
         return ESP_ERR_INVALID_STATE;
     }
     xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-    *out = s_cfg.cfg;
+    *out = s_cfg.state.cfg;
     xSemaphoreGiveRecursive(s_cfg.lock);
     return ESP_OK;
 }
@@ -445,63 +561,54 @@ void cpe_config_print_credentials(const char *reason)
     ESP_LOGW(TAG, "==================================================");
 }
 
-esp_err_t cpe_config_set_ap(const char *ssid, const char *password,
-                            int channel, int bandwidth, bool hidden, int max_sta)
+static esp_err_t validate_cfg(const cpe_config_t *cfg)
 {
-    if (!s_cfg.inited) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    esp_err_t err = cpe_config_validate_ap_ssid(ssid);
+    esp_err_t err = cpe_config_validate_ap_ssid(cfg->ap_ssid);
     if (err == ESP_OK) {
-        err = cpe_config_validate_channel(channel);
+        err = cpe_config_validate_wifi_password(cfg->ap_password);
     }
     if (err == ESP_OK) {
-        err = cpe_config_validate_bandwidth(bandwidth);
+        err = cpe_config_validate_channel(cfg->ap_channel);
     }
     if (err == ESP_OK) {
-        err = cpe_config_validate_max_sta(max_sta);
+        err = cpe_config_validate_bandwidth(cfg->ap_bandwidth);
     }
-    if (err == ESP_OK && password != NULL) {
-        err = cpe_config_validate_wifi_password(password);
+    if (err == ESP_OK) {
+        err = cpe_config_validate_max_sta(cfg->max_sta);
     }
-    if (err != ESP_OK) {
-        return err;
+    if (err == ESP_OK) {
+        err = cpe_config_validate_device_name(cfg->device_name);
     }
-
-    xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-    cpe_config_t backup = s_cfg.cfg;
-    snprintf(s_cfg.cfg.ap_ssid, sizeof(s_cfg.cfg.ap_ssid), "%s", ssid);
-    if (password != NULL) {
-        snprintf(s_cfg.cfg.ap_password, sizeof(s_cfg.cfg.ap_password), "%s", password);
+    if (err == ESP_OK && cfg->admin_user[0] == '\0') {
+        err = ESP_ERR_INVALID_ARG;
     }
-    s_cfg.cfg.ap_channel = (uint8_t)channel;
-    s_cfg.cfg.ap_bandwidth = (uint8_t)bandwidth;
-    s_cfg.cfg.ap_hidden = hidden;
-    s_cfg.cfg.max_sta = (uint8_t)max_sta;
-    err = persist_locked();
-    if (err != ESP_OK) {
-        s_cfg.cfg = backup;
-    }
-    xSemaphoreGiveRecursive(s_cfg.lock);
     return err;
 }
 
-esp_err_t cpe_config_set_device_name(const char *name)
+esp_err_t cpe_config_update(cpe_config_mutator_t mutate, void *ctx)
 {
     if (!s_cfg.inited) {
         return ESP_ERR_INVALID_STATE;
     }
-    esp_err_t err = cpe_config_validate_device_name(name);
-    if (err != ESP_OK) {
-        return err;
+    if (mutate == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
+
     xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-    char backup[sizeof(s_cfg.cfg.device_name)];
-    memcpy(backup, s_cfg.cfg.device_name, sizeof(backup));
-    snprintf(s_cfg.cfg.device_name, sizeof(s_cfg.cfg.device_name), "%s", name);
-    err = persist_locked();
-    if (err != ESP_OK) {
-        memcpy(s_cfg.cfg.device_name, backup, sizeof(backup));
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+    if (!s_cfg.reset_pending_reboot) {
+        cpe_config_state_t next = s_cfg.state;
+        err = mutate(&next.cfg, ctx);
+        if (err == ESP_OK) {
+            err = validate_cfg(&next.cfg);
+        }
+        if (err == ESP_OK) {
+            err = persist_diff_locked(&s_cfg.state, &next);
+            if (err == ESP_OK) {
+                s_cfg.state = next;
+            }
+        }
+        memset(&next, 0, sizeof(next));
     }
     xSemaphoreGiveRecursive(s_cfg.lock);
     return err;
@@ -515,8 +622,8 @@ bool cpe_config_check_admin_password(const char *password)
     xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
     uint8_t hash[CPE_ADMIN_HASH_LEN];
     bool ok = false;
-    if (pbkdf2_sha256(password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN, hash) == ESP_OK) {
-        ok = cpe_ct_equal(hash, s_cfg.adm_hash, CPE_ADMIN_HASH_LEN);
+    if (pbkdf2_sha256(password, s_cfg.state.adm_salt, CPE_ADMIN_SALT_LEN, hash) == ESP_OK) {
+        ok = cpe_ct_equal(hash, s_cfg.state.adm_hash, CPE_ADMIN_HASH_LEN);
     }
     memset(hash, 0, sizeof(hash));
     xSemaphoreGiveRecursive(s_cfg.lock);
@@ -544,20 +651,17 @@ esp_err_t cpe_config_set_admin_password(const char *new_password, bool must_chan
     }
 
     xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-    uint8_t old_salt[CPE_ADMIN_SALT_LEN];
-    uint8_t old_hash[CPE_ADMIN_HASH_LEN];
-    bool old_mc = s_cfg.adm_must_change;
-    memcpy(old_salt, s_cfg.adm_salt, sizeof(old_salt));
-    memcpy(old_hash, s_cfg.adm_hash, sizeof(old_hash));
-
-    memcpy(s_cfg.adm_salt, salt, sizeof(salt));
-    memcpy(s_cfg.adm_hash, hash, sizeof(hash));
-    s_cfg.adm_must_change = must_change;
-    err = persist_locked();
-    if (err != ESP_OK) {
-        memcpy(s_cfg.adm_salt, old_salt, sizeof(old_salt));
-        memcpy(s_cfg.adm_hash, old_hash, sizeof(old_hash));
-        s_cfg.adm_must_change = old_mc;
+    err = ESP_ERR_INVALID_STATE;
+    if (!s_cfg.reset_pending_reboot) {
+        cpe_config_state_t next = s_cfg.state;
+        memcpy(next.adm_salt, salt, sizeof(salt));
+        memcpy(next.adm_hash, hash, sizeof(hash));
+        next.adm_must_change = must_change;
+        err = persist_diff_locked(&s_cfg.state, &next);
+        if (err == ESP_OK) {
+            s_cfg.state = next;
+        }
+        memset(&next, 0, sizeof(next));
     }
     xSemaphoreGiveRecursive(s_cfg.lock);
     memset(salt, 0, sizeof(salt));
@@ -571,7 +675,7 @@ bool cpe_config_admin_must_change(void)
         return true;
     }
     xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-    bool mc = s_cfg.adm_must_change;
+    bool mc = s_cfg.state.adm_must_change;
     xSemaphoreGiveRecursive(s_cfg.lock);
     return mc;
 }
@@ -584,9 +688,9 @@ bool cpe_config_admin_password_is_ap_password(void)
     xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
     uint8_t hash[CPE_ADMIN_HASH_LEN];
     bool match = false;
-    if (pbkdf2_sha256(s_cfg.cfg.ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
+    if (pbkdf2_sha256(s_cfg.state.cfg.ap_password, s_cfg.state.adm_salt, CPE_ADMIN_SALT_LEN,
                       hash) == ESP_OK) {
-        match = cpe_ct_equal(hash, s_cfg.adm_hash, sizeof(hash));
+        match = cpe_ct_equal(hash, s_cfg.state.adm_hash, sizeof(hash));
     }
     memset(hash, 0, sizeof(hash));
     xSemaphoreGiveRecursive(s_cfg.lock);
@@ -604,36 +708,46 @@ esp_err_t cpe_config_factory_reset(void)
      * SoftAP (the new random password would only be visible on the UART).
      * Keep the device-unique AP SSID/password, reset everything else and set
      * the admin password back to the AP password (forced change on login). */
-    char keep_ssid[sizeof(s_cfg.cfg.ap_ssid)];
-    char keep_password[sizeof(s_cfg.cfg.ap_password)];
-    memcpy(keep_ssid, s_cfg.cfg.ap_ssid, sizeof(keep_ssid));
-    memcpy(keep_password, s_cfg.cfg.ap_password, sizeof(keep_password));
+    char keep_ssid[sizeof(s_cfg.state.cfg.ap_ssid)];
+    char keep_password[sizeof(s_cfg.state.cfg.ap_password)];
+    memcpy(keep_ssid, s_cfg.state.cfg.ap_ssid, sizeof(keep_ssid));
+    memcpy(keep_password, s_cfg.state.cfg.ap_password, sizeof(keep_password));
 
+    cpe_config_state_t next;
+    memset(&next, 0, sizeof(next));
     esp_err_t err = nvs_erase_all(s_cfg.nvs);
     if (err == ESP_OK) {
         err = nvs_commit(s_cfg.nvs);
     }
-    if (err == ESP_OK) {
-        esp_fill_random(s_cfg.adm_salt, CPE_ADMIN_SALT_LEN);
-        err = apply_defaults_locked(false);
+    bool erased = (err == ESP_OK);
+    if (erased) {
+        esp_fill_random(next.adm_salt, CPE_ADMIN_SALT_LEN);
+        err = apply_defaults(&next, false);
     }
-    if (err == ESP_OK) {
-        memcpy(s_cfg.cfg.ap_ssid, keep_ssid, sizeof(keep_ssid));
-        memcpy(s_cfg.cfg.ap_password, keep_password, sizeof(keep_password));
+    if (erased && err == ESP_OK) {
+        memcpy(next.cfg.ap_ssid, keep_ssid, sizeof(keep_ssid));
+        memcpy(next.cfg.ap_password, keep_password, sizeof(keep_password));
         /* The admin credential must match the (kept) AP password again. */
-        err = pbkdf2_sha256(s_cfg.cfg.ap_password, s_cfg.adm_salt, CPE_ADMIN_SALT_LEN,
-                            s_cfg.adm_hash);
+        err = pbkdf2_sha256(next.cfg.ap_password, next.adm_salt, CPE_ADMIN_SALT_LEN,
+                            next.adm_hash);
         if (err != ESP_OK) {
             /* Fail closed: do not persist an all-zero hash. */
-            memset(s_cfg.adm_hash, 0, sizeof(s_cfg.adm_hash));
+            memset(next.adm_hash, 0, sizeof(next.adm_hash));
         }
-        s_cfg.adm_must_change = true;
+        next.adm_must_change = true;
     }
-    if (err == ESP_OK) {
-        err = persist_locked();
+    if (erased && err == ESP_OK) {
+        err = persist_full_locked(&next);
     }
+    if (erased) {
+        /* The namespace is gone: keep the regenerated state even if rewriting
+         * it failed, so RAM matches what the next boot will fall back to. */
+        s_cfg.state = next;
+    }
+    memset(&next, 0, sizeof(next));
     if (err == ESP_OK) {
         s_cfg.first_boot = true;
+        s_cfg.reset_pending_reboot = true;
     }
     xSemaphoreGiveRecursive(s_cfg.lock);
     if (err == ESP_OK) {

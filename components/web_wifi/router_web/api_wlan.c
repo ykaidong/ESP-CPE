@@ -21,6 +21,33 @@
 
 static const char *TAG = "cpe_web";
 
+typedef struct {
+    const cpe_config_t *next;
+    bool set_password;
+} wlan_general_update_t;
+
+static esp_err_t wlan_general_mutate(cpe_config_t *cfg, void *arg)
+{
+    const wlan_general_update_t *update = arg;
+    const cpe_config_t *next = update->next;
+    snprintf(cfg->ap_ssid, sizeof(cfg->ap_ssid), "%s", next->ap_ssid);
+    if (update->set_password) {
+        snprintf(cfg->ap_password, sizeof(cfg->ap_password), "%s", next->ap_password);
+    }
+    cfg->ap_hidden = next->ap_hidden;
+    cfg->max_sta = next->max_sta;
+    snprintf(cfg->device_name, sizeof(cfg->device_name), "%s", next->device_name);
+    return ESP_OK;
+}
+
+static esp_err_t wlan_advance_mutate(cpe_config_t *cfg, void *arg)
+{
+    const cpe_config_t *next = arg;
+    cfg->ap_channel = next->ap_channel;
+    cfg->ap_bandwidth = next->ap_bandwidth;
+    return ESP_OK;
+}
+
 static esp_err_t wlan_general_get_handler(httpd_req_t *req)
 {
     esp_err_t body_check = cpe_web_reject_unexpected_body(req);
@@ -175,20 +202,6 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
         snprintf(next.device_name, sizeof(next.device_name), "%s", device_name);
     }
 
-    /* Persist the device name first: it does not touch the radio, so a failure
-     * here must not leave the SoftAP changed (review P2). */
-    bool name_persisted = false;
-    if (has_device_name && strcmp(current.device_name, next.device_name) != 0) {
-        err = cpe_config_set_device_name(next.device_name);
-        if (err != ESP_OK) {
-            cpe_web_secure_wipe(password, sizeof(password));
-            ESP_LOGE(TAG, "Failed to persist device name: %s", esp_err_to_name(err));
-            return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                               "persist_failed", false);
-        }
-        name_persisted = true;
-    }
-
     /* A device-name-only change must not restart the SoftAP. */
     bool ap_changed = (strcmp(current.ap_ssid, next.ap_ssid) != 0) ||
                       password_changed ||
@@ -201,40 +214,52 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
              password_changed ? "yes" : "no",
              next.ap_hidden ? 1 : 0);
 
+    wlan_general_update_t update = {
+        .next = &next,
+        .set_password = password_changed,
+    };
+
+    cpe_web_sbuf_t sb;
+    cpe_web_sbuf_init(&sb, 96);
+    cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"settings_applied\"}");
+
+    if (!ap_changed) {
+        /* Device-name-only change: persist it before replying so a failure can
+         * still be reported to the client. */
+        if (has_device_name && strcmp(current.device_name, next.device_name) != 0) {
+            err = cpe_config_update(wlan_general_mutate, &update);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to persist device name: %s", esp_err_to_name(err));
+                cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
+                return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
+                                                   "persist_failed", false);
+            }
+        }
+        esp_err_t reply_err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
+        cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
+        return reply_err;
+    }
+
     /* Reply before touching the radio. app_wifi_apply() restarts the SoftAP and
      * drops this client, so a reply sent afterwards never reaches the browser:
      * the socket stays half-open in the browser connection pool and enough of
      * them make the console look unreachable until TCP gives up. */
-    cpe_web_sbuf_t sb;
-    cpe_web_sbuf_init(&sb, 96);
-    cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"settings_applied\"}");
     esp_err_t reply_err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
-    if (ap_changed) {
-        /* Let the reply leave the radio before the AP restarts. */
-        vTaskDelay(pdMS_TO_TICKS(500));
+    /* Let the reply leave the radio before the AP restarts. */
+    vTaskDelay(pdMS_TO_TICKS(500));
 
-        /* Keep the original order: app_wifi_apply() reads the persisted config
-         * as its rollback baseline, so it must run before cpe_config_set_ap().
-         * Errors can no longer be reported to the client, only logged. */
-        err = app_wifi_apply(&next);
+    /* Keep the original order: app_wifi_apply() reads the persisted config as
+     * its rollback baseline, so it must run before cpe_config_update().
+     * Errors can no longer be reported to the client, only logged. */
+    err = app_wifi_apply(&next);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply new WLAN settings: %s", esp_err_to_name(err));
+    } else {
+        err = cpe_config_update(wlan_general_mutate, &update);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to apply new WLAN settings: %s", esp_err_to_name(err));
-            if (name_persisted) {
-                (void)cpe_config_set_device_name(current.device_name);
-            }
-        } else {
-            err = cpe_config_set_ap(next.ap_ssid,
-                                    password_changed ? next.ap_password : NULL,
-                                    next.ap_channel, next.ap_bandwidth,
-                                    next.ap_hidden, next.max_sta);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to persist WLAN settings: %s", esp_err_to_name(err));
-                (void)app_wifi_apply(&current); /* roll the radio back */
-                if (name_persisted) {
-                    (void)cpe_config_set_device_name(current.device_name);
-                }
-            }
+            ESP_LOGE(TAG, "Failed to persist WLAN settings: %s", esp_err_to_name(err));
+            (void)app_wifi_apply(&current); /* roll the radio back */
         }
     }
     cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
@@ -328,8 +353,7 @@ static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
             ESP_LOGE(TAG, "Failed to apply advanced WLAN settings: %s",
                      esp_err_to_name(err));
         } else {
-            err = cpe_config_set_ap(next.ap_ssid, NULL, next.ap_channel,
-                                    next.ap_bandwidth, next.ap_hidden, next.max_sta);
+            err = cpe_config_update(wlan_advance_mutate, &next);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to persist advanced WLAN settings: %s",
                          esp_err_to_name(err));
