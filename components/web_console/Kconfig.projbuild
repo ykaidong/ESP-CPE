@@ -1,0 +1,9 @@
+menu "CPE Web Console"
+
+    config CPE_WEB_MOUNT_POINT
+        string "Website mount point in VFS"
+        default "/spiffs"
+        help
+            Specify the mount point in VFS.
+
+endmenu

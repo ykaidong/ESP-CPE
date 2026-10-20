@@ -60,11 +60,11 @@ cd C:\Users\fytech\Desktop\usb_ecm_4g_module
 
 ```powershell
 # 不应再有编译期固定凭据/默认口令
-Select-String -Path components\web_wifi\**\*,components\web_wifi\*.c -Pattern '12345678|esp32:|ZXNwMzI6'
+Select-String -Path components\app_wifi\*,components\web_console\**\* -Pattern '12345678|esp32:|ZXNwMzI6'
 # 不应有未鉴权状态变更路由（除 login/static）
-Select-String -Path components\web_wifi\router_web\modem_http_config.c -Pattern 'httpd_uri_t|basic_auth|strncmp\('
+Select-String -Path components\web_console\router_web\modem_http_config.c -Pattern 'httpd_uri_t|basic_auth|strncmp\('
 # 不应有网络 IO 的 ESP_ERROR_CHECK
-Select-String -Path components\web_wifi\router_web\modem_http_config.c -Pattern 'ESP_ERROR_CHECK'
+Select-String -Path components\web_console\router_web\modem_http_config.c -Pattern 'ESP_ERROR_CHECK'
 # main 不应再整栈拆装 USB Host
 Select-String -Path main\main.c -Pattern 'usb_host_install|usb_stack_tear_down|usb_host_uninstall'
 # 驱动与组件版本

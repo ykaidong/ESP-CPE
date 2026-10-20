@@ -40,7 +40,7 @@
 #include "cpe_core.h"
 #include "cpe_ota.h"
 #include "app_wifi.h"
-#include "modem_http_config.h"
+#include "cpe_web.h"
 #include "reset_button.h"
 #include "iot_eth.h"
 #include "iot_eth_netif_glue.h"

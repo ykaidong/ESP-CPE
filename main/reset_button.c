@@ -33,6 +33,7 @@
 
 #include "app_wifi.h"
 #include "cpe_config.h"
+#include "cpe_web.h"
 #include "reset_button.h"
 
 static const char *TAG = "reset_button";
@@ -127,7 +128,7 @@ static void reset_button_task(void *arg)
                          esp_err_to_name(err));
             } else {
                 /* Keep the same end state as the web console path. */
-                app_wifi_station_names_erase_all();
+                cpe_web_station_names_erase_all();
             }
             ESP_LOGW(TAG, "Reboot blocked while the button is held: GPIO0 must be "
                      "released before reset, otherwise the ROM enters UART download mode");

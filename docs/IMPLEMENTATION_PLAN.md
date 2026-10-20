@@ -37,7 +37,7 @@
 | 1.4 | 分区表改 16MB + 双 OTA + storage；`sdkconfig.defaults` 同步；清理 `sdkconfig` 跟踪 | P2（OTA/构建卫生）、8.3-#1 | 16MB 分区表构建通过；`sdkconfig` 不再入库 |
 | 1.5 | fork `iot_usbh_cdc` / `iot_usbh_ecm` 到 `components/`，修 P0 级生命周期缺陷 | P0-1、P1-2、P1-3、P1-4 | deinit 关端口、close 排空在途 URB、open 错误路径不 double free |
 | 1.6 | 驱动修 TX 路径三连缺陷 + ECM 假 link-up + NEW_DEV 补发 | P1-7、P1-8、P1-11 | 提交失败归还令牌；out_mux 不泄漏；MAC 解析失败返回错误；NEW_DEV 不丢 |
-| 1.7 | Web 认证与默认安全值改造（由 `components/web_wifi` 工作流完成） | P0-3、P1-12、P1-13、P1-14、P1-15、P1-16、P1-17 | 无固定凭据；401 `Connection: close`；超大 Content-Length 提前 413；参数校验；XSS/CSRF 修复 |
+| 1.7 | Web 认证与默认安全值改造（由 `components/web_console` 工作流完成） | P0-3、P1-12、P1-13、P1-14、P1-15、P1-16、P1-17 | 无固定凭据；401 `Connection: close`；超大 Content-Length 提前 413；参数校验；XSS/CSRF 修复 |
 | 1.8 | 构建验证 + 文档（本文件、README 更新、凭据/恢复策略说明） | 8.3-#5 | `idf.py build` 0 error；生成 bin 可烧录 |
 
 > 阶段一已删除示例诊断组件与配置残留：`components/network_test`（PING/公网 IP/测速）、
@@ -90,11 +90,14 @@ app_main
 - `cpe_config.h`：`cpe_config_init()`, `cpe_config_get()`, `cpe_config_update()`（mutator 事务接口）, `cpe_config_factory_reset()`, 校验函数。
 - `cpe_auth.h`：`cpe_auth_login()`, `cpe_auth_session_valid()`, `cpe_auth_csrf_valid()`, `cpe_auth_logout()`, `cpe_auth_change_password()`, `cpe_auth_must_change()`。
 - `cpe_status.h`：`cpe_status_get()`, `cpe_status_set_state()/set_usb()/set_link()/set_ip()/set_error()`。
-- `web_wifi`（由 Web 工作流负责实现）：
+- `app_wifi`（SoftAP，公开头 `app_wifi.h`）：
   - `esp_err_t app_wifi_start(void);`
   - `esp_err_t app_wifi_apply(const cpe_config_t *cfg);`（应用 AP 参数，失败返回错误且不落盘）
   - `esp_netif_t *app_wifi_get_ap_netif(void);`
+  - `void app_wifi_deauth_all_stations(void);`
+- `web_console`（Web 管理面，公开头 `cpe_web.h`）：
   - `esp_err_t modem_http_start(void);` / `esp_err_t modem_http_stop(void);`
+  - `void cpe_web_station_names_erase_all(void);`（Web 与复位键恢复出厂共用）
 - `main` 对外不暴露重试/拆栈 API；恢复逻辑全部在后台任务内。
 
 ### 3.2 凭据策略（阶段一开始执行）
@@ -153,7 +156,8 @@ app_main
 | 新启动架构 | `main/main.c` | AP/Web 先行；USB Host 只装一次；后台链路管理器（L1 ECM 重建 / L2 端口掉电 / L3 有界重启 / FAULT 保底） |
 | 分区与构建 | `partitions_16m_ota.csv`、`sdkconfig.defaults*`、`.gitignore` | 16MB 双 OTA；`sdkconfig` 不再入库；关键补丁配置进 defaults |
 | 驱动本地 fork | `components/iot_usbh_cdc/`（3.1.3）、`components/iot_usbh_ecm/`（0.4.2） | P0-1/P1-2~P1-8/P1-11 逐条修复；NEW_DEV 补发；DEFER_DATA_POLL；enum_filter_cb 透传；枚举速度日志 |
-| Web 管理面 | `components/web_wifi/` | 会话+CSRF 认证、参数校验、DoS/XSS/CSRF/口令回显修复、状态/故障页、恢复出厂 |
+| SoftAP | `components/app_wifi/` | AP 启动与运行时应用、错误返回而不 abort、去认证 |
+| Web 管理面 | `components/web_console/` | 会话+CSRF 认证、参数校验、DoS/XSS/CSRF/口令回显修复、状态/故障页、恢复出厂 |
 | 文档/脚本 | `README.md`、`docs/PHASE1_TEST_PLAN.md`、`scripts/build.ps1` | 首次登录流程、恢复策略、上板验收清单、构建辅助 |
 
 ### 6.2 验证状态
@@ -161,7 +165,7 @@ app_main
 - **ESP-IDF v6.1 构建：通过（2026-10-17，AI 代理执行，ESP32-S3 / 16MB / 双 OTA）**
   - `build/usb_ecm_4g_module.bin` = **1024624 B (0xFA270)**，最小 app 分区 3MB，剩余 67%；
   - bootloader 0x5820（39% free）、`storage.bin` 1MB、`ota_data_initial.bin`、16MB 分区表均正常生成；
-  - `main`、`components/cpe_core`、`components/web_wifi`、两个 USB fork 编译 **0 warning**；
+  - `main`、`components/cpe_core`、`components/app_wifi`、`components/web_console`、两个 USB fork 编译 **0 warning**；
   - 构建方式：按 AGENTS.md 规则先启动 ESP-IDF PowerShell 环境后执行 `idf.py build`（详见 `AGENTS.md`）。
 - 静态检查已执行：无固定凭据残留、Web 网络 IO 无 `ESP_ERROR_CHECK`、main 无 USB 整栈拆装、fork 版本/CHANGELOG 已更新、Web 与驱动负责人分别做了 cppcheck / `-fsyntax-only` 自检；两份独立对抗式审查（Web / USB 驱动）发现的问题已修复或记录。
 - 实机验证项见 `docs/PHASE1_TEST_PLAN.md`（首次登录、无 SIM 故障模式、拔插、配置校验、DoS/XSS 回归）。Phase 1 剩余工作仅为上板验收，通过后进入 Phase 2。

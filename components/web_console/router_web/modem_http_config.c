@@ -35,7 +35,7 @@
 #include "app_wifi.h"
 #include "cpe_auth.h"
 #include "http_internal.h"
-#include "modem_http_config.h"
+#include "cpe_web.h"
 
 static const char *TAG = "cpe_web";
 

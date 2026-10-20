@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Internal interfaces of the management web server. This header is private to
- * the web_wifi component; it is not part of the public component API.
+ * the web_console component; it is not part of the public component API.
  */
 
 #pragma once

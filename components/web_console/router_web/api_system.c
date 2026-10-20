@@ -15,6 +15,7 @@
 #include "app_wifi.h"
 #include "cpe_auth.h"
 #include "cpe_config.h"
+#include "cpe_web.h"
 #include "http_internal.h"
 
 static const char *TAG = "cpe_web";
@@ -42,7 +43,7 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
                                            "factory_reset_failed", false);
     }
 
-    app_wifi_station_names_erase_all();
+    cpe_web_station_names_erase_all();
     cpe_auth_logout_all();
     (void)cpe_web_clear_session_cookie(req);
     cpe_web_clear_csrf_cookie(req);

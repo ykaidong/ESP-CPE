@@ -11,10 +11,12 @@
   - B4：新增 `cpe_ct.c`，合并 `cpe_config.c` 与 `cpe_auth.c` 的常量时间比较。
   - B6：`upgrade.js` 改用 `/api/ota/status` 返回的 `max_image_size`，删除硬编码的 3MB。
   - B7：删除 `style.css` 中指向不存在的 `images/`、`fonts/` 的变量与相关死规则，消除控制台 404。
-- 验证阶段发现并修复了三个不在原始列表中的运行时问题：
+- 验证阶段发现并修复了原始列表之外的运行时问题：
   - **ECM RX 双释放崩溃**：v0.4.3 的 RX 缓冲复用违反了 `iot_eth` 的缓冲区所有权约定，链路 up 后首次 DHCP 交换即触发 `tlsf_free` 断言。v0.4.4 已回退为每包分配，详见 D8。
   - **重启后 Windows 保留陈旧 Wi-Fi 关联**：受控重启前没有主动 deauth，异常复位后 AP 又以同一 BSSID 立即重建，导致终端显示已连接但流量被丢弃。已新增 `app_wifi_deauth_all_stations()`（受控重启路径）和异常复位后的随机 BSSID；SSID、密码、IP 均不变。
   - **未登录时的 401 探测**：首页与登录页在浏览器没有 CSRF token 时不再请求 `/api/status`，未登录访问/刷新不再产生 401。
+  - **B1 引入的强制改密死锁**：`/api/password` 在 B1 模板化时被误设为 `CPE_WEB_POST_SESSION_MUTABLE`，而该模式在 `must_change` 时拒绝一切状态变更，导致恢复出厂后首次登录永远无法改密（403 `password_change_required`）。已改为“有效会话 + CSRF”模式（`CPE_WEB_POST_SESSION_REQUIRED` + `.csrf = true`），其他状态变更接口仍保持 `MUTABLE`。
+  - **两条恢复出厂路径不一致**：复位按键路径未清除客户端昵称，Web 路径会清除。现两条路径都在 `cpe_config_factory_reset()` 成功后调用 `cpe_web_station_names_erase_all()`，最终状态一致。
 - **B2、B3 已修复**：
   - B2：`byId`、`bindMenu` 与双 tab 切换逻辑收进 `CPE`（`api.js`），各页面只保留业务逻辑。
   - B3：新增 `layout.js` 统一生成 header 与左侧导航，四个 HTML 页面只保留占位节点。
@@ -23,6 +25,7 @@
 - **JSON 解析层已迁移到 cJSON**：移除 `json_parser` 依赖，改用组件管理器提供的 `espressif/cjson`（1.7.19）。`cpe_web_post_ctx_t` 持有 `cJSON*`，三个取值 helper 保留原有语义（字符串/整数的严格类型判断、缺失与类型错误的区分）；解析仍要求单一顶层对象且无尾随数据。响应构造暂时保留 `sbuf`，输出层不在本次范围内。
 - **A4 已修复**：`link_manager_task()` 重构为显式状态机（`lm_phase_t` + `lm_ctx_t`），初始化、状态服务、IP/USB 等待与每种恢复动作拆成独立函数；500ms 轮询、全部阈值、阻塞时长、日志文本以及 NVS/NAPT 副作用顺序保持不变。
 - **A3 已修复**：新增 `cpe_config_update(mutate, ctx)` 事务接口，只写变更的 NVS key，失败时定向回滚；`api_wlan.c` 的两次手工“失败写回”已删除。详见 A3 小节。
+- **A2 已修复**：`web_wifi` 拆成 `components/app_wifi/`（SoftAP）与 `components/web_console/`（管理面 + SPIFFS 前端），`main` 的 REQUIRES 与启动编排分别引用两者。详见 A2 小节。
 - **待处理**：第三节死代码。其中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
 
 ---
@@ -31,7 +34,7 @@
 
 ### A1. `modem_http_config.c` 是 2590 行的“上帝文件”（最严重）
 
-`components/web_wifi/router_web/modem_http_config.c` 一个文件里混了 9 类职责：
+`components/web_console/router_web/modem_http_config.c`（拆分前为 `components/web_wifi/...`）一个文件里混了 9 类职责：
 
 - HTTP 底层工具（`send_error_response`、`reject_unexpected_body`、`request_origin_is_same_origin`）
 - 手写 JSON 构造器 `sbuf_*`（约 100 行）
@@ -48,6 +51,13 @@
 ### A2. `web_wifi` 组件职责混淆
 
 同一组件同时负责 SoftAP（`app_wifi.c`）与 Web 管理面（`router_web/*`）。两者生命周期、恢复策略、测试方式完全不同。建议拆成 `app_wifi` 与 `web_console` 两个组件，`main.c` 分别编排。
+
+**处理结果**：已拆分为两个组件，代码无行为变更。
+
+- `components/app_wifi/`：`app_wifi.c` + 公开头 `app_wifi.h` + `Kconfig.projbuild`（仅 `SERVER_IP`）。依赖只到 `cpe_core`、`esp_netif` 与 Wi-Fi 事件层，不再包含任何 Web/SPIFFS/NVS 代码。
+- `components/web_console/`：`router_web/*`、`spiffs/` 前端与 `Kconfig.projbuild`（`CPE_WEB_MOUNT_POINT`）。公开接口收敛为 `include/cpe_web.h`（`modem_http_start/stop`、`cpe_web_station_names_erase_all`），`http_internal.h` 仍为组件私有；依赖 `cpe_core` + `app_wifi`。
+- 管理面中与管理功能无关的 `ESP_MAXIMUM_RETRY`（A5 删除 STA 后已无使用方）随拆分一并删除。
+- `main/CMakeLists.txt` 改为 `REQUIRES cpe_core app_wifi web_console ...`；`main.c` 包含 `cpe_web.h` 启动管理面，`reset_button.c` 通过该公开头清除昵称。
 
 ### A3. 配置持久化模型是“全量重写”
 
@@ -239,6 +249,8 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
    已完成（POST 模板 + cJSON 解析层）。
 5. ~~A3（配置事务接口）。~~
    已完成。
-6. **下一步**：A2（把 `app_wifi` 与 Web 管理面拆成两个组件）；随后处理第三节剩余死代码（已分类的预留项保持不动）。
+6. ~~A2（把 `app_wifi` 与 Web 管理面拆成两个组件）。~~
+   已完成。
+7. **下一步**：处理第三节剩余死代码（已分类的预留项保持不动）。
 
-B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A3、A4 已完成；A5 已按删除处理；A2 与其余死代码待处理。
+B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A2、A3、A4 已完成；A5 已按删除处理；仅剩第三节死代码待处理。

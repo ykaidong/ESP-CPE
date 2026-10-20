@@ -161,7 +161,8 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 ```
 main/                 应用入口、CPE 恢复策略、Kconfig
 components/cpe_core/  配置存储/校验、随机凭据、会话认证、状态、启动计数
-components/web_wifi/  SoftAP + Web 管理面（SPIFFS 前端）
+components/app_wifi/  SoftAP 生命周期（启动、运行时应用、主动去认证）
+components/web_console/  Web 管理面（会话认证、REST API、SPIFFS 前端）
 components/iot_usbh_cdc/  USB Host CDC 驱动本地 fork（已打补丁）
 components/iot_usbh_ecm/  USB Host ECM 驱动本地 fork（已打补丁）
 docs/                 实施计划、运行时流程、上板验收清单

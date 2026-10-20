@@ -3,13 +3,12 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Embedded web management server for the ESP-CPE product.
+ * Public interface of the ESP-CPE management console.
  *
- * The management interface is protected by a cpe_core session cookie
- * (CPE_SID, HttpOnly + SameSite=Strict) and a per-session CSRF token
- * (X-CSRF-Token) instead of the upstream HTTP Basic credentials. All
- * state-changing handlers additionally require a JSON content type and a
- * same-origin (or absent) Origin/Referer header.
+ * The console runs its own netif-dependent services (SPIFFS assets, HTTP
+ * server, station registry) and is started by main after the SoftAP is up.
+ * Everything else (protocol helpers, JSON layer, API endpoints) is private to
+ * the web_console component.
  */
 
 #pragma once
@@ -42,6 +41,16 @@ esp_err_t modem_http_start(void);
  * @return ESP_OK on success (also when the server was not running).
  */
 esp_err_t modem_http_stop(void);
+
+/**
+ * @brief Erase every station nickname persisted by the management console.
+ *
+ * Both factory-reset paths (web console and the physical reset button) must
+ * call this after cpe_config_factory_reset() succeeded, so they leave the same
+ * state behind. Only the NVS entries are removed; the in-RAM station list is
+ * left untouched (both callers reboot right afterwards).
+ */
+void cpe_web_station_names_erase_all(void);
 
 #ifdef __cplusplus
 }
