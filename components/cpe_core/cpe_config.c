@@ -208,7 +208,9 @@ static esp_err_t apply_defaults_locked(bool regenerate_credentials)
              CONFIG_CPE_AP_SSID_PREFIX, mac[4], mac[5]);
     random_password(cfg->ap_password, CPE_PASSWORD_LEN);
     cfg->ap_channel = CONFIG_CPE_AP_CHANNEL_DEFAULT;
-    cfg->ap_bandwidth = 40;
+    /* HT20 by default: 2.4 GHz has no really free 40 MHz block, and the wider
+     * channel measurably increases jitter/latency for interactive traffic. */
+    cfg->ap_bandwidth = CPE_BANDWIDTH_20;
     cfg->ap_hidden = false;
     cfg->max_sta = CONFIG_CPE_MAX_STA_DEFAULT;
     snprintf(cfg->admin_user, sizeof(cfg->admin_user), "%s", CONFIG_CPE_ADMIN_USERNAME);
