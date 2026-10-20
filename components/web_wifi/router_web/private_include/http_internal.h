@@ -175,7 +175,6 @@ void cpe_web_station_event_handler(void *arg, esp_event_base_t event_base,
 bool cpe_web_mac_parse(const char *str, uint8_t mac[6]);
 bool cpe_web_station_name_valid(const char *name);
 esp_err_t cpe_web_station_name_save(const uint8_t mac[6], const char *name);
-void cpe_web_station_names_erase_all(void);
 size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max);
 bool cpe_web_sta_node_exists(const uint8_t mac[6]);
 bool cpe_web_sta_node_rename(const uint8_t mac[6], const char *name);

@@ -171,7 +171,7 @@ esp_err_t cpe_web_station_name_save(const uint8_t mac[6], const char *name)
     return err;
 }
 
-void cpe_web_station_names_erase_all(void)
+void app_wifi_station_names_erase_all(void)
 {
     /* Also drop the station nicknames stored in their own namespace. */
     nvs_handle_t handle;

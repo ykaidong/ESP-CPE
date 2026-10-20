@@ -70,6 +70,16 @@ esp_netif_t *app_wifi_get_ap_netif(void);
  */
 void app_wifi_deauth_all_stations(void);
 
+/**
+ * @brief Erase every station nickname persisted by the management console.
+ *
+ * Both factory-reset paths (web console and the physical reset button) must
+ * call this after cpe_config_factory_reset() succeeded, so they leave the same
+ * state behind. Only the NVS entries are removed; the in-RAM station list is
+ * left untouched (both callers reboot right afterwards).
+ */
+void app_wifi_station_names_erase_all(void);
+
 #ifdef __cplusplus
 }
 #endif
