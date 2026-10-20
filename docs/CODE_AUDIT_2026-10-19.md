@@ -26,7 +26,7 @@
 - **A4 已修复**：`link_manager_task()` 重构为显式状态机（`lm_phase_t` + `lm_ctx_t`），初始化、状态服务、IP/USB 等待与每种恢复动作拆成独立函数；500ms 轮询、全部阈值、阻塞时长、日志文本以及 NVS/NAPT 副作用顺序保持不变。
 - **A3 已修复**：新增 `cpe_config_update(mutate, ctx)` 事务接口，只写变更的 NVS key，失败时定向回滚；`api_wlan.c` 的两次手工“失败写回”已删除。详见 A3 小节。
 - **A2 已修复**：`web_wifi` 拆成 `components/app_wifi/`（SoftAP）与 `components/web_console/`（管理面 + SPIFFS 前端），`main` 的 REQUIRES 与启动编排分别引用两者。详见 A2 小节。
-- **待处理**：第三节死代码。其中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
+- **第三节死代码已处理（2026-10-20）**：五项均为预留接口，确认保留，无代码变更；各项去向见第三节“处理结果”。
 
 ---
 
@@ -163,6 +163,12 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
 
 这些字段/接口会让前端和后续维护者误以为功能存在。建议：要么接通（公网 IP/RSSI 需要 modem AT 或诊断通道），要么连同 API 字段一起删除；`modem_http_stop` 可保留但应在注释中明确“未接线”或直接移除。
 
+**处理结果（2026-10-20）**：五项全部保留，代码不变；逐项确认去向如下。
+
+- `cpe_status_set_public_ip()` / `cpe_status_set_rssi()` / `modem_model` / `modem_fw`：**阶段二预留**。它们对应 4G 模组诊断信息（公网 IP、信号强度、型号、固件版本），需要 AT 命令通道才能取值；当前 `/api/status` 仍序列化这些字段（`api_status.c:43-50`），前端只有“信号强度”显示为“未知”，不会把空值误报为有效数据。Phase 2 接入 AT 后由诊断任务调用对应 setter，届时无需再改一次 API 契约。
+- `modem_http_stop()`：**OTA/管理面重启预留**。公开头 `cpe_web.h` 已注明“未接线”；实现继续维护（`modem_http_config.c:312`），保证拆装路径不会腐烂，接入 OTA 重启流程时可直接使用。
+- `usb_ecm_get_cdc_port_handle()`：**上游驱动公共 API**。声明于 `iot_usbh_ecm.h:46`，本地 fork 只修补缺陷、不裁剪上游接口，避免下次同步上游时产生冲突。
+
 ---
 
 ## 四、实现缺陷
@@ -251,6 +257,7 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
    已完成。
 6. ~~A2（把 `app_wifi` 与 Web 管理面拆成两个组件）。~~
    已完成。
-7. **下一步**：处理第三节剩余死代码（已分类的预留项保持不动）。
+7. ~~处理第三节剩余死代码（已分类的预留项保持不动）。~~
+   已完成：五项均确认为预留接口并记录去向，无代码变更。
 
-B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A2、A3、A4 已完成；A5 已按删除处理；仅剩第三节死代码待处理。
+B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A2、A3、A4 已完成；A5 已按删除处理；第三节死代码已逐项确认完毕。本审计报告的全部条目已处理。
