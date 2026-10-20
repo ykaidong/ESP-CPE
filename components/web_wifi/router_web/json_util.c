@@ -137,54 +137,6 @@ esp_err_t cpe_web_send_sbuf_json(httpd_req_t *req, const char *status_line,
 /* JSON input                                                                */
 /* ------------------------------------------------------------------------- */
 
-/* Decode the raw token bytes returned by json_parser (it does not unescape).
- * Only printable ASCII escapes are accepted; \uXXXX is rejected because the
- * validated values are ASCII only and decoding it could hide control chars. */
-static esp_err_t json_unescape(const char *src, char *dst, size_t dst_len)
-{
-    size_t out = 0;
-    for (size_t i = 0; src[i] != '\0'; i++) {
-        unsigned char c = (unsigned char)src[i];
-        if (c == '\\') {
-            char esc = src[++i];
-            switch (esc) {
-            case '"':
-                c = '"';
-                break;
-            case '\\':
-                c = '\\';
-                break;
-            case '/':
-                c = '/';
-                break;
-            case 'b':
-                c = '\b';
-                break;
-            case 'f':
-                c = '\f';
-                break;
-            case 'n':
-                c = '\n';
-                break;
-            case 'r':
-                c = '\r';
-                break;
-            case 't':
-                c = '\t';
-                break;
-            default:
-                return ESP_ERR_INVALID_ARG;
-            }
-        }
-        if (out + 1 >= dst_len) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-        dst[out++] = (char)c;
-    }
-    dst[out] = '\0';
-    return ESP_OK;
-}
-
 /* Reject deeply nested documents before calling the recursive parser. */
 bool cpe_web_json_depth_ok(const char *body, size_t len, int max_depth)
 {
@@ -218,113 +170,128 @@ bool cpe_web_json_depth_ok(const char *body, size_t len, int max_depth)
     return true;
 }
 
-esp_err_t cpe_web_json_get_string_unescaped(jparse_ctx_t *jctx, const char *name,
+/* cJSON stores numbers as doubles; accept only values that fit in an int. */
+static bool json_number_to_int(const cJSON *item, int *out)
+{
+    double value = item->valuedouble;
+    if (value < (double)INT_MIN || value > (double)INT_MAX) {
+        return false;
+    }
+    int ival = (int)value;
+    if ((double)ival != value) {
+        return false;
+    }
+    *out = ival;
+    return true;
+}
+
+/* Copy a string field; cJSON has already decoded the JSON escapes. */
+esp_err_t cpe_web_json_get_string_unescaped(const cJSON *root, const char *name,
                                             char *out, size_t out_len)
 {
-    char raw[160];
-    if (out_len == 0 || out_len > sizeof(raw)) {
+    if (root == NULL || name == NULL || out == NULL || out_len == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (json_obj_get_string(jctx, name, raw, sizeof(raw)) != OS_SUCCESS) {
-        /* Distinguish a missing field from a present but malformed/oversized
-         * value: callers must reject the latter with 400 (audit P1-13), not
-         * silently ignore it. */
-        int len = 0;
-        if (json_obj_get_strlen(jctx, name, &len) == OS_SUCCESS) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-        int ival = 0;
-        if (json_obj_get_int(jctx, name, &ival) == OS_SUCCESS) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        float fval = 0;
-        if (json_obj_get_float(jctx, name, &fval) == OS_SUCCESS) {
-            return ESP_ERR_INVALID_ARG;
-        }
-        bool bval = false;
-        if (json_obj_get_bool(jctx, name, &bval) == OS_SUCCESS) {
-            return ESP_ERR_INVALID_ARG;
-        }
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+    /* A JSON null is treated as a missing field, matching the previous
+     * json_parser based implementation. */
+    if (item == NULL || cJSON_IsNull(item)) {
         return ESP_ERR_NOT_FOUND;
     }
-    return json_unescape(raw, out, out_len);
+    /* Distinguish a missing field from a present but malformed/oversized
+     * value: callers must reject the latter with 400 (audit P1-13), not
+     * silently ignore it. */
+    if (!cJSON_IsString(item) || item->valuestring == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    size_t len = strlen(item->valuestring);
+    if (len >= out_len) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    memcpy(out, item->valuestring, len + 1);
+    return ESP_OK;
 }
 
 /* Accept both a JSON number and a legacy JSON string ("6"). */
-esp_err_t cpe_web_json_get_int_flexible(jparse_ctx_t *jctx, const char *name,
+esp_err_t cpe_web_json_get_int_flexible(const cJSON *root, const char *name,
                                         int *out, bool *present)
 {
+    if (root == NULL || name == NULL || out == NULL || present == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     *present = false;
-    int value;
-    if (json_obj_get_int(jctx, name, &value) == OS_SUCCESS) {
-        *present = true;
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+    /* A JSON null is treated as a missing field, matching the previous
+     * json_parser based implementation. */
+    if (item == NULL || cJSON_IsNull(item)) {
+        return ESP_OK;
+    }
+    *present = true;
+
+    if (cJSON_IsNumber(item)) {
+        int value = 0;
+        if (!json_number_to_int(item, &value)) {
+            return ESP_ERR_INVALID_ARG;
+        }
         *out = value;
         return ESP_OK;
     }
-    char str[16];
-    if (json_obj_get_string(jctx, name, str, sizeof(str)) == OS_SUCCESS) {
-        *present = true;
+    if (cJSON_IsString(item) && item->valuestring != NULL) {
         char *end = NULL;
-        long long parsed = strtoll(str, &end, 10);
-        if (end == str || *end != '\0' || parsed < INT_MIN || parsed > INT_MAX) {
+        long long parsed = strtoll(item->valuestring, &end, 10);
+        if (end == item->valuestring || *end != '\0' ||
+                parsed < INT_MIN || parsed > INT_MAX) {
             return ESP_ERR_INVALID_ARG;
         }
         *out = (int)parsed;
         return ESP_OK;
     }
-    /* Present but not an integer (e.g. 1.5 or true): reject instead of
-     * pretending the field was absent. */
-    float fval = 0;
-    if (json_obj_get_float(jctx, name, &fval) == OS_SUCCESS) {
-        *present = true;
-        return ESP_ERR_INVALID_ARG;
-    }
-    bool bval = false;
-    if (json_obj_get_bool(jctx, name, &bval) == OS_SUCCESS) {
-        *present = true;
-        return ESP_ERR_INVALID_ARG;
-    }
-    return ESP_OK;
+    /* Present but of the wrong type (e.g. 1.5, true or an object): reject
+     * instead of pretending the field was absent. */
+    return ESP_ERR_INVALID_ARG;
 }
 
 /* Accept JSON boolean and the legacy "true"/"false"/"1"/"0" strings. */
-esp_err_t cpe_web_json_get_bool_flexible(jparse_ctx_t *jctx, const char *name,
+esp_err_t cpe_web_json_get_bool_flexible(const cJSON *root, const char *name,
                                          bool *out, bool *present)
 {
+    if (root == NULL || name == NULL || out == NULL || present == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     *present = false;
-    bool value;
-    if (json_obj_get_bool(jctx, name, &value) == OS_SUCCESS) {
-        *present = true;
-        *out = value;
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+    /* A JSON null is treated as a missing field, matching the previous
+     * json_parser based implementation. */
+    if (item == NULL || cJSON_IsNull(item)) {
         return ESP_OK;
     }
-    char str[8];
-    if (json_obj_get_string(jctx, name, str, sizeof(str)) == OS_SUCCESS) {
-        *present = true;
-        if (strcmp(str, "true") == 0 || strcmp(str, "1") == 0) {
+    *present = true;
+
+    if (cJSON_IsBool(item)) {
+        *out = cJSON_IsTrue(item);
+        return ESP_OK;
+    }
+    if (cJSON_IsString(item) && item->valuestring != NULL) {
+        if (strcmp(item->valuestring, "true") == 0 ||
+                strcmp(item->valuestring, "1") == 0) {
             *out = true;
             return ESP_OK;
         }
-        if (strcmp(str, "false") == 0 || strcmp(str, "0") == 0) {
+        if (strcmp(item->valuestring, "false") == 0 ||
+                strcmp(item->valuestring, "0") == 0) {
             *out = false;
             return ESP_OK;
         }
         return ESP_ERR_INVALID_ARG;
     }
     /* Legacy clients may send 0/1 as a JSON number. */
-    int ival = 0;
-    if (json_obj_get_int(jctx, name, &ival) == OS_SUCCESS) {
-        *present = true;
-        if (ival == 0 || ival == 1) {
-            *out = (ival != 0);
-            return ESP_OK;
+    if (cJSON_IsNumber(item)) {
+        int value = 0;
+        if (!json_number_to_int(item, &value) || (value != 0 && value != 1)) {
+            return ESP_ERR_INVALID_ARG;
         }
-        return ESP_ERR_INVALID_ARG;
+        *out = (value != 0);
+        return ESP_OK;
     }
-    float fval = 0;
-    if (json_obj_get_float(jctx, name, &fval) == OS_SUCCESS) {
-        *present = true;
-        return ESP_ERR_INVALID_ARG;
-    }
-    return ESP_OK;
+    return ESP_ERR_INVALID_ARG;
 }

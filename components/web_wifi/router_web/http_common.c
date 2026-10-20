@@ -377,12 +377,22 @@ esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
         return ESP_OK;
     }
 
-    if (!cpe_web_json_depth_ok(ctx->body, ctx->body_len, CPE_WEB_JSON_MAX_DEPTH) ||
-            json_parse_start(&ctx->parser, ctx->body, (int)ctx->body_len) != OS_SUCCESS) {
+    if (!cpe_web_json_depth_ok(ctx->body, ctx->body_len, CPE_WEB_JSON_MAX_DEPTH)) {
         cpe_web_post_end(ctx);
         return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", true);
     }
-    ctx->parser_active = true;
+
+    /* Require the document to end after the top-level value (no trailing
+     * garbage), matching the previous parser's strictness. The length must
+     * include the terminating NUL for that check (cJSON does the same in
+     * cJSON_Parse()); the body buffer is always NUL terminated at body_len. */
+    cJSON *root = cJSON_ParseWithLengthOpts(ctx->body, ctx->body_len + 1, NULL, true);
+    if (root == NULL || !cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        cpe_web_post_end(ctx);
+        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", true);
+    }
+    ctx->parser = root;
     return ESP_OK;
 }
 
@@ -391,9 +401,7 @@ void cpe_web_post_end(cpe_web_post_ctx_t *ctx)
     if (ctx == NULL) {
         return;
     }
-    if (ctx->parser_active) {
-        json_parse_end(&ctx->parser);
-    }
+    cJSON_Delete(ctx->parser);
     cpe_web_secure_wipe(ctx, sizeof(*ctx));
 }
 

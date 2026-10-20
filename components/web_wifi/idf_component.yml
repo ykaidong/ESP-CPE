@@ -11,6 +11,6 @@ dependencies:
   # esp_netif_dhcps_get_clients_by_mac, IP_EVENT_ASSIGNED_IP_TO_CLIENT.
   # The ESP-CPE product baseline is ESP-IDF v6.1.
   idf: '>=6.1'
-  json_parser:
-    version: 1.0.3
+  cjson:
+    version: '^1.7.19'
 version: 1.0.1

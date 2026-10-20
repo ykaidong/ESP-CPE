@@ -73,7 +73,7 @@ static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
     }
 
     char mac_str[24] = { 0 };
-    err = cpe_web_json_get_string_unescaped(&ctx.parser, "mac_str",
+    err = cpe_web_json_get_string_unescaped(ctx.parser, "mac_str",
                                             mac_str, sizeof(mac_str));
     cpe_web_post_end(&ctx);
 
@@ -124,10 +124,10 @@ static esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
 
     char name_str[CPE_WEB_STA_NAME_MAX_LEN + 1] = { 0 };
     char mac_str[24] = { 0 };
-    err = cpe_web_json_get_string_unescaped(&ctx.parser, "name_str",
+    err = cpe_web_json_get_string_unescaped(ctx.parser, "name_str",
                                             name_str, sizeof(name_str));
     if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(&ctx.parser, "mac_str",
+        err = cpe_web_json_get_string_unescaped(ctx.parser, "mac_str",
                                                 mac_str, sizeof(mac_str));
     }
     cpe_web_post_end(&ctx);

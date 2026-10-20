@@ -1,4 +1,14 @@
 dependencies:
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~2
   espressif/cmake_utilities:
     component_hash: 05165f30922b422b4b90c08845e6d449329b97370fbd06309803d8cb539d79e3
     dependencies:
@@ -44,29 +54,6 @@ dependencies:
     - esp32s31
     - esp32p4
     version: 3.1.4
-  espressif/jsmn:
-    component_hash: d80350c41bbaa827c98a25b6072df00884e72f54885996fab4a4f0aebce6b6c3
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.3'
-    source:
-      registry_url: https://components.espressif.com
-      type: service
-    version: 1.1.0
-  espressif/json_parser:
-    component_hash: d74b81729ad06ec11ff5eb5b1b0d7df1d00e6027fc11471f4b139c70dcf1b1e4
-    dependencies:
-    - name: espressif/jsmn
-      registry_url: https://components.espressif.com
-      require: private
-      rules:
-      - if: idf_version >=5.0
-      version: ~1.1
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    version: 1.0.3
   espressif/usb:
     component_hash: 99eee72ea224d9117d4c342442717a1f20bf8112e2ab5d7d7038b827874f4c92
     dependencies:
@@ -95,13 +82,13 @@ dependencies:
       type: local
     version: 0.4.4
 direct_dependencies:
+- espressif/cjson
 - espressif/cmake_utilities
 - espressif/iot_eth
 - espressif/iot_usbh_cdc
-- espressif/json_parser
 - espressif/usb
 - idf
 - iot_usbh_ecm
-manifest_hash: 4faeadaa83f7c12b613942b587feac1330b2f526e2728f4d9976c389fa887699
+manifest_hash: 22f799516c2cdba9051b0396d3beca58a09437d6777d930d22b9add7224bacde
 target: esp32s3
 version: 3.0.0

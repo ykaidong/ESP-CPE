@@ -80,13 +80,13 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
     bool has_max_sta = false;
     int max_sta = 0;
 
-    err = cpe_web_json_get_string_unescaped(&ctx.parser, "ssid", ssid, sizeof(ssid));
+    err = cpe_web_json_get_string_unescaped(ctx.parser, "ssid", ssid, sizeof(ssid));
     has_ssid = (err == ESP_OK);
     if (err == ESP_ERR_NOT_FOUND) {
         err = ESP_OK;
     }
     if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(&ctx.parser, "password",
+        err = cpe_web_json_get_string_unescaped(ctx.parser, "password",
                                                 password, sizeof(password));
         has_password = (err == ESP_OK);
         if (err == ESP_ERR_NOT_FOUND) {
@@ -94,7 +94,7 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
         }
     }
     if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(&ctx.parser, "auth_mode",
+        err = cpe_web_json_get_string_unescaped(ctx.parser, "auth_mode",
                                                 auth_mode, sizeof(auth_mode));
         has_auth_mode = (err == ESP_OK);
         if (err == ESP_ERR_NOT_FOUND) {
@@ -102,7 +102,7 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
         }
     }
     if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(&ctx.parser, "device_name",
+        err = cpe_web_json_get_string_unescaped(ctx.parser, "device_name",
                                                 device_name, sizeof(device_name));
         has_device_name = (err == ESP_OK);
         if (err == ESP_ERR_NOT_FOUND) {
@@ -110,11 +110,11 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
         }
     }
     if (err == ESP_OK) {
-        err = cpe_web_json_get_bool_flexible(&ctx.parser, "if_hide_ssid",
+        err = cpe_web_json_get_bool_flexible(ctx.parser, "if_hide_ssid",
                                              &hidden, &has_hidden);
     }
     if (err == ESP_OK) {
-        err = cpe_web_json_get_int_flexible(&ctx.parser, "max_sta",
+        err = cpe_web_json_get_int_flexible(ctx.parser, "max_sta",
                                              &max_sta, &has_max_sta);
     }
     cpe_web_post_end(&ctx);
@@ -281,9 +281,9 @@ static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
     bool has_bandwidth = false;
     int channel = 0;
     int bandwidth = 0;
-    err = cpe_web_json_get_int_flexible(&ctx.parser, "channel", &channel, &has_channel);
+    err = cpe_web_json_get_int_flexible(ctx.parser, "channel", &channel, &has_channel);
     if (err == ESP_OK) {
-        err = cpe_web_json_get_int_flexible(&ctx.parser, "bandwidth",
+        err = cpe_web_json_get_int_flexible(ctx.parser, "bandwidth",
                                              &bandwidth, &has_bandwidth);
     }
     cpe_web_post_end(&ctx);

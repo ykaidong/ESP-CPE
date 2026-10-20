@@ -16,7 +16,7 @@
 #include "esp_err.h"
 #include "esp_http_server.h"
 #include "esp_vfs.h"
-#include "json_parser.h"
+#include "cJSON.h"
 
 #include "cpe_auth.h"
 
@@ -31,8 +31,8 @@
 #define CPE_WEB_MAX_JSON_BODY           2048
 /* Upper bound for the whole body read, regardless of the socket timeouts. */
 #define CPE_WEB_BODY_READ_TIMEOUT_US    (2 * 1000 * 1000)
-/* json_parser's json_skip_elem() is recursive (audit R-12); reject deeply
- * nested documents before handing them to the parser. */
+/* cJSON's parser is recursive (audit R-12); reject deeply nested documents
+ * before handing them to it. */
 #define CPE_WEB_JSON_MAX_DEPTH          6
 
 #define CPE_WEB_STA_NAME_MAX_LEN        32
@@ -109,8 +109,7 @@ typedef struct {
     char session[CPE_WEB_SESSION_BUF_LEN];
     char body[CPE_WEB_MAX_JSON_BODY + 1];
     size_t body_len;
-    jparse_ctx_t parser;
-    bool parser_active;
+    cJSON *parser;                  /* NULL unless parse_json succeeded */
 } cpe_web_post_ctx_t;
 
 /* --- http_common.c ------------------------------------------------------- */
@@ -158,11 +157,11 @@ esp_err_t cpe_web_send_sbuf_json(httpd_req_t *req, const char *status_line,
                                  cpe_web_sbuf_t *sb, bool close_socket);
 
 bool cpe_web_json_depth_ok(const char *body, size_t len, int max_depth);
-esp_err_t cpe_web_json_get_string_unescaped(jparse_ctx_t *jctx, const char *name,
+esp_err_t cpe_web_json_get_string_unescaped(const cJSON *root, const char *name,
                                             char *out, size_t out_len);
-esp_err_t cpe_web_json_get_int_flexible(jparse_ctx_t *jctx, const char *name,
+esp_err_t cpe_web_json_get_int_flexible(const cJSON *root, const char *name,
                                         int *out, bool *present);
-esp_err_t cpe_web_json_get_bool_flexible(jparse_ctx_t *jctx, const char *name,
+esp_err_t cpe_web_json_get_bool_flexible(const cJSON *root, const char *name,
                                          bool *out, bool *present);
 
 /* --- station_registry.c -------------------------------------------------- */

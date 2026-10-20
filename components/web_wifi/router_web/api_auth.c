@@ -32,10 +32,10 @@ static esp_err_t api_login_post_handler(httpd_req_t *req)
 
     char username[CPE_ADMIN_USER_MAX_LEN + 1] = { 0 };
     char password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
-    err = cpe_web_json_get_string_unescaped(&ctx.parser, "username",
+    err = cpe_web_json_get_string_unescaped(ctx.parser, "username",
                                             username, sizeof(username));
     if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(&ctx.parser, "password",
+        err = cpe_web_json_get_string_unescaped(ctx.parser, "password",
                                                 password, sizeof(password));
     }
     cpe_web_post_end(&ctx);
@@ -131,10 +131,10 @@ static esp_err_t api_password_post_handler(httpd_req_t *req)
 
     char old_password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
     char new_password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
-    err = cpe_web_json_get_string_unescaped(&ctx.parser, "old_password",
+    err = cpe_web_json_get_string_unescaped(ctx.parser, "old_password",
                                             old_password, sizeof(old_password));
     if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(&ctx.parser, "new_password",
+        err = cpe_web_json_get_string_unescaped(ctx.parser, "new_password",
                                                 new_password, sizeof(new_password));
     }
     cpe_web_post_end(&ctx);
