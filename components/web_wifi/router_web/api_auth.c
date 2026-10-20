@@ -118,8 +118,12 @@ static esp_err_t api_logout_post_handler(httpd_req_t *req)
 
 static esp_err_t api_password_post_handler(httpd_req_t *req)
 {
+    /* REQUIRED, not MUTABLE: this is the endpoint that clears the forced
+     * password change, so it must stay usable while must_change is set. The
+     * session and CSRF token are still required. */
     static const cpe_web_post_opts_t opts = {
-        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .session = CPE_WEB_POST_SESSION_REQUIRED,
+        .csrf = true,
         .body = CPE_WEB_POST_BODY_REQUIRED,
         .parse_json = true,
     };
