@@ -99,21 +99,24 @@
 
 ## 4. 链路管理器循环（`link_manager_task`）
 
-任务优先级 6、栈 4KB，主循环每 **500ms** 执行一次：
+任务优先级 6、栈 4KB。实现为显式状态机（`lm_phase_t` + `lm_ctx_t`），`lm_tick()` 每轮执行一次；
+默认每 **500ms** 一拍，若本轮已执行阻塞式恢复动作（对应旧实现的 `continue`）则不再追加等待。
 
 ```
-for (;;) {
-    1. 若 CDC/USB Host 未安装 → usb_cdc_install()（只装一次）
-    2. 若 ECM 未就绪     → ecm_bring_up()
-                           创建 ECM 驱动 → 创建 netif + glue → 启动驱动
-                           （link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
-    3. 读取状态快照，计算 link/IP 变化
-    4. 分三种情况处理：
-       a. link up && got_ip  → ONLINE
-       b. link up && !got_ip → 等待 DHCP（见 5.2）
-       c. !link_up           → 等待枚举（见 5.1）
-}
+lm_tick()
+  ├─ lm_ensure_ready()      CDC/USB Host 未安装 → usb_cdc_install()（只装一次）
+  │                         ECM 未就绪 → ecm_bring_up()
+  │                         （link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
+  ├─ lm_service()           读取状态快照，处理 link/IP 边沿、NAPT/DNS、周期 heap 日志
+  └─ 按状态分派：
+       link up && got_ip   → lm_online()    ONLINE
+       link up && !got_ip  → lm_wait_ip()   等待 DHCP（见 5.2）
+       !link_up            → lm_wait_usb()  等待枚举（见 5.1）
 ```
+
+恢复动作各自独立：`lm_recover_dhcp()`、`lm_rebuild_ecm()`、`lm_try_reenumerate()`、
+`lm_wait_for_modem()`、`lm_escalate_usb_fault()`、`lm_controlled_restart()`。
+所有阈值、等待时长、日志文本与副作用顺序与重构前一致。
 
 ### 4.1 ONLINE 时做什么
 

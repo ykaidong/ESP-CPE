@@ -21,6 +21,7 @@
 - **A5 已处理（删除 STA 半成品）**：移除 `cpe_config_t` 的 `sta_ssid/sta_password`、相关 NVS 键与 `cpe_config_set_sta()`，以及 `app_wifi.c` 的 `build_sta_config()`、APSTA 分支和 STA 事件处理。产品上行仍是 USB ECM；将来需要 Wi-Fi 上行时再完整引入配置 API、状态与 UI。
 - **B1 已修复**：新增 `cpe_web_post_ctx_t` 与 `cpe_web_post_begin()` / `cpe_web_post_end()`（`http_common.c`），统一前置校验、会话/CSRF、读体、深度检查、解析与缓冲擦除；三个 API 文件中的 9 个 JSON POST handler 全部迁移。二进制 OTA 上传与 GET handler 不在模板范围内。
 - **JSON 解析层已迁移到 cJSON**：移除 `json_parser` 依赖，改用组件管理器提供的 `espressif/cjson`（1.7.19）。`cpe_web_post_ctx_t` 持有 `cJSON*`，三个取值 helper 保留原有语义（字符串/整数的严格类型判断、缺失与类型错误的区分）；解析仍要求单一顶层对象且无尾随数据。响应构造暂时保留 `sbuf`，输出层不在本次范围内。
+- **A4 已修复**：`link_manager_task()` 重构为显式状态机（`lm_phase_t` + `lm_ctx_t`），初始化、状态服务、IP/USB 等待与每种恢复动作拆成独立函数；500ms 轮询、全部阈值、阻塞时长、日志文本以及 NVS/NAPT 副作用顺序保持不变。
 - **待处理**：第三节死代码。其中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
 
 ---
@@ -57,6 +58,8 @@
 ### A4. 链路管理状态机是单函数 200 行
 
 `main/main.c` 的 `link_manager_task()` 把在线判定、ECM 重建、根端口掉电、模组复位、NVS 计数、受控重启全部塞在一个函数里，状态迁移靠局部变量和 sleep 表达。建议抽成显式状态表（状态/事件/动作/超时），每种恢复动作独立函数，便于单测与日志追踪。
+
+**处理结果**：已重构为 `lm_phase_t` + `lm_ctx_t` 状态机。`lm_tick()` 负责初始化、状态服务与分派；`lm_online()`、`lm_wait_ip()`、`lm_wait_usb()` 为状态处理函数；`lm_recover_dhcp()`、`lm_rebuild_ecm()`、`lm_try_reenumerate()`、`lm_wait_for_modem()`、`lm_escalate_usb_fault()`、`lm_controlled_restart()` 为独立恢复动作。为避免行为漂移，保留原阻塞式等待；状态迁移在 DEBUG 级别打印。
 
 ### A5. STA 功能半成品（已处理：删除）
 
@@ -221,7 +224,8 @@ xEventGroupSetBits(ecm->event_group, ECM_DEV_CONNECTED);
    已完成并验证。
 3. ~~B2/B3（前端公共函数与布局去重），需要浏览器逐页验证。~~
    已完成。
-4. **下一步**：B1（先拆文件，再抽 handler 模板），与 A1 合并处理，避免在单一巨型文件中改两遍。
-5. **随后**：第三节剩余死代码（已分类的预留项保持不动）。
+4. ~~**下一步**：B1（先拆文件，再抽 handler 模板）。~~
+   已完成（POST 模板 + cJSON 解析层）。
+5. **随后**：A3（配置事务接口）、A2（组件职责拆分）；第三节剩余死代码（已分类的预留项保持不动）。
 
-B5 已随 D8 修复；B4/B6/B7 与 B2/B3 已完成；A5 已按删除处理；B1 与其余死代码待处理。
+B5 已随 D8 修复；B4/B6/B7、B2/B3、B1、A4 已完成；A5 已按删除处理；其余死代码待处理。

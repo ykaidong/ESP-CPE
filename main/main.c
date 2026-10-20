@@ -570,209 +570,317 @@ static void backoff_sleep_ms(uint32_t ms)
     }
 }
 
+typedef enum {
+    LM_PHASE_BOOT = 0,      /* USB host / ECM driver bring-up */
+    LM_PHASE_USB_WAIT,      /* no link yet */
+    LM_PHASE_LINK_WAIT,     /* link is up, no IP yet */
+    LM_PHASE_ONLINE,        /* link up and IP acquired */
+} lm_phase_t;
+
+/* LM_TICK_ACTION means a recovery action already consumed the delay (the old
+ * loop's "continue"), so the task must not add its usual 500 ms tick. */
+typedef enum {
+    LM_TICK_IDLE = 0,
+    LM_TICK_ACTION,
+} lm_tick_result_t;
+
+typedef struct {
+    lm_phase_t phase;
+    uint32_t recover_attempts;
+    uint32_t enum_reset_attempts;
+    uint32_t dhcp_restarts;
+    int64_t wait_start_us;
+    int64_t online_start_us;
+    int64_t next_heap_log_us;
+    bool was_online;
+    bool last_link_up;
+    bool last_got_ip;
+} lm_ctx_t;
+
+static const char *lm_phase_name(lm_phase_t phase)
+{
+    switch (phase) {
+    case LM_PHASE_BOOT:
+        return "boot";
+    case LM_PHASE_USB_WAIT:
+        return "usb_wait";
+    case LM_PHASE_LINK_WAIT:
+        return "link_wait";
+    case LM_PHASE_ONLINE:
+        return "online";
+    default:
+        return "unknown";
+    }
+}
+
+static void lm_enter_phase(lm_ctx_t *ctx, lm_phase_t phase)
+{
+    if (ctx->phase != phase) {
+        ESP_LOGD(TAG, "Link manager phase: %s -> %s",
+                 lm_phase_name(ctx->phase), lm_phase_name(phase));
+        ctx->phase = phase;
+    }
+}
+
+/* USB host + CDC driver (installed once), then the ECM driver and netif. */
+static bool lm_ensure_ready(lm_ctx_t *ctx)
+{
+    if (!s_cdc_installed) {
+        if (usb_cdc_install() != ESP_OK) {
+            cpe_status_set_state(CPE_STATE_FAULT, "usb host init failed, retrying");
+            cpe_status_set_error("usb host init failed");
+            lm_enter_phase(ctx, LM_PHASE_BOOT);
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            return false;
+        }
+    }
+
+    if (!s_ecm.ready) {
+        if (ecm_bring_up() != ESP_OK) {
+            cpe_status_set_state(CPE_STATE_FAULT, "ecm driver init failed, retrying");
+            cpe_status_set_error("ecm driver init failed");
+            lm_enter_phase(ctx, LM_PHASE_BOOT);
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            return false;
+        }
+    }
+    return true;
+}
+
+static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
+{
+    if (st->link_up != ctx->last_link_up) {
+        ctx->wait_start_us = now;
+        ctx->last_link_up = st->link_up;
+        log_heap(st->link_up ? "link up" : "link down");
+    }
+    if (st->got_ip != ctx->last_got_ip) {
+        ctx->wait_start_us = now;
+        ctx->last_got_ip = st->got_ip;
+        if (st->got_ip) {
+            ctx->dhcp_restarts = 0;
+            cpe_link_online();
+        } else {
+            cpe_link_offline();
+        }
+        log_heap(st->got_ip ? "got ip" : "lost ip");
+    }
+
+#if CONFIG_CPE_HEAP_LOG_PERIOD_S > 0
+    if (ctx->next_heap_log_us == 0) {
+        ctx->next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
+    } else if (now >= ctx->next_heap_log_us) {
+        log_heap("periodic");
+        ctx->next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
+    }
+#endif
+}
+
+static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
+{
+    lm_enter_phase(ctx, LM_PHASE_ONLINE);
+
+    /* Healthy. Clear the persistent boot/recovery counter once stable. */
+    if (!ctx->was_online) {
+        ctx->was_online = true;
+        ctx->recover_attempts = 0;
+        ctx->enum_reset_attempts = 0;
+        ctx->online_start_us = now;
+        cpe_status_set_recovery_attempts(0);
+        cpe_status_set_state(CPE_STATE_ONLINE, "online");
+        ESP_LOGI(TAG, "CPE online (WAN IP %s)", st->ip);
+    }
+    if (ctx->online_start_us != 0 &&
+            (now - ctx->online_start_us) > (int64_t)CONFIG_CPE_HEALTHY_CLEAR_SECONDS * 1000000LL) {
+        if (cpe_boot_count_get() != 0) {
+            cpe_boot_count_clear();
+            /* Keep the reported status in sync: otherwise the web UI keeps
+             * showing the boot count captured at start-up. */
+            cpe_status_set_boot_count(0);
+            ESP_LOGI(TAG, "Healthy for %d s, boot counter cleared", CONFIG_CPE_HEALTHY_CLEAR_SECONDS);
+        }
+        ctx->online_start_us = 0;
+    }
+    return LM_TICK_IDLE;
+}
+
+/* Link is up but the modem has not obtained an IP: usually no SIM / PDP not
+ * activated. Keep the ECM/USB session and retry only the DHCP client (a
+ * teardown resets the modem USB interface, which is exactly what to avoid). */
+static lm_tick_result_t lm_recover_dhcp(lm_ctx_t *ctx, int64_t now)
+{
+    ctx->dhcp_restarts++;
+    cpe_status_set_error("waiting for the modem DHCP server");
+    cpe_status_set_state(CPE_STATE_LINK_WAIT, "waiting for IP (DHCP retry)");
+    dhcp_client_restart();
+    ctx->wait_start_us = now;
+    return LM_TICK_ACTION;
+}
+
+static lm_tick_result_t lm_rebuild_ecm(lm_ctx_t *ctx)
+{
+    ctx->dhcp_restarts = 0;
+    cpe_status_set_error("link up but no IP (SIM/PDP problem?)");
+    cpe_status_set_state(CPE_STATE_FAULT, "no IP from modem (SIM/PDP?), retrying");
+    ESP_LOGW(TAG, "DHCP client retries exhausted, rebuilding the ECM driver");
+    ecm_teardown();
+    ctx->wait_start_us = 0;
+    lm_enter_phase(ctx, LM_PHASE_BOOT);
+    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_RECOVERY_RETRY_MS));
+    return LM_TICK_ACTION;
+}
+
+static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
+{
+    lm_enter_phase(ctx, LM_PHASE_LINK_WAIT);
+    if (ctx->wait_start_us == 0) {
+        ctx->wait_start_us = now;
+    }
+    if ((now - ctx->wait_start_us) <= (int64_t)CONFIG_CPE_IP_TIMEOUT_MS * 1000LL) {
+        cpe_status_set_state(CPE_STATE_LINK_WAIT, "waiting for IP");
+        return LM_TICK_IDLE;
+    }
+
+    ctx->recover_attempts++;
+    cpe_status_set_recovery_attempts(ctx->recover_attempts);
+    ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
+             CONFIG_CPE_IP_TIMEOUT_MS, ctx->recover_attempts);
+
+    if (CONFIG_CPE_IP_DHCP_RESTARTS > 0 &&
+            ctx->dhcp_restarts < CONFIG_CPE_IP_DHCP_RESTARTS) {
+        return lm_recover_dhcp(ctx, now);
+    }
+    return lm_rebuild_ecm(ctx);
+}
+
+/* Nothing enumerated: the modem is absent OR its USB stack is stale (typical
+ * when the ESP32 resets while an externally powered module keeps its power ->
+ * CHECK_SHORT_DEV_DESC FAILED). ECM rebuilds cannot fix this, so try the reset
+ * mechanisms right away. */
+static bool lm_try_reenumerate(lm_ctx_t *ctx)
+{
+    if (ctx->enum_reset_attempts >= CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS) {
+        return false;
+    }
+    if (!usb_modem_reset()) {
+        return false;
+    }
+    ctx->enum_reset_attempts++;
+    cpe_status_set_state(CPE_STATE_BOOT, "re-enumerating the USB modem");
+    ctx->wait_start_us = 0;
+    lm_enter_phase(ctx, LM_PHASE_BOOT);
+    return true;
+}
+
+static lm_tick_result_t lm_wait_for_modem(lm_ctx_t *ctx)
+{
+    ESP_LOGW(TAG, "No USB modem detected, staying in fault mode (AP/Web available)");
+    cpe_status_set_state(CPE_STATE_FAULT, "no USB modem, AP/Web still available");
+    backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
+    /* Retry the whole reset cycle later (a modem may be plugged in at any
+     * time). */
+    ctx->enum_reset_attempts = 0;
+    ctx->wait_start_us = 0;
+    return LM_TICK_ACTION;
+}
+
+/* The modem is on the bus but the ECM link never came up: controlled reboot is
+ * the last resort, bounded by the persistent boot counter. */
+static void lm_controlled_restart(uint32_t boot_count)
+{
+    ESP_LOGE(TAG, "ECM link stuck, controlled reboot %"PRIu32"/%d",
+             boot_count, CONFIG_CPE_MAX_REBOOTS);
+    cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    app_wifi_deauth_all_stations();
+    esp_restart();
+}
+
+static lm_tick_result_t lm_escalate_usb_fault(lm_ctx_t *ctx)
+{
+    if (ctx->recover_attempts >= CONFIG_CPE_MAX_RECOVERY_ATTEMPTS) {
+        ctx->recover_attempts = 0;
+        cpe_status_set_recovery_attempts(0);
+
+        uint32_t boot_count = cpe_boot_count_get();
+        if (CONFIG_CPE_MAX_REBOOTS > 0 && boot_count < CONFIG_CPE_MAX_REBOOTS) {
+            lm_controlled_restart(boot_count);
+        }
+        ESP_LOGE(TAG, "ECM link stuck, keeping AP/Web alive (fault mode)");
+        cpe_status_set_state(CPE_STATE_FAULT, "ECM link stuck, AP/Web still available");
+        backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    return LM_TICK_ACTION;
+}
+
+/* No USB link at all: module missing, enumeration failed or the module
+ * dropped off the bus. */
+static lm_tick_result_t lm_wait_usb(lm_ctx_t *ctx, int64_t now)
+{
+    lm_enter_phase(ctx, LM_PHASE_USB_WAIT);
+    ctx->dhcp_restarts = 0;
+    if (ctx->wait_start_us == 0) {
+        ctx->wait_start_us = now;
+    }
+    if ((now - ctx->wait_start_us) <= (int64_t)CONFIG_CPE_LINK_TIMEOUT_MS * 1000LL) {
+        cpe_status_set_state(CPE_STATE_USB_WAIT, "waiting for USB modem");
+        return LM_TICK_IDLE;
+    }
+
+    ctx->recover_attempts++;
+    cpe_status_set_recovery_attempts(ctx->recover_attempts);
+    cpe_status_set_error("no USB link from 4G modem");
+    ESP_LOGW(TAG, "No USB link after %d ms (attempt %"PRIu32")",
+             CONFIG_CPE_LINK_TIMEOUT_MS, ctx->recover_attempts);
+    cpe_status_set_state(CPE_STATE_FAULT, "waiting for USB modem");
+    ecm_teardown();
+    ctx->wait_start_us = 0;
+
+    if (!usb_device_present()) {
+        if (lm_try_reenumerate(ctx)) {
+            return LM_TICK_ACTION;
+        }
+        return lm_wait_for_modem(ctx);
+    }
+    return lm_escalate_usb_fault(ctx);
+}
+
+static lm_tick_result_t lm_tick(lm_ctx_t *ctx)
+{
+    if (!lm_ensure_ready(ctx)) {
+        return LM_TICK_ACTION;
+    }
+
+    cpe_status_t st;
+    cpe_status_get(&st);
+    int64_t now = esp_timer_get_time();
+
+    lm_service(ctx, &st, now);
+
+    if (st.link_up && st.got_ip) {
+        return lm_online(ctx, &st, now);
+    }
+
+    ctx->was_online = false;
+    if (st.link_up) {
+        return lm_wait_ip(ctx, now);
+    }
+    return lm_wait_usb(ctx, now);
+}
+
 static void link_manager_task(void *arg)
 {
     (void)arg;
-    uint32_t recover_attempts = 0;
-    uint32_t enum_reset_attempts = 0;
-    uint32_t dhcp_restarts = 0;
-    int64_t wait_start_us = 0;
-    int64_t online_start_us = 0;
-    int64_t next_heap_log_us = 0;
-    bool was_online = false;
-    bool last_link_up = false;
-    bool last_got_ip = false;
+    lm_ctx_t ctx = { .phase = LM_PHASE_BOOT };
 
     cpe_status_set_state(CPE_STATE_BOOT, "starting usb modem support");
 
     for (;;) {
-        /* 1. USB host + CDC driver: installed once, never torn down. */
-        if (!s_cdc_installed) {
-            if (usb_cdc_install() != ESP_OK) {
-                cpe_status_set_state(CPE_STATE_FAULT, "usb host init failed, retrying");
-                cpe_status_set_error("usb host init failed");
-                vTaskDelay(pdMS_TO_TICKS(5000));
-                continue;
-            }
+        if (lm_tick(&ctx) == LM_TICK_IDLE) {
+            vTaskDelay(pdMS_TO_TICKS(500));
         }
-
-        /* 2. ECM driver + netif. */
-        if (!s_ecm.ready) {
-            if (ecm_bring_up() != ESP_OK) {
-                cpe_status_set_state(CPE_STATE_FAULT, "ecm driver init failed, retrying");
-                cpe_status_set_error("ecm driver init failed");
-                vTaskDelay(pdMS_TO_TICKS(5000));
-                continue;
-            }
-        }
-
-        cpe_status_t st;
-        cpe_status_get(&st);
-        int64_t now = esp_timer_get_time();
-
-        if (st.link_up != last_link_up) {
-            wait_start_us = now;
-            last_link_up = st.link_up;
-            log_heap(st.link_up ? "link up" : "link down");
-        }
-        if (st.got_ip != last_got_ip) {
-            wait_start_us = now;
-            last_got_ip = st.got_ip;
-            if (st.got_ip) {
-                dhcp_restarts = 0;
-                cpe_link_online();
-            } else {
-                cpe_link_offline();
-            }
-            log_heap(st.got_ip ? "got ip" : "lost ip");
-        }
-
-#if CONFIG_CPE_HEAP_LOG_PERIOD_S > 0
-        if (next_heap_log_us == 0) {
-            next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
-        } else if (now >= next_heap_log_us) {
-            log_heap("periodic");
-            next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
-        }
-#endif
-
-        if (st.link_up && st.got_ip) {
-            /* Healthy. Clear the persistent boot/recovery counter once stable. */
-            if (!was_online) {
-                was_online = true;
-                recover_attempts = 0;
-                enum_reset_attempts = 0;
-                online_start_us = now;
-                cpe_status_set_recovery_attempts(0);
-                cpe_status_set_state(CPE_STATE_ONLINE, "online");
-                ESP_LOGI(TAG, "CPE online (WAN IP %s)", st.ip);
-            }
-            if (online_start_us != 0 &&
-                    (now - online_start_us) > (int64_t)CONFIG_CPE_HEALTHY_CLEAR_SECONDS * 1000000LL) {
-                if (cpe_boot_count_get() != 0) {
-                    cpe_boot_count_clear();
-                    /* Keep the reported status in sync: otherwise the web UI
-                     * keeps showing the boot count captured at start-up. */
-                    cpe_status_set_boot_count(0);
-                    ESP_LOGI(TAG, "Healthy for %d s, boot counter cleared", CONFIG_CPE_HEALTHY_CLEAR_SECONDS);
-                }
-                online_start_us = 0;
-            }
-        } else {
-            was_online = false;
-
-            if (st.link_up) {
-                /* Link is up but the modem has not obtained an IP: usually no
-                 * SIM / PDP not activated. Retry the ECM config a few times but
-                 * never reboot, and keep AP/Web fully available. */
-                if (wait_start_us == 0) {
-                    wait_start_us = now;
-                }
-                if ((now - wait_start_us) > (int64_t)CONFIG_CPE_IP_TIMEOUT_MS * 1000LL) {
-                    recover_attempts++;
-                    cpe_status_set_recovery_attempts(recover_attempts);
-                    ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
-                             CONFIG_CPE_IP_TIMEOUT_MS, recover_attempts);
-
-                    if (CONFIG_CPE_IP_DHCP_RESTARTS > 0 &&
-                            dhcp_restarts < CONFIG_CPE_IP_DHCP_RESTARTS) {
-                        /* Give the modem more time to bring its DHCP server up:
-                         * keep the ECM/USB session and retry only the DHCP
-                         * client (a teardown resets the modem USB interface,
-                         * which is exactly what to avoid here). */
-                        dhcp_restarts++;
-                        cpe_status_set_error("waiting for the modem DHCP server");
-                        cpe_status_set_state(CPE_STATE_LINK_WAIT,
-                                             "waiting for IP (DHCP retry)");
-                        dhcp_client_restart();
-                        wait_start_us = now;
-                        continue;
-                    }
-
-                    dhcp_restarts = 0;
-                    cpe_status_set_error("link up but no IP (SIM/PDP problem?)");
-                    cpe_status_set_state(CPE_STATE_FAULT,
-                                         "no IP from modem (SIM/PDP?), retrying");
-                    ESP_LOGW(TAG, "DHCP client retries exhausted, rebuilding the ECM driver");
-                    ecm_teardown();
-                    wait_start_us = 0;
-                    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_RECOVERY_RETRY_MS));
-                    continue;
-                }
-                cpe_status_set_state(CPE_STATE_LINK_WAIT, "waiting for IP");
-            } else {
-                /* No USB link at all: module missing, enumeration failed or
-                 * the module dropped off the bus. */
-                dhcp_restarts = 0;
-                if (wait_start_us == 0) {
-                    wait_start_us = now;
-                }
-                if ((now - wait_start_us) > (int64_t)CONFIG_CPE_LINK_TIMEOUT_MS * 1000LL) {
-                    recover_attempts++;
-                    cpe_status_set_recovery_attempts(recover_attempts);
-                    cpe_status_set_error("no USB link from 4G modem");
-                    ESP_LOGW(TAG, "No USB link after %d ms (attempt %"PRIu32")",
-                             CONFIG_CPE_LINK_TIMEOUT_MS, recover_attempts);
-                    cpe_status_set_state(CPE_STATE_FAULT, "waiting for USB modem");
-                    ecm_teardown();
-                    wait_start_us = 0;
-
-                    if (!usb_device_present()) {
-                        /* Nothing enumerated: the modem is absent OR its USB
-                         * stack is stale (typical when the ESP32 is reset while
-                         * an externally powered module keeps its power ->
-                         * CHECK_SHORT_DEV_DESC FAILED). ECM rebuilds cannot fix
-                         * this; try the reset mechanisms right away (the first
-                         * attempt happens after LINK_TIMEOUT_MS, not after
-                         * several pointless ECM retries). */
-                        if (enum_reset_attempts < CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS) {
-                            if (usb_modem_reset()) {
-                                enum_reset_attempts++;
-                                cpe_status_set_state(CPE_STATE_BOOT, "re-enumerating the USB modem");
-                                wait_start_us = 0;
-                                continue;
-                            }
-                        }
-                        ESP_LOGW(TAG, "No USB modem detected, staying in fault mode (AP/Web available)");
-                        cpe_status_set_state(CPE_STATE_FAULT,
-                                             "no USB modem, AP/Web still available");
-                        backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
-                        /* Retry the whole reset cycle later (a modem may be
-                         * plugged in at any time). */
-                        enum_reset_attempts = 0;
-                        wait_start_us = 0;
-                        continue;
-                    }
-
-                    if (recover_attempts >= CONFIG_CPE_MAX_RECOVERY_ATTEMPTS) {
-                        recover_attempts = 0;
-                        cpe_status_set_recovery_attempts(0);
-                        /* The modem is on the bus but the ECM link never came
-                         * up: controlled reboot is the last resort, bounded by
-                         * the persistent boot counter. */
-                        uint32_t boot_count = cpe_boot_count_get();
-                        if (CONFIG_CPE_MAX_REBOOTS > 0 && boot_count < CONFIG_CPE_MAX_REBOOTS) {
-                            ESP_LOGE(TAG, "ECM link stuck, controlled reboot %"PRIu32"/%d",
-                                     boot_count, CONFIG_CPE_MAX_REBOOTS);
-                            cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
-                            vTaskDelay(pdMS_TO_TICKS(1000));
-                            app_wifi_deauth_all_stations();
-                            esp_restart();
-                        }
-                        ESP_LOGE(TAG, "ECM link stuck, keeping AP/Web alive (fault mode)");
-                        cpe_status_set_state(CPE_STATE_FAULT,
-                                             "ECM link stuck, AP/Web still available");
-                        backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
-                    } else {
-                        vTaskDelay(pdMS_TO_TICKS(2000));
-                    }
-                    continue;
-                }
-                cpe_status_set_state(CPE_STATE_USB_WAIT, "waiting for USB modem");
-            }
-        }
-
-        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
