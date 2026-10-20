@@ -19,7 +19,8 @@
   - B2：`byId`、`bindMenu` 与双 tab 切换逻辑收进 `CPE`（`api.js`），各页面只保留业务逻辑。
   - B3：新增 `layout.js` 统一生成 header 与左侧导航，四个 HTML 页面只保留占位节点。
 - **A5 已处理（删除 STA 半成品）**：移除 `cpe_config_t` 的 `sta_ssid/sta_password`、相关 NVS 键与 `cpe_config_set_sta()`，以及 `app_wifi.c` 的 `build_sta_config()`、APSTA 分支和 STA 事件处理。产品上行仍是 USB ECM；将来需要 Wi-Fi 上行时再完整引入配置 API、状态与 UI。
-- **待处理**：B1、第三节死代码。死代码中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
+- **B1 已修复**：新增 `cpe_web_post_ctx_t` 与 `cpe_web_post_begin()` / `cpe_web_post_end()`（`http_common.c`），统一前置校验、会话/CSRF、读体、深度检查、解析与缓冲擦除；三个 API 文件中的 9 个 JSON POST handler 全部迁移。二进制 OTA 上传与 GET handler 不在模板范围内。
+- **待处理**：第三节死代码。其中 `rssi/public_ip/modem_model` 属阶段二预留，`usb_ecm_get_cdc_port_handle` 为上游驱动 API，`modem_http_stop` 为 OTA/重启预留。
 
 ---
 
@@ -81,6 +82,8 @@ jparse_ctx_t jctx; json_parse_start(...); ...
 ```
 
 建议抽成 `api_post_begin(req, &ctx)` / `api_post_end(&ctx)` 或一个统一的分发层，把“前置校验 + 读体 + 深度检查 + 解析 + 清理”收进一处。
+
+**已修复（2026-10-20）**：9 个 JSON POST handler 已统一到 `cpe_web_post_begin()` / `cpe_web_post_end()`，并通过选项区分登录（无会话）、登出/恢复出厂（可选 CSRF）、常规变更（session + CSRF + 强制改密检查）以及 body 必需/可选。
 
 ### B2. 前端四个 JS 文件各写一份 `byId`
 

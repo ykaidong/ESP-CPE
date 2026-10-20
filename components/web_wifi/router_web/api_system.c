@@ -21,29 +21,19 @@ static const char *TAG = "cpe_web";
 
 static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, false);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
     /* Factory reset is allowed even while a forced password change is pending
      * (it is the recovery path), but it still requires a session + CSRF. */
-    esp_err_t err = cpe_web_require_session(req, session, true);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_REQUIRED,
+        .body = CPE_WEB_POST_BODY_OPTIONAL,
+        .csrf = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
-
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    if (req->content_len > 0) {
-        cpe_web_body_result_t body_result =
-            cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-        cpe_web_secure_wipe(body, sizeof(body));
-        if (body_result != CPE_WEB_BODY_OK) {
-            return cpe_web_send_body_error(req, body_result);
-        }
-        (void)body_len;
-    }
+    cpe_web_post_end(&ctx);
 
     err = cpe_config_factory_reset();
     if (err != ESP_OK) {
@@ -72,24 +62,16 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 
 static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, false);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session_mutable(req, session);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .body = CPE_WEB_POST_BODY_OPTIONAL,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
-    if (req->content_len > 0) {
-        char body[CPE_WEB_MAX_JSON_BODY + 1];
-        size_t body_len = 0;
-        if (cpe_web_read_json_body(req, body, sizeof(body), &body_len) !=
-                CPE_WEB_BODY_OK) {
-            return cpe_web_send_error_response(req, HTTPD_400,
-                                               "invalid_body", true);
-        }
-    }
+    cpe_web_post_end(&ctx);
 
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 64);

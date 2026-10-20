@@ -19,40 +19,26 @@ static const char *TAG = "cpe_web";
 
 static esp_err_t api_login_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, true);
-    if (pre != ESP_OK) {
-        return pre;
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_NONE,
+        .body = CPE_WEB_POST_BODY_REQUIRED,
+        .parse_json = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    cpe_web_body_result_t body_result =
-        cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-    if (body_result != CPE_WEB_BODY_OK) {
-        cpe_web_secure_wipe(body, sizeof(body));
-        return cpe_web_send_body_error(req, body_result);
-    }
-    if (!cpe_web_json_depth_ok(body, body_len, CPE_WEB_JSON_MAX_DEPTH)) {
-        cpe_web_secure_wipe(body, sizeof(body));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", true);
-    }
-
-    jparse_ctx_t jctx = { 0 };
     char username[CPE_ADMIN_USER_MAX_LEN + 1] = { 0 };
     char password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
-    esp_err_t err = ESP_OK;
-    if (json_parse_start(&jctx, body, (int)body_len) != OS_SUCCESS) {
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = cpe_web_json_get_string_unescaped(&jctx, "username",
-                                                username, sizeof(username));
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_string_unescaped(&jctx, "password",
-                                                    password, sizeof(password));
-        }
+    err = cpe_web_json_get_string_unescaped(&ctx.parser, "username",
+                                            username, sizeof(username));
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_string_unescaped(&ctx.parser, "password",
+                                                password, sizeof(password));
     }
-    json_parse_end(&jctx);
-    cpe_web_secure_wipe(body, sizeof(body));
+    cpe_web_post_end(&ctx);
 
     if (err != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
@@ -106,32 +92,21 @@ static esp_err_t api_login_post_handler(httpd_req_t *req)
 
 static esp_err_t api_logout_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, false);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
     /* Logout is idempotent and only logs the user out; accepting a valid
      * session without a CSRF token makes "logout" always work even if the
      * front-end lost its token (e.g. after a browser restart). */
-    esp_err_t err = cpe_web_require_session(req, session, false);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_REQUIRED,
+        .body = CPE_WEB_POST_BODY_OPTIONAL,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    if (req->content_len > 0) {
-        cpe_web_body_result_t body_result =
-            cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-        cpe_web_secure_wipe(body, sizeof(body));
-        if (body_result != CPE_WEB_BODY_OK) {
-            return cpe_web_send_body_error(req, body_result);
-        }
-        (void)body_len;
-    }
-
-    cpe_auth_logout(session);
+    cpe_auth_logout(ctx.session);
+    cpe_web_post_end(&ctx);
     (void)cpe_web_clear_session_cookie(req);
     cpe_web_clear_csrf_cookie(req);
     ESP_LOGI(TAG, "Administrator logged out");
@@ -143,44 +118,26 @@ static esp_err_t api_logout_post_handler(httpd_req_t *req)
 
 static esp_err_t api_password_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, true);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session(req, session, true);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .body = CPE_WEB_POST_BODY_REQUIRED,
+        .parse_json = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    cpe_web_body_result_t body_result =
-        cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-    if (body_result != CPE_WEB_BODY_OK) {
-        cpe_web_secure_wipe(body, sizeof(body));
-        return cpe_web_send_body_error(req, body_result);
-    }
-    if (!cpe_web_json_depth_ok(body, body_len, CPE_WEB_JSON_MAX_DEPTH)) {
-        cpe_web_secure_wipe(body, sizeof(body));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", false);
-    }
-
-    jparse_ctx_t jctx = { 0 };
     char old_password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
     char new_password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
-    if (json_parse_start(&jctx, body, (int)body_len) != OS_SUCCESS) {
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = cpe_web_json_get_string_unescaped(&jctx, "old_password",
-                                                old_password, sizeof(old_password));
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_string_unescaped(&jctx, "new_password",
-                                                    new_password, sizeof(new_password));
-        }
+    err = cpe_web_json_get_string_unescaped(&ctx.parser, "old_password",
+                                            old_password, sizeof(old_password));
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_string_unescaped(&ctx.parser, "new_password",
+                                                new_password, sizeof(new_password));
     }
-    json_parse_end(&jctx);
-    cpe_web_secure_wipe(body, sizeof(body));
+    cpe_web_post_end(&ctx);
 
     if (err != ESP_OK) {
         cpe_web_secure_wipe(old_password, sizeof(old_password));

@@ -61,36 +61,21 @@ static esp_err_t system_station_get_handler(httpd_req_t *req)
 
 static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, true);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session_mutable(req, session);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .body = CPE_WEB_POST_BODY_REQUIRED,
+        .parse_json = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    cpe_web_body_result_t body_result =
-        cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-    if (body_result != CPE_WEB_BODY_OK) {
-        return cpe_web_send_body_error(req, body_result);
-    }
-    if (!cpe_web_json_depth_ok(body, body_len, CPE_WEB_JSON_MAX_DEPTH)) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", false);
-    }
-
-    jparse_ctx_t jctx = { 0 };
     char mac_str[24] = { 0 };
-    if (json_parse_start(&jctx, body, (int)body_len) != OS_SUCCESS) {
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = cpe_web_json_get_string_unescaped(&jctx, "mac_str",
-                                                mac_str, sizeof(mac_str));
-    }
-    json_parse_end(&jctx);
+    err = cpe_web_json_get_string_unescaped(&ctx.parser, "mac_str",
+                                            mac_str, sizeof(mac_str));
+    cpe_web_post_end(&ctx);
 
     uint8_t mac[6] = { 0 };
     if (err != ESP_OK || !cpe_web_mac_parse(mac_str, mac)) {
@@ -126,41 +111,26 @@ static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
 
 static esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, true);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session_mutable(req, session);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .body = CPE_WEB_POST_BODY_REQUIRED,
+        .parse_json = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    cpe_web_body_result_t body_result =
-        cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-    if (body_result != CPE_WEB_BODY_OK) {
-        return cpe_web_send_body_error(req, body_result);
-    }
-    if (!cpe_web_json_depth_ok(body, body_len, CPE_WEB_JSON_MAX_DEPTH)) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", false);
-    }
-
-    jparse_ctx_t jctx = { 0 };
     char name_str[CPE_WEB_STA_NAME_MAX_LEN + 1] = { 0 };
     char mac_str[24] = { 0 };
-    if (json_parse_start(&jctx, body, (int)body_len) != OS_SUCCESS) {
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = cpe_web_json_get_string_unescaped(&jctx, "name_str",
-                                                name_str, sizeof(name_str));
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_string_unescaped(&jctx, "mac_str",
-                                                    mac_str, sizeof(mac_str));
-        }
+    err = cpe_web_json_get_string_unescaped(&ctx.parser, "name_str",
+                                            name_str, sizeof(name_str));
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_string_unescaped(&ctx.parser, "mac_str",
+                                                mac_str, sizeof(mac_str));
     }
-    json_parse_end(&jctx);
+    cpe_web_post_end(&ctx);
 
     uint8_t mac[6] = { 0 };
     if (err != ESP_OK || !cpe_web_mac_parse(mac_str, mac)) {

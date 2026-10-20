@@ -56,30 +56,17 @@ static esp_err_t wlan_general_get_handler(httpd_req_t *req)
 
 static esp_err_t wlan_general_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, true);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session_mutable(req, session);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .body = CPE_WEB_POST_BODY_REQUIRED,
+        .parse_json = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    cpe_web_body_result_t body_result =
-        cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-    if (body_result != CPE_WEB_BODY_OK) {
-        cpe_web_secure_wipe(body, sizeof(body));
-        return cpe_web_send_body_error(req, body_result);
-    }
-    if (!cpe_web_json_depth_ok(body, body_len, CPE_WEB_JSON_MAX_DEPTH)) {
-        cpe_web_secure_wipe(body, sizeof(body));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", false);
-    }
-
-    jparse_ctx_t jctx = { 0 };
     char ssid[CPE_SSID_MAX_LEN + 1] = { 0 };
     char password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
     char auth_mode[16] = { 0 };
@@ -93,49 +80,44 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
     bool has_max_sta = false;
     int max_sta = 0;
 
-    if (json_parse_start(&jctx, body, (int)body_len) != OS_SUCCESS) {
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = cpe_web_json_get_string_unescaped(&jctx, "ssid", ssid, sizeof(ssid));
-        has_ssid = (err == ESP_OK);
+    err = cpe_web_json_get_string_unescaped(&ctx.parser, "ssid", ssid, sizeof(ssid));
+    has_ssid = (err == ESP_OK);
+    if (err == ESP_ERR_NOT_FOUND) {
+        err = ESP_OK;
+    }
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_string_unescaped(&ctx.parser, "password",
+                                                password, sizeof(password));
+        has_password = (err == ESP_OK);
         if (err == ESP_ERR_NOT_FOUND) {
             err = ESP_OK;
         }
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_string_unescaped(&jctx, "password",
-                                                    password, sizeof(password));
-            has_password = (err == ESP_OK);
-            if (err == ESP_ERR_NOT_FOUND) {
-                err = ESP_OK;
-            }
-        }
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_string_unescaped(&jctx, "auth_mode",
-                                                    auth_mode, sizeof(auth_mode));
-            has_auth_mode = (err == ESP_OK);
-            if (err == ESP_ERR_NOT_FOUND) {
-                err = ESP_OK;
-            }
-        }
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_string_unescaped(&jctx, "device_name",
-                                                    device_name, sizeof(device_name));
-            has_device_name = (err == ESP_OK);
-            if (err == ESP_ERR_NOT_FOUND) {
-                err = ESP_OK;
-            }
-        }
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_bool_flexible(&jctx, "if_hide_ssid",
-                                                 &hidden, &has_hidden);
-        }
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_int_flexible(&jctx, "max_sta",
-                                                 &max_sta, &has_max_sta);
+    }
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_string_unescaped(&ctx.parser, "auth_mode",
+                                                auth_mode, sizeof(auth_mode));
+        has_auth_mode = (err == ESP_OK);
+        if (err == ESP_ERR_NOT_FOUND) {
+            err = ESP_OK;
         }
     }
-    json_parse_end(&jctx);
-    cpe_web_secure_wipe(body, sizeof(body));
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_string_unescaped(&ctx.parser, "device_name",
+                                                device_name, sizeof(device_name));
+        has_device_name = (err == ESP_OK);
+        if (err == ESP_ERR_NOT_FOUND) {
+            err = ESP_OK;
+        }
+    }
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_bool_flexible(&ctx.parser, "if_hide_ssid",
+                                             &hidden, &has_hidden);
+    }
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_int_flexible(&ctx.parser, "max_sta",
+                                             &max_sta, &has_max_sta);
+    }
+    cpe_web_post_end(&ctx);
 
     if (err != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
@@ -284,42 +266,27 @@ static esp_err_t wlan_advance_get_handler(httpd_req_t *req)
 
 static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
 {
-    esp_err_t pre = cpe_web_precheck_post(req, true);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session_mutable(req, session);
+    static const cpe_web_post_opts_t opts = {
+        .session = CPE_WEB_POST_SESSION_MUTABLE,
+        .body = CPE_WEB_POST_BODY_REQUIRED,
+        .parse_json = true,
+    };
+    cpe_web_post_ctx_t ctx;
+    esp_err_t err = cpe_web_post_begin(req, &opts, &ctx);
     if (err != ESP_OK) {
         return err;
     }
 
-    char body[CPE_WEB_MAX_JSON_BODY + 1];
-    size_t body_len = 0;
-    cpe_web_body_result_t body_result =
-        cpe_web_read_json_body(req, body, sizeof(body), &body_len);
-    if (body_result != CPE_WEB_BODY_OK) {
-        return cpe_web_send_body_error(req, body_result);
-    }
-    if (!cpe_web_json_depth_ok(body, body_len, CPE_WEB_JSON_MAX_DEPTH)) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", false);
-    }
-
-    jparse_ctx_t jctx = { 0 };
     bool has_channel = false;
     bool has_bandwidth = false;
     int channel = 0;
     int bandwidth = 0;
-    if (json_parse_start(&jctx, body, (int)body_len) != OS_SUCCESS) {
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = cpe_web_json_get_int_flexible(&jctx, "channel", &channel, &has_channel);
-        if (err == ESP_OK) {
-            err = cpe_web_json_get_int_flexible(&jctx, "bandwidth",
-                                                 &bandwidth, &has_bandwidth);
-        }
+    err = cpe_web_json_get_int_flexible(&ctx.parser, "channel", &channel, &has_channel);
+    if (err == ESP_OK) {
+        err = cpe_web_json_get_int_flexible(&ctx.parser, "bandwidth",
+                                             &bandwidth, &has_bandwidth);
     }
-    json_parse_end(&jctx);
+    cpe_web_post_end(&ctx);
 
     if (err != ESP_OK || !has_channel || !has_bandwidth) {
         return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);

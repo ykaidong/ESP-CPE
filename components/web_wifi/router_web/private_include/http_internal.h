@@ -82,6 +82,37 @@ typedef struct {
     int64_t start_time_us;
 } cpe_web_sta_snapshot_t;
 
+/*
+ * Common preamble for JSON POST handlers: origin/content checks, session/CSRF
+ * validation, body reading and parsing, and the matching cleanup.
+ */
+typedef enum {
+    CPE_WEB_POST_SESSION_NONE = 0,  /* public endpoint (login) */
+    CPE_WEB_POST_SESSION_REQUIRED,  /* valid session, CSRF optional */
+    CPE_WEB_POST_SESSION_MUTABLE,   /* session + CSRF + no forced password change */
+} cpe_web_post_session_t;
+
+typedef enum {
+    CPE_WEB_POST_BODY_NONE = 0,     /* the body is neither read nor required */
+    CPE_WEB_POST_BODY_OPTIONAL,     /* read (and wiped) if present */
+    CPE_WEB_POST_BODY_REQUIRED,     /* reject an empty body */
+} cpe_web_post_body_t;
+
+typedef struct {
+    cpe_web_post_session_t session;
+    cpe_web_post_body_t body;
+    bool csrf;                      /* honoured for SESSION_REQUIRED only */
+    bool parse_json;                /* requires BODY_REQUIRED */
+} cpe_web_post_opts_t;
+
+typedef struct {
+    char session[CPE_WEB_SESSION_BUF_LEN];
+    char body[CPE_WEB_MAX_JSON_BODY + 1];
+    size_t body_len;
+    jparse_ctx_t parser;
+    bool parser_active;
+} cpe_web_post_ctx_t;
+
 /* --- http_common.c ------------------------------------------------------- */
 
 void cpe_web_secure_wipe(void *ptr, size_t len);
@@ -103,6 +134,11 @@ esp_err_t cpe_web_require_session(httpd_req_t *req,
                                   char session[CPE_WEB_SESSION_BUF_LEN], bool need_csrf);
 esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
                                           char session[CPE_WEB_SESSION_BUF_LEN]);
+
+esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
+                             cpe_web_post_ctx_t *ctx);
+void cpe_web_post_end(cpe_web_post_ctx_t *ctx);
+
 esp_err_t cpe_web_set_session_cookie(httpd_req_t *req, const char *session);
 esp_err_t cpe_web_set_csrf_cookie(httpd_req_t *req, const char *csrf);
 void cpe_web_clear_csrf_cookie(httpd_req_t *req);

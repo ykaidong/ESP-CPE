@@ -322,6 +322,81 @@ esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
     return ESP_OK;
 }
 
+/*
+ * Run the shared POST preamble described by opts. On failure the corresponding
+ * error response has already been sent, so the caller returns the result
+ * directly. cpe_web_post_end() must be called on every success path; it ends the
+ * parser and wipes the credentials carried in the context.
+ */
+esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
+                             cpe_web_post_ctx_t *ctx)
+{
+    if (req == NULL || opts == NULL || ctx == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (opts->parse_json && opts->body != CPE_WEB_POST_BODY_REQUIRED) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(ctx, 0, sizeof(*ctx));
+
+    bool need_body = (opts->body == CPE_WEB_POST_BODY_REQUIRED);
+    esp_err_t err = cpe_web_precheck_post(req, need_body);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    switch (opts->session) {
+    case CPE_WEB_POST_SESSION_REQUIRED:
+        err = cpe_web_require_session(req, ctx->session, opts->csrf);
+        break;
+    case CPE_WEB_POST_SESSION_MUTABLE:
+        err = cpe_web_require_session_mutable(req, ctx->session);
+        break;
+    default:
+        err = ESP_OK;
+        break;
+    }
+    if (err != ESP_OK) {
+        cpe_web_post_end(ctx);
+        return err;
+    }
+
+    if (opts->body == CPE_WEB_POST_BODY_NONE ||
+            (opts->body == CPE_WEB_POST_BODY_OPTIONAL && req->content_len == 0)) {
+        return ESP_OK;
+    }
+
+    cpe_web_body_result_t body_result =
+        cpe_web_read_json_body(req, ctx->body, sizeof(ctx->body), &ctx->body_len);
+    if (body_result != CPE_WEB_BODY_OK) {
+        cpe_web_post_end(ctx);
+        return cpe_web_send_body_error(req, body_result);
+    }
+    if (!opts->parse_json) {
+        return ESP_OK;
+    }
+
+    if (!cpe_web_json_depth_ok(ctx->body, ctx->body_len, CPE_WEB_JSON_MAX_DEPTH) ||
+            json_parse_start(&ctx->parser, ctx->body, (int)ctx->body_len) != OS_SUCCESS) {
+        cpe_web_post_end(ctx);
+        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", true);
+    }
+    ctx->parser_active = true;
+    return ESP_OK;
+}
+
+void cpe_web_post_end(cpe_web_post_ctx_t *ctx)
+{
+    if (ctx == NULL) {
+        return;
+    }
+    if (ctx->parser_active) {
+        json_parse_end(&ctx->parser);
+    }
+    cpe_web_secure_wipe(ctx, sizeof(*ctx));
+}
+
 /* httpd_resp_set_hdr() keeps the pointer, it does not copy the string, and the
  * header is only serialized when the response is sent. The HTTP server is a
  * single task, so a static buffer is safe here (a stack buffer would dangle). */
