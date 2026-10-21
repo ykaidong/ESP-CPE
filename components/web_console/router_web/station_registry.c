@@ -108,15 +108,19 @@ bool cpe_web_station_name_valid(const char *name)
     if (len == 0 || len > CPE_WEB_STA_NAME_MAX_LEN) {
         return false;
     }
+    bool visible = false;
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)name[i];
         if (isalnum(c) || c == ' ' || c == '_' || c == '-' || c == '.' ||
                 c == '@' || c == '(' || c == ')') {
+            if (c != ' ') {
+                visible = true;
+            }
             continue;
         }
         return false;
     }
-    return true;
+    return visible;
 }
 
 /* ------------------------------------------------------------------------- */

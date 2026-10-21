@@ -26,7 +26,7 @@ static const char *TAG = "cpe_auth";
 #define CPE_MAX_FAILURES            5
 #define CPE_LOCKOUT_BASE_US         (60LL * 1000LL * 1000LL)
 #define CPE_LOCKOUT_MAX_US          (600LL * 1000LL * 1000LL)
-#define CPE_LOCKOUT_MAX_LEVEL       3
+#define CPE_LOCKOUT_MAX_LEVEL       4
 
 typedef struct {
     bool used;
@@ -131,9 +131,9 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
         s_fail_count++;
         if (s_fail_count >= CPE_MAX_FAILURES) {
             s_fail_count = 0;
-            /* Exponential backoff: 60s, 120s, 240s, then 600s cap. This makes
-             * repeated guessing progressively more expensive while a normal
-             * user only ever sees the first 60s lockout. */
+            /* Exponential backoff: 60s, 120s, 240s, 480s, then 600s cap. This
+             * makes repeated guessing progressively more expensive while a
+             * normal user only ever sees the first 60s lockout. */
             int64_t lockout = CPE_LOCKOUT_BASE_US << s_lockout_level;
             if (lockout > CPE_LOCKOUT_MAX_US) {
                 lockout = CPE_LOCKOUT_MAX_US;
@@ -254,14 +254,6 @@ esp_err_t cpe_auth_change_password(const char *old_password, const char *new_pas
         ESP_LOGI(TAG, "Admin password changed, all sessions invalidated");
     }
     return err;
-}
-
-bool cpe_auth_must_change(void)
-{
-    if (!s_inited) {
-        return true;
-    }
-    return cpe_config_admin_must_change();
 }
 
 uint32_t cpe_auth_lockout_remaining_s(void)

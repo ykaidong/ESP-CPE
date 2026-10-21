@@ -70,8 +70,8 @@
 | 状态 | 含义 | 进入条件 |
 | --- | --- | --- |
 | `BOOT` | 启动/恢复中 | 初始状态；重枚举、重建 ECM 时回到此状态 |
-| `USB_WAIT` | 等待 USB 模组 | 没有 link、也没有已枚举设备 |
-| `LINK_WAIT` | 已枚举，等待 link / IP | 模组已出现，但 link 未 up，或 link up 但没拿到 IP |
+| `USB_WAIT` | 等待 USB 模组 / link | `!link_up`：没有枚举到设备，或已枚举但 ECM link 尚未 up |
+| `LINK_WAIT` | link 已 up，等待 IP | `link_up && !got_ip`：等待模组 DHCP |
 | `ONLINE` | 在线 | `link_up && got_ip` |
 | `FAULT` | 可恢复故障，AP/Web 仍可用 | 某一级恢复次数耗尽，后台继续重试 |
 
@@ -82,12 +82,12 @@
                    │ 安装 USB Host/CDC、创建 ECM/netif
         ┌──────────┴──────────┐
         │                     │
-   无 USB 设备            模组已枚举
+      !link_up              link_up
         │                     │
    ┌────▼─────┐          ┌────▼─────┐
    │ USB_WAIT │          │LINK_WAIT │
    └────┬─────┘          └────┬─────┘
-        │ 恢复成功             │ link up + got IP
+        │ link up              │ got IP
         └──────────┬───────────┘
                    │
              ┌─────▼─────┐
@@ -108,12 +108,13 @@
 lm_tick()
   ├─ lm_ensure_ready()      CDC/USB Host 未安装 → wan_usb_cdc_install()（只装一次）
   │                         ECM 未就绪 → wan_ecm_bring_up()
-  │                         （link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
+  │                         （bring-up 即把 ECM netif 设为默认网卡；
+  │                          link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
   ├─ lm_service()           读取状态快照，处理 link/IP 边沿、NAPT/DNS、周期 heap 日志
   └─ 按状态分派：
        link up && got_ip   → lm_online()    ONLINE
        link up && !got_ip  → lm_wait_ip()   等待 DHCP（见 5.2）
-       !link_up            → lm_wait_usb()  等待枚举（见 5.1）
+       !link_up            → lm_wait_usb()  等待枚举/link（见 5.1）
 ```
 
 恢复动作各自独立：`lm_recover_dhcp()`、`lm_rebuild_ecm()`、`lm_try_reenumerate()`、
@@ -122,7 +123,6 @@ lm_tick()
 
 ### 4.1 ONLINE 时做什么
 
-- 把 ECM netif 设为默认网卡（`esp_netif_set_default_netif`）；
 - 开启 NAPT（`ip_napt_enable`），AP 客户端才能通过 4G 上网；
 - 把模组上报的 DNS 下发给 SoftAP 的 DHCP 服务，客户端无需手动配置 DNS；
 - 记录 `online_start_us`；连续在线满 `CPE_HEALTHY_CLEAR_SECONDS`（120s）后：
@@ -188,6 +188,11 @@ lm_tick()
 
 日志会明确打印 DHCP 客户端状态（`ESP_NETIF_DHCP_STARTED` 等），便于区分
 "DHCP 客户端没跑起来"和"客户端在跑但模组不回包"。
+
+> IP 恢复与 USB 恢复使用**独立计数**：link 上升沿会同时清零两者。长时间
+> "link up 但无 IP"（无 SIM / PDP 未激活）不会消耗 USB 恢复额度，因此之后
+> 链路掉线时仍从 0 开始尝试 `CPE_USB_ENUM_RESET_ATTEMPTS`，不会被直接判定
+> 为 ECM 卡死而触发整机重启。
 
 ### 5.3 已枚举但 ECM 链路始终起不来
 
@@ -255,7 +260,7 @@ lm_tick()
 - Web 状态页每 5s 轮询一次 `/status`；客户端列表在页签激活时每 4s 轮询；
 - 只有 `ONLINE` 状态下 NAPT 才开启，此时 AP 客户端才能访问外网；
 - 认证：会话 Cookie（`CPE_SID`）+ CSRF 双提交；首次登录强制修改管理员口令；
-  连续 5 次失败锁定 60s，之后按 120s/240s/600s 指数退避；会话空闲 30 分钟失效；
+  连续 5 次失败锁定 60s，之后按 120s/240s/480s/600s 指数退避；会话空闲 30 分钟失效；
   登出/改密会使会话失效；恢复出厂保留本机 AP 凭据，管理员口令重置为 AP 口令。
 
 ## 8. 复位/恢复出厂按键（默认 GPIO0）
@@ -294,7 +299,9 @@ lm_tick()
    - 写满且 `esp_ota_end()` 校验通过后才 `esp_ota_set_boot_partition()` 切换启动分区；
    - 响应 `{"status":"ok","message":"ota_ready","reboot":true}` 后自动重启；
 4. 新固件启动后处于 `PENDING_VERIFY`，在 `CPE_OTA_VALIDATE_DELAY_MS`（默认 60s）后由
-   `cpe_ota_mark_running_valid()` 标记为有效，取消回滚；
+   `cpe_ota_mark_running_valid()` 标记为有效，取消回滚。**仅当 SoftAP 与管理面都启动成功**
+   才运行该判定；任一方启动失败则镜像保持未验证，下次复位由 bootloader 回滚（4G 链路不作为
+   健康判定条件）；
 5. 若新固件在标记有效前崩溃/反复复位，bootloader 自动回滚到旧版本。
 
 失败/异常处理：

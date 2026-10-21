@@ -34,7 +34,13 @@ static void wan_event_handler(void *arg, esp_event_base_t base, int32_t id, void
         /* Do NOT gate on s_ecm.ready: the ECM driver may report the link state
          * while the netif/glue is still being created. Dropping those events
          * would lose the link-up forever because the driver suppresses
-         * duplicate reports (review P2-9). Only status is touched here. */
+         * duplicate reports (review P2-9). Only status is touched here.
+         * The payload is the handle that raised the event (&eth): ignore
+         * instances that are not the current ECM driver. */
+        iot_eth_handle_t *sender = (iot_eth_handle_t *)data;
+        if (sender == NULL || *sender != wan_ecm_eth_handle()) {
+            return;
+        }
         if (id == IOT_ETH_EVENT_CONNECTED) {
             ESP_LOGI(TAG, "4G link up");
             cpe_status_set_usb_connected(true);
@@ -58,6 +64,10 @@ static void wan_event_handler(void *arg, esp_event_base_t base, int32_t id, void
             cpe_status_set_ip(ip);
             cpe_status_set_error(NULL);
         } else if (id == IP_EVENT_ETH_LOST_IP) {
+            ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
+            if (event->esp_netif != wan_ecm_netif()) {
+                return;
+            }
             cpe_status_set_ip(NULL);
         }
     }
@@ -82,12 +92,14 @@ static void wan_apply_upstream_dns(void)
         return;
     }
 
-    if (esp_netif_dhcps_stop(ap) != ESP_OK) {
+    esp_err_t err = esp_netif_dhcps_stop(ap);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGW(TAG, "Failed to stop AP DHCP server: %s", esp_err_to_name(err));
         return;
     }
     dhcps_offer_t offer_dns = OFFER_DNS;
-    esp_err_t err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
-                                           &offer_dns, sizeof(offer_dns));
+    err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
+                                 &offer_dns, sizeof(offer_dns));
     if (err == ESP_OK) {
         err = esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
     }
@@ -162,20 +174,28 @@ static void on_ap_start_reapply_napt(void *arg, esp_event_base_t base,
 
 esp_err_t cpe_wan_events_register(void)
 {
+    esp_err_t first_err = ESP_OK;
     esp_err_t err = esp_event_handler_register(IOT_ETH_EVENT, ESP_EVENT_ANY_ID,
                                                wan_event_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register IOT_ETH event handler: %s", esp_err_to_name(err));
+        first_err = err;
     }
     err = esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, wan_event_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register ETH_GOT_IP handler: %s", esp_err_to_name(err));
+        if (first_err == ESP_OK) {
+            first_err = err;
+        }
     }
     err = esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_LOST_IP, wan_event_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register ETH_LOST_IP handler: %s", esp_err_to_name(err));
+        if (first_err == ESP_OK) {
+            first_err = err;
+        }
     }
-    return err;
+    return first_err;
 }
 
 esp_err_t cpe_wan_ap_hook_register(void)

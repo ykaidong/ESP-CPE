@@ -27,7 +27,7 @@ extern "C" {
  *
  * The AP is always secured with WPA2-PSK; the password is validated to be
  * 8..63 bytes by cpe_config. The AP netif is kept alive for the whole runtime
- * (the 4G/ECM link is independent, see main/).
+ * (the 4G/ECM link is independent, see components/cpe_wan).
  *
  * @return ESP_OK on success, an IDF error code otherwise.
  */
@@ -51,8 +51,8 @@ esp_err_t app_wifi_apply(const cpe_config_t *cfg);
 /**
  * @brief Get the SoftAP netif handle (NULL before app_wifi_start()).
  *
- * Used by main/ to enable NAPT and to apply upstream DNS to the AP DHCP
- * server. This component never touches DNS or NAPT itself.
+ * Used by components/cpe_wan to enable NAPT and to apply upstream DNS to the
+ * AP DHCP server. This component never touches DNS or NAPT itself.
  */
 esp_netif_t *app_wifi_get_ap_netif(void);
 

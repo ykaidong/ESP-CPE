@@ -22,7 +22,6 @@ typedef enum {
     CPE_AUTH_OK = 0,
     CPE_AUTH_ERR_CREDENTIALS,   /*!< Wrong user name or password */
     CPE_AUTH_ERR_LOCKED,        /*!< Too many failures, temporarily locked */
-    CPE_AUTH_ERR_NO_MEM,        /*!< No free session slot */
     CPE_AUTH_ERR_INVALID_ARG,   /*!< Malformed argument */
 } cpe_auth_result_t;
 
@@ -56,10 +55,11 @@ void cpe_auth_logout_all(void);
  *
  * The old password must be correct and the new one must pass validation.
  * All sessions are invalidated on success.
+ *
+ * @return ESP_OK, ESP_ERR_INVALID_ARG when the old password is wrong or the
+ *         new one is invalid, or another IDF error from persistence.
  */
 esp_err_t cpe_auth_change_password(const char *old_password, const char *new_password);
-
-bool cpe_auth_must_change(void);
 
 /** Remaining lockout time in seconds (0 when not locked). */
 uint32_t cpe_auth_lockout_remaining_s(void);

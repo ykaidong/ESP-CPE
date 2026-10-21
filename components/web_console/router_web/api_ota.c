@@ -144,6 +144,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
 
     uint8_t *buf = malloc(OTA_CHUNK_SIZE);
     if (buf == NULL) {
+        ota_drain_unread_body(req, req->content_len);
         return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
                                            "out_of_memory", true);
     }

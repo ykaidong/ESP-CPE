@@ -52,21 +52,27 @@ typedef struct {
 esp_err_t cpe_config_init(void);
 
 /**
+ * @brief Release the configuration lock and NVS handle.
+ *
+ * Only for a failed start-up retry (the caller erases NVS and calls
+ * cpe_config_init() again). Must not be called while other tasks use the
+ * configuration.
+ */
+void cpe_config_deinit(void);
+
+/**
  * @brief Get a copy of the current configuration (thread safe).
  */
 esp_err_t cpe_config_get(cpe_config_t *out);
 
 /**
- * @brief True until the first configuration has been persisted/printed.
+ * @brief True when this boot generated fresh credentials.
+ *
+ * Set only while cpe_config_init() is creating a missing/invalid namespace;
+ * it stays true until the next reboot (it is not cleared after printing).
  */
 bool cpe_config_first_boot(void);
 
-/**
- * @brief Print AP SSID and initial admin password to the console.
- *
- * Call only when the credentials have just been generated (first boot or
- * factory reset); credentials are never printed on normal boots.
- */
 /**
  * @brief Print the current credentials to the UART log (never to an HTTP response).
  *
@@ -133,7 +139,11 @@ bool cpe_config_admin_must_change(void);
 bool cpe_config_admin_password_is_ap_password(void);
 
 /**
- * @brief Erase stored configuration and regenerate random per-device credentials.
+ * @brief Erase stored configuration while keeping the device reachable.
+ *
+ * The device-unique AP SSID and password are preserved (so the user does not
+ * lose the SoftAP), every other setting returns to its default, and the admin
+ * password is reset to the AP password with the forced-change flag set.
  */
 esp_err_t cpe_config_factory_reset(void);
 

@@ -79,9 +79,6 @@ static esp_err_t api_login_post_handler(httpd_req_t *req)
         return cpe_web_send_error_response(req, CPE_WEB_HTTPD_429_STR,
                                            "locked_out", false);
     }
-    case CPE_AUTH_ERR_NO_MEM:
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "out_of_memory", false);
     default:
         /* Do not log the attempted credential. */
         ESP_LOGW(TAG, "Login failed");
@@ -159,8 +156,11 @@ static esp_err_t api_password_post_handler(httpd_req_t *req)
     cpe_web_secure_wipe(new_password, sizeof(new_password));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Password change rejected: %s", esp_err_to_name(err));
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "password_change_failed", false);
+        bool bad_input = (err == ESP_ERR_INVALID_ARG);
+        return cpe_web_send_error_response(req,
+                                           bad_input ? HTTPD_400 : CPE_WEB_HTTPD_500_STR,
+                                           bad_input ? "invalid_credentials" : "internal_error",
+                                           false);
     }
 
     /* cpe_auth_change_password() invalidated every session, including the

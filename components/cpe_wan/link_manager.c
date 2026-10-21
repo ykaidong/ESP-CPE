@@ -77,7 +77,11 @@ typedef enum {
 
 typedef struct {
     lm_phase_t phase;
-    uint32_t recover_attempts;
+    /* USB and IP recovery are counted separately: a modem that stays linked
+     * without an IP (no SIM / PDP inactive) must not push the USB fault path
+     * towards a reboot once the link later drops. */
+    uint32_t usb_attempts;
+    uint32_t ip_attempts;
     uint32_t enum_reset_attempts;
     uint32_t dhcp_restarts;
     int64_t wait_start_us;
@@ -139,12 +143,19 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
     if (st->link_up != ctx->last_link_up) {
         ctx->wait_start_us = now;
         ctx->last_link_up = st->link_up;
+        if (st->link_up) {
+            /* A fresh link starts a fresh recovery budget: the USB fault is
+             * over and the DHCP client gets a clean set of retries. */
+            ctx->usb_attempts = 0;
+            ctx->ip_attempts = 0;
+        }
         wan_log_heap(st->link_up ? "link up" : "link down");
     }
     if (st->got_ip != ctx->last_got_ip) {
         ctx->wait_start_us = now;
         ctx->last_got_ip = st->got_ip;
         if (st->got_ip) {
+            ctx->ip_attempts = 0;
             ctx->dhcp_restarts = 0;
             wan_link_online();
         } else {
@@ -170,7 +181,8 @@ static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t
     /* Healthy. Clear the persistent boot/recovery counter once stable. */
     if (!ctx->was_online) {
         ctx->was_online = true;
-        ctx->recover_attempts = 0;
+        ctx->usb_attempts = 0;
+        ctx->ip_attempts = 0;
         ctx->enum_reset_attempts = 0;
         ctx->online_start_us = now;
         cpe_status_set_recovery_attempts(0);
@@ -179,7 +191,8 @@ static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t
     }
     if (ctx->online_start_us != 0 &&
             (now - ctx->online_start_us) > (int64_t)CONFIG_CPE_HEALTHY_CLEAR_SECONDS * 1000000LL) {
-        if (cpe_boot_count_get() != 0) {
+        uint32_t boot_count = 0;
+        if (cpe_boot_count_get(&boot_count) == ESP_OK && boot_count != 0) {
             cpe_boot_count_clear();
             /* Keep the reported status in sync: otherwise the web UI keeps
              * showing the boot count captured at start-up. */
@@ -228,10 +241,10 @@ static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
         return LM_TICK_IDLE;
     }
 
-    ctx->recover_attempts++;
-    cpe_status_set_recovery_attempts(ctx->recover_attempts);
+    ctx->ip_attempts++;
+    cpe_status_set_recovery_attempts(ctx->ip_attempts);
     ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
-             CONFIG_CPE_IP_TIMEOUT_MS, ctx->recover_attempts);
+             CONFIG_CPE_IP_TIMEOUT_MS, ctx->ip_attempts);
 
     if (CONFIG_CPE_IP_DHCP_RESTARTS > 0 &&
             ctx->dhcp_restarts < CONFIG_CPE_IP_DHCP_RESTARTS) {
@@ -285,11 +298,12 @@ static void lm_controlled_restart(uint32_t boot_count)
 
 static lm_tick_result_t lm_escalate_usb_fault(lm_ctx_t *ctx)
 {
-    if (ctx->recover_attempts >= CONFIG_CPE_MAX_RECOVERY_ATTEMPTS) {
-        ctx->recover_attempts = 0;
+    if (ctx->usb_attempts >= CONFIG_CPE_MAX_RECOVERY_ATTEMPTS) {
+        ctx->usb_attempts = 0;
         cpe_status_set_recovery_attempts(0);
 
-        uint32_t boot_count = cpe_boot_count_get();
+        uint32_t boot_count = 0;
+        (void)cpe_boot_count_get(&boot_count);
         if (CONFIG_CPE_MAX_REBOOTS > 0 && boot_count < CONFIG_CPE_MAX_REBOOTS) {
             lm_controlled_restart(boot_count);
         }
@@ -316,11 +330,11 @@ static lm_tick_result_t lm_wait_usb(lm_ctx_t *ctx, int64_t now)
         return LM_TICK_IDLE;
     }
 
-    ctx->recover_attempts++;
-    cpe_status_set_recovery_attempts(ctx->recover_attempts);
+    ctx->usb_attempts++;
+    cpe_status_set_recovery_attempts(ctx->usb_attempts);
     cpe_status_set_error("no USB link from 4G modem");
     ESP_LOGW(TAG, "No USB link after %d ms (attempt %"PRIu32")",
-             CONFIG_CPE_LINK_TIMEOUT_MS, ctx->recover_attempts);
+             CONFIG_CPE_LINK_TIMEOUT_MS, ctx->usb_attempts);
     cpe_status_set_state(CPE_STATE_FAULT, "waiting for USB modem");
     wan_ecm_teardown();
     ctx->wait_start_us = 0;

@@ -41,6 +41,7 @@ menu "CPE Application Configuration"
     config CPE_USB_TASK_STACK_SIZE
         int "USB client task stack size"
         default 4096
+        range 2048 16384
 
     config CPE_USB_TASK_PRIORITY
         int "USB client task priority"
@@ -58,6 +59,7 @@ menu "CPE Application Configuration"
     config CPE_LINK_TIMEOUT_MS
         int "Timeout waiting for the USB 4G link (ms)"
         default 30000
+        range 1000 600000
         help
             If no USB link is reported within this time the link manager
             rebuilds the ECM driver and eventually power-cycles the root port.
@@ -146,6 +148,7 @@ menu "CPE Application Configuration"
     config CPE_MODULE_RESET_GPIO
         int "4G module RESET GPIO number (-1 = not connected)"
         default -1
+        range -1 48
         help
             When the 4G module is powered independently from the ESP32 (its
             USB VBUS does not drop when the ESP32 resets), the module USB

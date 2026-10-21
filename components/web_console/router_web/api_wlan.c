@@ -70,12 +70,12 @@ static esp_err_t wlan_general_get_handler(httpd_req_t *req)
     cpe_web_sbuf_init(&sb, 384);
     cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"ssid\":");
     cpe_web_sbuf_append_json_string(&sb, cfg.ap_ssid);
-    cpe_web_sbuf_appendf(&sb, ",\"if_hide_ssid\":\"%s\",\"auth_mode\":\"WPA2_PSK\",\"has_password\":%s",
+    cpe_web_sbuf_appendf(&sb, ",\"if_hide_ssid\":%s,\"auth_mode\":\"WPA2_PSK\",\"has_password\":%s",
                          cfg.ap_hidden ? "true" : "false",
                          cfg.ap_password[0] != '\0' ? "true" : "false");
     cpe_web_sbuf_append(&sb, ",\"device_name\":");
     cpe_web_sbuf_append_json_string(&sb, cfg.device_name);
-    cpe_web_sbuf_appendf(&sb, ",\"max_sta\":%u,\"channel\":%u,\"bandwidth\":\"%u\"}",
+    cpe_web_sbuf_appendf(&sb, ",\"max_sta\":%u,\"channel\":%u,\"bandwidth\":%u}",
                          (unsigned)cfg.max_sta, (unsigned)cfg.ap_channel,
                          (unsigned)cfg.ap_bandwidth);
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
@@ -230,6 +230,7 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
             err = cpe_config_update(wlan_general_mutate, &update);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to persist device name: %s", esp_err_to_name(err));
+                cpe_web_sbuf_free(&sb);
                 cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
                 return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
                                                    "persist_failed", false);
@@ -284,7 +285,7 @@ static esp_err_t wlan_advance_get_handler(httpd_req_t *req)
     }
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 96);
-    cpe_web_sbuf_appendf(&sb, "{\"status\":\"ok\",\"bandwidth\":\"%u\",\"channel\":\"%u\"}",
+    cpe_web_sbuf_appendf(&sb, "{\"status\":\"ok\",\"bandwidth\":%u,\"channel\":%u}",
                          (unsigned)cfg.ap_bandwidth, (unsigned)cfg.ap_channel);
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }

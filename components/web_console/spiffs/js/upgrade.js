@@ -164,7 +164,8 @@
                 setStatus('升级包已写入并通过校验，设备正在重启… 请等待约 1 分钟，重新连接 Wi-Fi 后刷新页面。', false);
                 return;
             }
-            if (xhr.status === 401) {
+            if (xhr.status === 401 ||
+                    (xhr.status === 403 && data.error === 'csrf_invalid')) {
                 CPE.clearCsrf();
                 window.location.href = '/login.html';
                 return;
@@ -214,7 +215,11 @@
                 window.location.href = '/index.html';
             });
         }
-        refreshInfo();
+        CPE.bootstrap().then(function () {
+            refreshInfo();
+        }).catch(function () {
+            /* Forced password change already redirected to the login page. */
+        });
     }
 
     if (document.readyState === 'loading') {

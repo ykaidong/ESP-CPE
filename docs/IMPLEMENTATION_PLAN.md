@@ -77,12 +77,14 @@ app_main（main/main.c 只做启动编排）
  ├─ app_wifi_start()       （SoftAP：来自 cpe_config，校验失败回退默认值）
  ├─ cpe_wan_ap_hook_register() （AP 重启后重新应用 NAPT/上游 DNS）
  ├─ modem_http_start()     （SPIFFS + httpd：登录/状态/配置/故障页）
- └─ cpe_wan_start()        （模组 RESET 脉冲 + 创建 cpe_link 任务，永不阻塞主流程）
+ └─ cpe_wan_start()        （可选模组 RESET 脉冲：仅配置了 CPE_MODULE_RESET_GPIO 时
+                            同步等待 hold + boot delay；随后创建 cpe_link 任务并返回）
       └─ cpe_link task     （components/cpe_wan/link_manager.c，后台链路管理器）
            ├─ usb_host_install（幂等、显式错误处理）
            ├─ usbh_cdc_driver_install / iot_eth_new_usb_ecm / iot_eth_install
+           ├─ ECM bring-up：set_default_netif（早于首个 got-IP 事件）
            ├─ 事件：IOT_ETH CONNECTED/DISCONNECTED、IP_EVENT_ETH_GOT_IP
-           ├─ ONLINE：set_default_netif + ip_napt_enable + 上游 DNS 下发给 AP
+           ├─ ONLINE：ip_napt_enable + 上游 DNS 下发给 AP
            └─ 失败：无设备 → 模组复位/根端口掉电；无 IP → 只重启 DHCP；ECM 卡死 → 有界重启；FAULT 保底（AP/Web 保持）
 ```
 
@@ -91,7 +93,7 @@ app_main（main/main.c 只做启动编排）
 ### 3.1 共享接口契约（跨组件冻结）
 
 - `cpe_config.h`：`cpe_config_init()`, `cpe_config_get()`, `cpe_config_update()`（mutator 事务接口）, `cpe_config_factory_reset()`, 校验函数。
-- `cpe_auth.h`：`cpe_auth_login()`, `cpe_auth_session_valid()`, `cpe_auth_csrf_valid()`, `cpe_auth_logout()`, `cpe_auth_change_password()`, `cpe_auth_must_change()`。
+- `cpe_auth.h`：`cpe_auth_login()`, `cpe_auth_session_valid()`, `cpe_auth_csrf_valid()`, `cpe_auth_logout()`, `cpe_auth_change_password()`。
 - `cpe_status.h`：`cpe_status_get()`, `cpe_status_set_state()/set_usb()/set_link()/set_ip()/set_error()`。
 - `app_wifi`（SoftAP，公开头 `app_wifi.h`）：
   - `esp_err_t app_wifi_start(void);`

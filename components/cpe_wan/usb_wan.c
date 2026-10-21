@@ -265,7 +265,10 @@ esp_err_t wan_ecm_bring_up(void)
     /* Make the ECM netif the default route as soon as it exists, instead of
      * waiting for the first got-IP event: DHCP, DNS and any traffic the upper
      * layers start from the link-up event then use the correct interface. */
-    esp_netif_set_default_netif(s_ecm.netif);
+    err = esp_netif_set_default_netif(s_ecm.netif);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to set ECM netif as default: %s", esp_err_to_name(err));
+    }
 
     /* The ECM driver may have already reported LINK_UP before the glue was
      * attached (review P2-9). Re-sync the netif with the current status so the
@@ -284,6 +287,11 @@ esp_err_t wan_ecm_bring_up(void)
 esp_netif_t *wan_ecm_netif(void)
 {
     return s_ecm.netif;
+}
+
+iot_eth_handle_t wan_ecm_eth_handle(void)
+{
+    return s_ecm.eth;
 }
 
 /* Restart the DHCP client on the ECM netif without touching the USB/ECM
@@ -317,7 +325,9 @@ void wan_ecm_dhcp_restart(void)
 /* ------------------------------------------------------------------------- */
 
 #if CONFIG_CPE_MODULE_RESET_GPIO >= 0
-static void module_reset_init(void)
+static bool s_module_reset_ready;
+
+static esp_err_t module_reset_init(void)
 {
     gpio_config_t io = {
         .pin_bit_mask = (1ULL << CONFIG_CPE_MODULE_RESET_GPIO),
@@ -326,51 +336,77 @@ static void module_reset_init(void)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    if (gpio_config(&io) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure module reset GPIO%d", CONFIG_CPE_MODULE_RESET_GPIO);
-        return;
+    esp_err_t err = gpio_config(&io);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to configure module reset GPIO%d: %s",
+                 CONFIG_CPE_MODULE_RESET_GPIO, esp_err_to_name(err));
+        return err;
     }
     /* Keep the module out of reset when idle. */
-    gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, !CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    err = gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, !CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set module reset GPIO%d idle level: %s",
+                 CONFIG_CPE_MODULE_RESET_GPIO, esp_err_to_name(err));
+        return err;
+    }
+    s_module_reset_ready = true;
+    return ESP_OK;
 }
 
-static void module_reset_pulse(void)
+static esp_err_t module_reset_pulse(void)
 {
     ESP_LOGW(TAG, "Pulsing the 4G module reset (GPIO%d)", CONFIG_CPE_MODULE_RESET_GPIO);
-    gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    esp_err_t err = gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO,
+                                   CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
     vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_MODULE_RESET_HOLD_MS));
-    gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO, !CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    esp_err_t release_err = gpio_set_level(CONFIG_CPE_MODULE_RESET_GPIO,
+                                           !CONFIG_CPE_MODULE_RESET_ACTIVE_LEVEL);
+    if (err == ESP_OK) {
+        err = release_err;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Module reset GPIO%d pulse failed: %s",
+                 CONFIG_CPE_MODULE_RESET_GPIO, esp_err_to_name(err));
+    }
     vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_MODULE_BOOT_DELAY_MS));
+    return err;
 }
 #endif
 
 /* An ESP32 reset does not power-cycle an externally powered 4G module; its USB
  * stack can stay in a stale state and enumeration fails with
  * "CHECK_SHORT_DEV_DESC FAILED". Pulse the module reset once at boot so the USB
- * host always enumerates from a clean state. */
+ * host always enumerates from a clean state. A missing/failed reset line is not
+ * fatal: the link manager can still power-cycle the root port later. */
 esp_err_t wan_boot_reset_module(void)
 {
 #if CONFIG_CPE_MODULE_RESET_GPIO >= 0
-    module_reset_init();
+    if (module_reset_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Module reset GPIO unavailable, relying on the USB root port");
+        return ESP_OK;
+    }
     ESP_LOGI(TAG, "Resetting the 4G module so USB enumeration starts clean");
-    module_reset_pulse();
+    (void)module_reset_pulse();
 #endif
     return ESP_OK;
 }
 
 /* Bring the module USB stack back to a clean state. Prefers the module reset
- * GPIO (definitive for an externally powered module); without it the host root
- * port is power-cycled, which detaches the modem from the bus. Returns true when
- * a reset was actually performed. */
+ * GPIO (definitive for an externally powered module); without it (or when the
+ * GPIO path fails) the host root port is power-cycled, which detaches the modem
+ * from the bus. Returns true when a reset was actually performed. */
 bool wan_usb_modem_reset(void)
 {
 #if CONFIG_CPE_MODULE_RESET_GPIO >= 0
-    module_reset_pulse();
-    return true;
-#else
+    if (s_module_reset_ready || module_reset_init() == ESP_OK) {
+        if (module_reset_pulse() == ESP_OK) {
+            return true;
+        }
+        ESP_LOGW(TAG, "Module reset pulse failed, falling back to the USB root port");
+    }
+#endif
     ESP_LOGW(TAG, "Power-cycling the USB root port to force re-enumeration");
     return usb_root_port_power_cycle(CONFIG_CPE_USB_PORT_POWER_OFF_MS) == ESP_OK;
-#endif
 }
 
 /* True when the USB Host Library has at least one *enumerated* device.

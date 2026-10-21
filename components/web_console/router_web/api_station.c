@@ -133,8 +133,11 @@ static esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
     cpe_web_post_end(&ctx);
 
     uint8_t mac[6] = { 0 };
-    if (err != ESP_OK || !cpe_web_mac_parse(mac_str, mac)) {
+    if (err != ESP_OK) {
         return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);
+    }
+    if (!cpe_web_mac_parse(mac_str, mac)) {
+        return cpe_web_send_error_response(req, HTTPD_400, "invalid_mac", false);
     }
     if (!cpe_web_station_name_valid(name_str)) {
         return cpe_web_send_error_response(req, HTTPD_400,

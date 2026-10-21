@@ -15,8 +15,8 @@ extern "C" {
 
 typedef enum {
     CPE_STATE_BOOT = 0,     /*!< Bootstrapping */
-    CPE_STATE_USB_WAIT,     /*!< Waiting for the USB 4G module */
-    CPE_STATE_LINK_WAIT,    /*!< Module enumerated, waiting for link/IP */
+    CPE_STATE_USB_WAIT,     /*!< No ECM link yet (module missing or not linked) */
+    CPE_STATE_LINK_WAIT,    /*!< Link up, waiting for the DHCP address */
     CPE_STATE_ONLINE,       /*!< Link up and IP acquired */
     CPE_STATE_FAULT,        /*!< Recoverable failure, AP/Web still available */
 } cpe_state_t;

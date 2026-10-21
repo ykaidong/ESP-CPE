@@ -24,8 +24,22 @@ extern "C" {
  *       read-modify-write and must not run concurrently; they are used from
  *       the boot path and the factory-reset path only.
  */
-uint32_t cpe_boot_count_get(void);
-uint32_t cpe_boot_count_increment(void);
+/**
+ * @brief Read the counter (0 when it has never been written).
+ *
+ * @param count  Receives the value; 0 when NVS is unreadable.
+ * @return ESP_OK, or the NVS error.
+ */
+esp_err_t cpe_boot_count_get(uint32_t *count);
+
+/**
+ * @brief Increment and persist the counter.
+ *
+ * @param count  Receives the new value even if persisting it failed.
+ * @return ESP_OK, or the NVS error (the stored value is then unchanged).
+ */
+esp_err_t cpe_boot_count_increment(uint32_t *count);
+
 esp_err_t cpe_boot_count_clear(void);
 
 #ifdef __cplusplus

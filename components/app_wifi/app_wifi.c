@@ -14,8 +14,8 @@
  *    logged.
  *  - All IDF calls are checked, never wrapped in ESP_ERROR_CHECK, so an
  *    invalid stored value results in a returned error instead of abort().
- *  - DNS and NAPT are deliberately not configured here: main/ applies the
- *    upstream DNS and enables NAPT once the 4G link is online.
+ *  - DNS and NAPT are deliberately not configured here: components/cpe_wan
+ *    applies the upstream DNS and enables NAPT once the 4G link is online.
  */
 
 #include <string.h>
@@ -28,6 +28,7 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "lwip/ip_addr.h"
 
@@ -300,7 +301,9 @@ fail_wifi:
     }
 fail_netif:
     if (s_ap_netif != NULL) {
-        esp_netif_destroy(s_ap_netif);
+        /* Created by esp_netif_create_default_wifi_ap(): use the matching
+         * destructor so the default handler and DHCP state go with it. */
+        esp_netif_destroy_default_wifi(s_ap_netif);
         s_ap_netif = NULL;
     }
     return err;

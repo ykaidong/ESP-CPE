@@ -56,7 +56,7 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     cpe_web_sbuf_append_json_string(&sb, cfg_ok ? cfg.device_name : "");
     cpe_web_sbuf_append(&sb, ",\"ap\":{\"ssid\":");
     cpe_web_sbuf_append_json_string(&sb, cfg_ok ? cfg.ap_ssid : "");
-    cpe_web_sbuf_appendf(&sb, ",\"channel\":%u,\"bandwidth\":\"%u\",\"hidden\":%s,\"max_sta\":%u}}",
+    cpe_web_sbuf_appendf(&sb, ",\"channel\":%u,\"bandwidth\":%u,\"hidden\":%s,\"max_sta\":%u}}",
                          (unsigned)(cfg_ok ? cfg.ap_channel : 0),
                          (unsigned)(cfg_ok ? cfg.ap_bandwidth : 0),
                          (cfg_ok && cfg.ap_hidden) ? "true" : "false",

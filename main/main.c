@@ -17,6 +17,8 @@
  *    reboots: the device stays in fault mode with AP/Web.
  */
 
+#include <stdbool.h>
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -38,11 +40,11 @@ static const char *TAG = "cpe";
  *
  * With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE the new image boots in
  * PENDING_VERIFY: it has to be marked valid, otherwise the bootloader rolls
- * back on the next reset. AP + Web being up (which is true by the time this
- * task runs) is what counts as "healthy": the 4G link depends on the external
- * modem and cannot be a firmware health criterion. A crash/reboot loop stops
- * the image from ever reaching this point, which is exactly when the rollback
- * is wanted. */
+ * back on the next reset. AP + Web being up is what counts as "healthy", so
+ * this task is only started when both came up: the 4G link depends on the
+ * external modem and cannot be a firmware health criterion. A crash/reboot
+ * loop stops the image from ever reaching this point, which is exactly when
+ * the rollback is wanted. */
 static void ota_validate_task(void *arg)
 {
     (void)arg;
@@ -103,14 +105,16 @@ void app_main(void)
 
     /* SoftAP + Web first: the device is always reachable, even without 4G. */
     err = app_wifi_start();
-    if (err != ESP_OK) {
+    bool ap_ok = (err == ESP_OK);
+    if (!ap_ok) {
         ESP_LOGE(TAG, "SoftAP start failed: %s", esp_err_to_name(err));
     }
     /* Must come after app_wifi_start(): the default Wi-Fi handler that re-adds
      * the AP netif has to run before this one re-enables NAPT on it. */
     (void)cpe_wan_ap_hook_register();
     err = modem_http_start();
-    if (err != ESP_OK) {
+    bool web_ok = (err == ESP_OK);
+    if (!web_ok) {
         ESP_LOGE(TAG, "Web server start failed: %s", esp_err_to_name(err));
     }
 
@@ -130,23 +134,31 @@ void app_main(void)
         ESP_LOGW(TAG, "Reset button monitor not started (%s)", esp_err_to_name(err));
     }
 
-    ESP_LOGI(TAG, "CPE started, management console on http://192.168.4.1");
+    ESP_LOGI(TAG, "CPE started, management console on http://%s", CONFIG_SERVER_IP);
 
     /* Firmware/OTA bookkeeping: log the running image, then validate it once the
      * boot is considered healthy (see ota_validate_task). */
     cpe_ota_info_t ota_info;
+    bool ota_pending = false;
     if (cpe_ota_get_info(&ota_info) == ESP_OK) {
         ESP_LOGI(TAG, "Firmware version %s on %s%s%s",
                  ota_info.running_version, ota_info.running_partition,
                  ota_info.next_partition[0] != '\0' ? ", next boot " : "",
                  ota_info.next_partition);
-        if (ota_info.pending_verify) {
+        ota_pending = ota_info.pending_verify;
+    }
+    if (ap_ok && web_ok) {
+        if (ota_pending) {
             ESP_LOGW(TAG, "Image is pending verification, validating in %d ms",
                      CONFIG_CPE_OTA_VALIDATE_DELAY_MS);
         }
-    }
-    if (xTaskCreate(ota_validate_task, "cpe_ota", 3072, NULL, 4, NULL) != pdPASS) {
-        ESP_LOGW(TAG, "Failed to create the OTA validation task");
+        if (xTaskCreate(ota_validate_task, "cpe_ota", 3072, NULL, 4, NULL) != pdPASS) {
+            ESP_LOGW(TAG, "Failed to create the OTA validation task");
+        }
+    } else if (ota_pending) {
+        /* AP or Web did not come up: leave the image unverified so the
+         * bootloader rolls back on the next reset. */
+        ESP_LOGE(TAG, "AP/Web did not start, image stays unverified (rollback on next boot)");
     }
 
     cpe_wan_log_heap("boot");

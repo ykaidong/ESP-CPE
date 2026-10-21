@@ -13,6 +13,7 @@
 
 #include "esp_err.h"
 #include "esp_netif.h"
+#include "iot_eth.h"
 
 /* --- usb_wan.c ----------------------------------------------------------- */
 
@@ -24,6 +25,7 @@ void wan_ecm_dhcp_restart(void);
 bool wan_usb_modem_reset(void);
 bool wan_usb_device_present(void);
 esp_netif_t *wan_ecm_netif(void);
+iot_eth_handle_t wan_ecm_eth_handle(void);
 
 /* --- wan_net.c ----------------------------------------------------------- */
 
