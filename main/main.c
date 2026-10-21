@@ -33,6 +33,7 @@
 #include "cpe_web.h"
 #include "cpe_wan.h"
 #include "reset_button.h"
+#include "status_led.h"
 
 static const char *TAG = "cpe";
 
@@ -58,6 +59,14 @@ void app_main(void)
     /* Start the reset-button boot window: a double-click within the first
      * seconds after boot prints the credentials (physical-presence trigger). */
     (void)reset_button_init();
+
+    /* The status LED works before the network stack exists: an empty status
+     * reads as "no link" and shows the red blink. */
+    if (status_led_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Status LED unavailable");
+    } else if (status_led_start() != ESP_OK) {
+        ESP_LOGW(TAG, "Status LED task not started");
+    }
 
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {

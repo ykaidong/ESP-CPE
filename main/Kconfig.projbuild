@@ -250,4 +250,38 @@ menu "CPE Application Configuration"
             Continuous hold time after boot before the device restores factory
             settings and reboots.
 
+    config CPE_STATUS_LED_GPIO
+        int "WS2812 status LED GPIO (-1 = disabled)"
+        default 48
+        range -1 48
+        help
+            Single addressable RGB LED (WS2812/NeoPixel) driven from the RMT
+            peripheral. It shows the WAN state:
+
+              red blinking  - no 4G link (modem missing or not enumerated)
+              red solid     - link up but no IP yet (no SIM, PDP not active)
+              green solid   - link up and an IP was acquired
+              blue blinking - factory reset was triggered, reboot pending
+
+            Set to -1 on boards without the LED or when the pin is used for
+            something else.
+
+    config CPE_STATUS_LED_BRIGHTNESS
+        depends on CPE_STATUS_LED_GPIO >= 0
+        int "Status LED brightness per channel (0-255)"
+        default 32
+        range 1 255
+        help
+            Scales every colour channel. The default keeps the LED readable
+            indoors without being blinding.
+
+    config CPE_STATUS_LED_BLINK_MS
+        depends on CPE_STATUS_LED_GPIO >= 0
+        int "Status LED blink half-period (ms)"
+        default 500
+        range 100 2000
+        help
+            Time the blinking patterns stay on and off. 500 ms gives a calm
+            1 Hz blink.
+
 endmenu

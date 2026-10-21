@@ -33,6 +33,7 @@
 #include "cpe_config.h"
 #include "cpe_web.h"
 #include "reset_button.h"
+#include "status_led.h"
 
 static const char *TAG = "reset_button";
 
@@ -118,6 +119,7 @@ static void reset_button_task(void *arg)
                 (now_us - press_start_us) >=
                 (int64_t)CONFIG_CPE_FACTORY_RESET_HOLD_MS * 1000LL) {
             reset_triggered = true;
+            status_led_factory_reset();
             ESP_LOGW(TAG, "Reset button held for %d ms, restoring factory settings",
                      CONFIG_CPE_FACTORY_RESET_HOLD_MS);
             esp_err_t err = cpe_config_factory_reset();
