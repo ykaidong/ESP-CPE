@@ -474,6 +474,129 @@ static void at_parse_registration(const char *resp, const char *tag)
     cpe_status_set_modem_registered(stat == 1 || stat == 5);
 }
 
+static const char *at_skip_ws(const char *p);
+
+/* +CGATT: <state>, 1 = attached to the packet switched domain. */
+static void at_parse_cgatt(const char *resp)
+{
+    const char *p = strstr(resp, "+CGATT:");
+    if (p == NULL) {
+        return;
+    }
+    char *end = NULL;
+    long attached = strtol(p + 7, &end, 10);
+    if (end == p + 7) {
+        return;
+    }
+    cpe_status_set_ps(attached == 1, true);
+}
+
+/* +CGACT: <cid>,<state> is repeated per defined context; without any line
+ * (no context defined) the answer is still OK, so "no line" means inactive. */
+static void at_parse_cgact(const char *resp)
+{
+    bool active = false;
+    const char *p = resp;
+
+    while ((p = strstr(p, "+CGACT:")) != NULL) {
+        p += 7;
+        char *cid_end = NULL;
+        (void)strtol(p, &cid_end, 10);
+        if (cid_end == p || *cid_end != ',') {
+            continue;
+        }
+        char *state_end = NULL;
+        long state = strtol(cid_end + 1, &state_end, 10);
+        if (state_end != cid_end + 1 && state == 1) {
+            active = true;
+        }
+    }
+    cpe_status_set_pdp(active, true);
+}
+
+/* Quectel LTE: +QCSQ: "LTE",<rssi>,<rsrp>,<sinr>,<rsrq>.
+ * SINR is coded 0..250, actual dB = value / 5 - 20. Other RATs and
+ * "NOSERVICE" carry no LTE metrics, so the values are marked invalid. */
+static void at_parse_qcsq(const char *resp)
+{
+    const char *p = strstr(resp, "+QCSQ:");
+    if (p == NULL) {
+        return;
+    }
+    p = at_skip_ws(p + 6);
+    if (*p == '"') {
+        p++;
+    }
+    const char *rat_end = strchr(p, '"');
+    if (rat_end != NULL && (size_t)(rat_end - p) == 3 && strncmp(p, "LTE", 3) == 0) {
+        long values[4] = { 0 };
+        const char *s = rat_end + 1;
+        bool parsed = true;
+        for (int i = 0; i < 4; i++) {
+            s = at_skip_ws(s);
+            if (*s == ',') {
+                s = at_skip_ws(s + 1);
+            }
+            char *end = NULL;
+            values[i] = strtol(s, &end, 10);
+            if (end == s) {
+                parsed = false;
+                break;
+            }
+            s = end;
+        }
+        if (parsed) {
+            long rsrp = values[1];
+            long sinr_raw = values[2];
+            long rsrq = values[3];
+            if (rsrp >= -160 && rsrp <= -40 &&
+                    sinr_raw >= 0 && sinr_raw <= 250 &&
+                    rsrq >= -30 && rsrq <= 0) {
+                cpe_status_set_signal_quality((int)rsrp, (int)rsrq,
+                                              (int)(sinr_raw / 5 - 20), true);
+                return;
+            }
+        }
+    }
+    cpe_status_set_signal_quality(0, 0, 0, false);
+}
+
+/* +QTEMP: "tsens0",36,"tsens1",37 on multi-sensor firmware, a single number
+ * on others. Sensor names are skipped; the first plausible reading is used. */
+static bool at_parse_qtemp(const char *resp, int *temp_c)
+{
+    const char *p = strstr(resp, "+QTEMP:");
+    if (p == NULL) {
+        return false;
+    }
+    p += 7;
+
+    while (*p != '\0' && *p != '\r' && *p != '\n') {
+        if (*p == '"') {
+            const char *name_end = strchr(p + 1, '"');
+            if (name_end == NULL) {
+                return false;
+            }
+            p = name_end + 1;
+        } else if ((*p >= '0' && *p <= '9') || *p == '-') {
+            char *end = NULL;
+            long value = strtol(p, &end, 10);
+            if (end == p) {
+                p++;
+                continue;
+            }
+            if (value >= -40 && value <= 125) {
+                *temp_c = (int)value;
+                return true;
+            }
+            p = end;
+        } else {
+            p++;
+        }
+    }
+    return false;
+}
+
 static const char *at_skip_ws(const char *p)
 {
     while (*p == ' ' || *p == '\t' || *p == '\r') {
@@ -674,6 +797,10 @@ static void at_clear_status(void)
     cpe_status_set_modem_registered(false);
     cpe_status_set_sim(false, false);
     cpe_status_set_phone_number("");
+    cpe_status_set_ps(false, false);
+    cpe_status_set_pdp(false, false);
+    cpe_status_set_signal_quality(0, 0, 0, false);
+    cpe_status_set_modem_temp(0, false);
 }
 
 static void at_read_identity(void)
@@ -747,6 +874,24 @@ static esp_err_t at_poll(void)
         } else if (at_command("AT+CREG?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) &&
                    strstr(resp, "+CREG:") != NULL) {
             at_parse_registration(resp, "+CREG:");
+        }
+    }
+
+    /* Packet switched attach and PDP state: LTE metrics are only meaningful
+     * once the modem has a data context. All commands are read-only. */
+    if (at_command("AT+CGATT?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+        at_parse_cgatt(resp);
+    }
+    if (at_command("AT+CGACT?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+        at_parse_cgact(resp);
+    }
+    if (at_command("AT+QCSQ", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+        at_parse_qcsq(resp);
+    }
+    if (at_command("AT+QTEMP", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+        int temp_c = 0;
+        if (at_parse_qtemp(resp, &temp_c)) {
+            cpe_status_set_modem_temp(temp_c, true);
         }
     }
 

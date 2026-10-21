@@ -59,6 +59,18 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
                          status.sim_inserted ? "true" : "false");
     cpe_web_sbuf_append(&sb, ",\"phone_number\":");
     cpe_web_sbuf_append_json_string(&sb, status.phone_number);
+    cpe_web_sbuf_appendf(&sb, ",\"ps_attached\":%s,\"ps_valid\":%s",
+                         status.ps_attached ? "true" : "false",
+                         status.ps_valid ? "true" : "false");
+    cpe_web_sbuf_appendf(&sb, ",\"pdp_active\":%s,\"pdp_valid\":%s",
+                         status.pdp_active ? "true" : "false",
+                         status.pdp_valid ? "true" : "false");
+    cpe_web_sbuf_appendf(&sb, ",\"rsrp\":%d,\"rsrq\":%d,\"sinr\":%d,\"qcsq_valid\":%s",
+                         (int)status.rsrp, (int)status.rsrq, (int)status.sinr,
+                         status.qcsq_valid ? "true" : "false");
+    cpe_web_sbuf_appendf(&sb, ",\"modem_temp\":%d,\"modem_temp_valid\":%s",
+                         (int)status.modem_temp,
+                         status.modem_temp_valid ? "true" : "false");
     cpe_web_sbuf_appendf(&sb, ",\"uptime_s\":%" PRIu32 ",\"recovery_attempts\":%" PRIu32
                          ",\"boot_count\":%" PRIu32 ",\"last_error\":",
                          status.uptime_s, status.recovery_attempts, status.boot_count);

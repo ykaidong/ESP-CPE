@@ -226,9 +226,14 @@ app_main（main/main.c 只做启动编排）
 ### 6.7 只读 AT 遥测（阶段一后补充，2026-10-21）
 
 - 新增 `components/cpe_at/`：在 ECM 数据端口之外打开模组的 AT 接口（vendor-specific 或 CDC-ACM），
-  连接时读取 `ATI` / `AT+CGSN`，之后每 `CPE_AT_POLL_INTERVAL_S`（默认 30s）轮询
+  连接时读取 `ATI` / `AT+CGSN`，之后每 `CPE_AT_POLL_INTERVAL_S`（默认 5s）轮询
   `AT+CSQ` / `AT+COPS?` / `AT+CEREG?`（不支持 CEREG 时回退 CREG）/
+  `AT+CGATT?` / `AT+CGACT?`（分组域附着与 PDP 状态）/
+  `AT+QCSQ`（LTE RSRP/RSRQ/SINR）/ `AT+QTEMP`（模组温度）/
   `AT+CPIN?`（SIM 卡是否插入）/ `AT+CNUM`（SIM 卡内存储的 MSISDN）。
+  `QCSQ` 的 SINR 为 0–250 的编码值，实际 dB = 编码值 / 5 − 20；非 LTE 或
+  `NOSERVICE` 时对应字段标记为无效。`QCSQ`/`QTEMP` 为 Quectel 扩展命令，
+  其它模组返回 ERROR 时整条轮询不受影响，仅状态页显示“未知”。
 - 只发送只读命令，不影响数据连接；AT 接口不存在/不响应时组件自动重试，其余功能不受影响。
 - 兼容性处理：探测前**不发** `SET_CONTROL_LINE_STATE`（DTR/RTS）——托管 USB Host
   未实现 `usb_transfer_t.timeout_ms`，接口若不完成该类请求会让设备默认管道永久挂起，
@@ -236,7 +241,8 @@ app_main（main/main.c 只做启动编排）
   并对 `+COPS?` 的运营商名做 UCS2 十六进制兜底解码；
   命令响应按行级 `OK`/`ERROR` 判定，发送前二次排空迟到的上一条响应。
 - 新增 `cpe_status` 字段 `imei / carrier / modem_registered / sim_valid / sim_inserted /
-  phone_number`，`/api/status` 与状态页同步展示；此前无数据源的
+  phone_number / ps_attached / pdp_active / rsrp / rsrq / sinr / modem_temp`
+  （各带 `*_valid` 标志），`/api/status` 与状态页同步展示；此前无数据源的
   `rssi / modem_model / modem_fw` 一并填充（`public_ip` 仍无数据源）。
   号码取决于运营商是否写入 EF_MSISDN，未写入时状态页显示“未知”。
 - 可通过 `CPE_AT_ENABLE`（默认 y）关闭整个功能。

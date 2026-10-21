@@ -171,6 +171,52 @@ void cpe_status_set_phone_number(const char *number)
     xSemaphoreGive(s_lock);
 }
 
+void cpe_status_set_ps(bool attached, bool valid)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.ps_attached = attached;
+    s_status.ps_valid = valid;
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_pdp(bool active, bool valid)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.pdp_active = active;
+    s_status.pdp_valid = valid;
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_signal_quality(int rsrp, int rsrq, int sinr, bool valid)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.rsrp = (int16_t)rsrp;
+    s_status.rsrq = (int8_t)rsrq;
+    s_status.sinr = (int8_t)sinr;
+    s_status.qcsq_valid = valid;
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_modem_temp(int temp_c, bool valid)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.modem_temp = (int8_t)temp_c;
+    s_status.modem_temp_valid = valid;
+    xSemaphoreGive(s_lock);
+}
+
 void cpe_status_set_recovery_attempts(uint32_t attempts)
 {
     if (!s_inited) {

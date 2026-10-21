@@ -262,10 +262,12 @@ lm_tick()
 - Web 状态页每 5s 轮询一次 `/status`；客户端列表在页签激活时每 4s 轮询；
 - 只读 AT 遥测（`components/cpe_at/`）在 ECM 数据端口之外再打开模组的 AT 接口
   （vendor-specific 或 CDC-ACM），连接时读取 `ATI` / `AT+CGSN`，之后每
-  `CPE_AT_POLL_INTERVAL_S`（默认 30s）轮询 `AT+CSQ` / `AT+COPS?` / `AT+CEREG?` /
-  `AT+CPIN?` / `AT+CNUM`，结果写入 `cpe_status` 并显示在状态页（信号、运营商、
-  注册状态、SIM 卡是否插入、电话号码）。号码取决于运营商是否写入 SIM 卡，
-  未写入时状态页显示“未知”。探测前不发送 DTR/RTS 等类请求（托管 USB Host 无控制传输
+  `CPE_AT_POLL_INTERVAL_S`（默认 5s）轮询 `AT+CSQ` / `AT+COPS?` / `AT+CEREG?` /
+  `AT+CGATT?` / `AT+CGACT?` / `AT+QCSQ` / `AT+QTEMP` / `AT+CPIN?` / `AT+CNUM`，
+  结果写入 `cpe_status` 并显示在状态页（信号、LTE RSRP/RSRQ/SINR、运营商、
+  注册状态、分组域附着、PDP 状态、模组温度、SIM 卡是否插入、电话号码）。
+  `AT+QCSQ`/`AT+QTEMP` 是 Quectel 扩展命令，不支持时对应项显示“未知”。
+  号码取决于运营商是否写入 SIM 卡，未写入时状态页显示“未知”。探测前不发送 DTR/RTS 等类请求（托管 USB Host 无控制传输
   超时，未完成的请求会永久占住设备默认管道），连接后设置 `AT+CSCS="GSM"`，
   并兼容 UCS2 十六进制回显的运营商名。只发送只读命令，不影响数据连接；AT 端口不可用时
   其余功能照常工作；

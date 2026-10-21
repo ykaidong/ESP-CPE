@@ -289,11 +289,14 @@ menu "CPE Application Configuration"
         default y
         help
             Open a second CDC port on the modem AT interface (vendor specific
-            or CDC-ACM) and poll AT+CSQ / AT+COPS? / AT+CEREG? together with
-            ATI / AT+CGSN once. The values are shown on the Web status page.
-            Only read-only commands are sent, so the data connection is not
-            disturbed. Disable this when the modem does not expose a usable
-            AT interface next to the ECM one.
+            or CDC-ACM) and poll AT+CSQ / AT+COPS? / AT+CEREG? / AT+CGATT? /
+            AT+CGACT? / AT+QCSQ / AT+QTEMP together with ATI / AT+CGSN once.
+            The values are shown on the Web status page. Only read-only
+            commands are sent, so the data connection is not disturbed.
+            QCSQ and QTEMP are Quectel extensions: other modems simply answer
+            ERROR and the corresponding rows stay "unknown". Disable this when
+            the modem does not expose a usable AT interface next to the ECM
+            one.
 
     config CPE_AT_POLL_INTERVAL_S
         depends on CPE_AT_ENABLE

@@ -224,9 +224,21 @@
         setText('status-link', status.link_up ? '已连接' : '未连接');
         setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
         setText('status-rssi', status.rssi_valid ? (status.rssi + ' dBm') : '未知');
+        setText('status-rsrp', status.qcsq_valid ? (status.rsrp + ' dBm') : '未知');
+        setText('status-rsrq', status.qcsq_valid ? (status.rsrq + ' dB') : '未知');
+        setText('status-sinr', status.qcsq_valid ? (status.sinr + ' dB') : '未知');
         setText('status-carrier', status.carrier || '未知');
         setText('status-registered', status.sim_valid
             ? (status.modem_registered ? '已注册' : '未注册')
+            : '未知');
+        setText('status-ps', status.ps_valid
+            ? (status.ps_attached ? '已附着' : '未附着')
+            : '未知');
+        setText('status-pdp', status.pdp_valid
+            ? (status.pdp_active ? '已激活' : '未激活')
+            : '未知');
+        setText('status-temp', status.modem_temp_valid
+            ? (status.modem_temp + ' °C')
             : '未知');
         setText('status-modem-model', status.modem_model || '未知');
         setText('status-modem-fw', status.modem_fw || '未知');
