@@ -21,7 +21,7 @@
   - B2：`byId`、`bindMenu` 与双 tab 切换逻辑收进 `CPE`（`api.js`），各页面只保留业务逻辑。
   - B3：新增 `layout.js` 统一生成 header 与左侧导航，四个 HTML 页面只保留占位节点。
 - **A5 已处理（删除 STA 半成品）**：移除 `cpe_config_t` 的 `sta_ssid/sta_password`、相关 NVS 键与 `cpe_config_set_sta()`，以及 `app_wifi.c` 的 `build_sta_config()`、APSTA 分支和 STA 事件处理。产品上行仍是 USB ECM；将来需要 Wi-Fi 上行时再完整引入配置 API、状态与 UI。
-- **B1 已修复**：新增 `cpe_web_post_ctx_t` 与 `cpe_web_post_begin()` / `cpe_web_post_end()`（`http_common.c`），统一前置校验、会话/CSRF、读体、深度检查、解析与缓冲擦除；三个 API 文件中的 9 个 JSON POST handler 全部迁移。二进制 OTA 上传与 GET handler 不在模板范围内。
+- **B1 已修复**：新增 `cpe_web_post_ctx_t` 与 `cpe_web_post_begin()` / `cpe_web_post_end()`（现位于 `http_session.c`），统一前置校验、会话/CSRF、读体、深度检查、解析与缓冲擦除；三个 API 文件中的 9 个 JSON POST handler 全部迁移。二进制 OTA 上传与 GET handler 不在模板范围内。
 - **JSON 解析层已迁移到 cJSON**：移除 `json_parser` 依赖，改用组件管理器提供的 `espressif/cjson`（1.7.19）。`cpe_web_post_ctx_t` 持有 `cJSON*`，三个取值 helper 保留原有语义（字符串/整数的严格类型判断、缺失与类型错误的区分）；解析仍要求单一顶层对象且无尾随数据。响应构造暂时保留 `sbuf`，输出层不在本次范围内。
 - **A4 已修复**：`link_manager_task()` 重构为显式状态机（`lm_phase_t` + `lm_ctx_t`），初始化、状态服务、IP/USB 等待与每种恢复动作拆成独立函数；500ms 轮询、全部阈值、阻塞时长、日志文本以及 NVS/NAPT 副作用顺序保持不变。
 - **A3 已修复**：新增 `cpe_config_update(mutate, ctx)` 事务接口，只写变更的 NVS key，失败时定向回滚；`api_wlan.c` 的两次手工“失败写回”已删除。详见 A3 小节。

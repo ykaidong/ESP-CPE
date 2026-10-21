@@ -9,10 +9,12 @@
  * station registry and API endpoints live in their own modules; the security
  * invariants they implement are documented at their definitions:
  *
- *  - session cookie (CPE_SID, HttpOnly + SameSite=Strict) + X-CSRF-Token,
- *    same-origin checks and body limits: http_common.c
+ *  - session cookie (CPE_SID, HttpOnly + SameSite=Strict) + X-CSRF-Token:
+ *    http_session.c / http_response.c
+ *  - same-origin checks, body limits and bounded reading: http_request.c
  *  - JSON escaping / escaping-aware parsing and the depth limit: json_util.c
- *  - station list mutex and nickname validation: station_registry.c
+ *  - station list mutex: station_registry.c; MAC and nickname handling:
+ *    station_names.c
  *  - endpoint-specific validation and rollback: api_*.c
  */
 

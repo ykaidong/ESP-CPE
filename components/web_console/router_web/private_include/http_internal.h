@@ -115,6 +115,10 @@ typedef struct {
 /* --- http_common.c ------------------------------------------------------- */
 
 void cpe_web_secure_wipe(void *ptr, size_t len);
+esp_err_t cpe_web_register_uris(httpd_handle_t server, const httpd_uri_t *uris,
+                                size_t count);
+
+/* --- http_response.c ----------------------------------------------------- */
 
 esp_err_t cpe_web_send_json_body(httpd_req_t *req, const char *status_line,
                                  const char *json, bool close_socket);
@@ -122,12 +126,21 @@ esp_err_t cpe_web_send_error_response(httpd_req_t *req, const char *status_line,
                                       const char *code, bool close_socket);
 esp_err_t cpe_web_set_common_headers(httpd_req_t *req, bool no_store);
 
+esp_err_t cpe_web_set_session_cookie(httpd_req_t *req, const char *session);
+esp_err_t cpe_web_set_csrf_cookie(httpd_req_t *req, const char *csrf);
+void cpe_web_clear_csrf_cookie(httpd_req_t *req);
+esp_err_t cpe_web_clear_session_cookie(httpd_req_t *req);
+
+/* --- http_request.c ------------------------------------------------------ */
+
 bool cpe_web_request_origin_is_same_origin(httpd_req_t *req);
 esp_err_t cpe_web_precheck_post(httpd_req_t *req, bool require_body);
 cpe_web_body_result_t cpe_web_read_json_body(httpd_req_t *req, char *buf,
                                              size_t buf_len, size_t *out_len);
 esp_err_t cpe_web_send_body_error(httpd_req_t *req, cpe_web_body_result_t result);
 esp_err_t cpe_web_reject_unexpected_body(httpd_req_t *req);
+
+/* --- http_session.c ------------------------------------------------------ */
 
 esp_err_t cpe_web_require_session(httpd_req_t *req,
                                   char session[CPE_WEB_SESSION_BUF_LEN], bool need_csrf);
@@ -137,14 +150,6 @@ esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
 esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
                              cpe_web_post_ctx_t *ctx);
 void cpe_web_post_end(cpe_web_post_ctx_t *ctx);
-
-esp_err_t cpe_web_set_session_cookie(httpd_req_t *req, const char *session);
-esp_err_t cpe_web_set_csrf_cookie(httpd_req_t *req, const char *csrf);
-void cpe_web_clear_csrf_cookie(httpd_req_t *req);
-esp_err_t cpe_web_clear_session_cookie(httpd_req_t *req);
-
-esp_err_t cpe_web_register_uris(httpd_handle_t server, const httpd_uri_t *uris,
-                                size_t count);
 
 /* --- json_util.c --------------------------------------------------------- */
 
@@ -164,6 +169,15 @@ esp_err_t cpe_web_json_get_int_flexible(const cJSON *root, const char *name,
 esp_err_t cpe_web_json_get_bool_flexible(const cJSON *root, const char *name,
                                          bool *out, bool *present);
 
+/* --- station_names.c ----------------------------------------------------- */
+
+void cpe_web_mac_to_hex(const uint8_t mac[6], char out[13]);
+void cpe_web_mac_to_colon(const uint8_t mac[6], char out[18]);
+bool cpe_web_mac_parse(const char *str, uint8_t mac[6]);
+bool cpe_web_station_name_valid(const char *name);
+esp_err_t cpe_web_station_name_load(const uint8_t mac[6], char *out, size_t out_len);
+esp_err_t cpe_web_station_name_save(const uint8_t mac[6], const char *name);
+
 /* --- station_registry.c -------------------------------------------------- */
 
 esp_err_t cpe_web_station_registry_init(void);
@@ -172,9 +186,6 @@ void cpe_web_station_registry_enable(bool enabled);
 void cpe_web_station_event_handler(void *arg, esp_event_base_t event_base,
                                    int32_t event_id, void *event_data);
 
-bool cpe_web_mac_parse(const char *str, uint8_t mac[6]);
-bool cpe_web_station_name_valid(const char *name);
-esp_err_t cpe_web_station_name_save(const uint8_t mac[6], const char *name);
 size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max);
 bool cpe_web_sta_node_exists(const uint8_t mac[6]);
 bool cpe_web_sta_node_rename(const uint8_t mac[6], const char *name);
