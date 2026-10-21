@@ -2,7 +2,8 @@
 
 > 适用固件：ESP32-S3 / 16MB Flash / 双 OTA / `iot_usbh_cdc` 3.1.3 + `iot_usbh_ecm` 0.4.2
 >
-> 代码位置：`main/main.c`（启动流程与链路管理器）、`main/Kconfig.projbuild`（全部超时/次数阈值）、
+> 代码位置：`main/main.c`（启动编排、OTA 校验）、`components/cpe_wan/`（USB/ECM 生命周期、
+> NAPT/DNS、链路管理器与恢复策略）、`main/Kconfig.projbuild`（全部超时/次数阈值）、
 > `components/cpe_core/`（配置、认证、状态、启动计数）
 
 ## 1. 设计原则
@@ -36,16 +37,17 @@
  │       └─ 启动计数 NVS +1    （cpe_sys/boot_cnt，显示在 Web“启动计数”）
  │       任一步失败：打印错误后进入空闲降级（10s 循环），不 abort、不重启
  │
- ├─ 4. 注册事件处理
+ ├─ 4. cpe_wan_events_register()
  │       IOT_ETH_EVENT（link up/down）、IP_EVENT_ETH_GOT_IP / LOST_IP
+ │       必须在 ECM 驱动创建前注册，避免丢失早期 LINK_UP
  │
  ├─ 5. app_wifi_start()        SoftAP 先起（WPA2，配置来自 cpe_core）
- ├─ 6. modem_http_start()      Web 管理面（会话 + CSRF 认证）
+ ├─ 6. cpe_wan_ap_hook_register()  AP 重启后重新应用 NAPT/上游 DNS
+ ├─ 7. modem_http_start()      Web 管理面（会话 + CSRF 认证）
  │
- ├─ 7. （可选）模组 RESET 脉冲  仅当配置了 CPE_MODULE_RESET_GPIO
- │       保证外部供电的模组从干净 USB 状态开始枚举
- │
- ├─ 8. 创建 cpe_link 任务       后台链路管理器（见第 3、4 节）
+ ├─ 8. cpe_wan_start()         （可选）模组 RESET 脉冲（仅当配置了 CPE_MODULE_RESET_GPIO），
+ │                            保证外部供电的模组从干净 USB 状态开始枚举；
+ │                            随后创建 cpe_link 后台链路管理器（见第 3、4 节）
  └─ 9. reset_button_start()    按键监控：启动后双击打印凭据 / 长按 10s 恢复出厂（见第 8 节）
 ```
 
@@ -58,7 +60,7 @@
 | `cpe_core_init` 失败 | 擦除 NVS 后重试一次；仍失败则空闲降级 |
 | SoftAP 启动失败 | 记录错误，继续启动 Web 和链路管理器 |
 | Web 启动失败 | 记录错误，继续启动链路管理器（AP 仍可连） |
-| `cpe_link` 任务创建失败 | 记录错误，保持 AP-only 模式，不重启 |
+| `cpe_wan_start` 失败（任务创建失败） | 记录错误，保持 AP-only 模式，不重启 |
 | 复位按键任务创建失败 | 记录错误，长按恢复出厂不可用（其余功能正常） |
 
 ## 3. 链路状态机
@@ -97,15 +99,15 @@
              └───────────┘
 ```
 
-## 4. 链路管理器循环（`link_manager_task`）
+## 4. 链路管理器循环（`components/cpe_wan/link_manager.c`）
 
 任务优先级 6、栈 4KB。实现为显式状态机（`lm_phase_t` + `lm_ctx_t`），`lm_tick()` 每轮执行一次；
 默认每 **500ms** 一拍，若本轮已执行阻塞式恢复动作（对应旧实现的 `continue`）则不再追加等待。
 
 ```
 lm_tick()
-  ├─ lm_ensure_ready()      CDC/USB Host 未安装 → usb_cdc_install()（只装一次）
-  │                         ECM 未就绪 → ecm_bring_up()
+  ├─ lm_ensure_ready()      CDC/USB Host 未安装 → wan_usb_cdc_install()（只装一次）
+  │                         ECM 未就绪 → wan_ecm_bring_up()
   │                         （link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
   ├─ lm_service()           读取状态快照，处理 link/IP 边沿、NAPT/DNS、周期 heap 日志
   └─ 按状态分派：

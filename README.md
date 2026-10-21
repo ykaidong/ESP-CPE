@@ -55,11 +55,13 @@ W (xxxx) cpe_config: ==================================================
 ## 3. 架构
 
 ```text
-app_main
+app_main（main 只做启动编排）
  ├─ nvs / netif / event loop / cpe_core（配置、认证、状态、启动计数）
+ ├─ cpe_wan_events_register()  USB/ECM 事件先注册
  ├─ app_wifi_start()        SoftAP（WPA2，配置来自 cpe_core）
+ ├─ cpe_wan_ap_hook_register()  AP 重启后恢复 NAPT/DNS
  ├─ modem_http_start()      Web 管理面（登录/状态/配置/恢复出厂）
- └─ cpe_link task
+ └─ cpe_wan_start() → cpe_link task（components/cpe_wan）
       ├─ usbh_cdc_driver_install()（USB Host 由 CDC 组件安装一次，永不在运行时拆栈）
       ├─ iot_eth_new_usb_ecm()/install/start
       ├─ 事件：link up/down、WAN IP
@@ -159,7 +161,8 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 ## 7. 目录
 
 ```
-main/                 应用入口、CPE 恢复策略、Kconfig
+main/                 应用入口：启动编排、OTA 校验、复位键、Kconfig
+components/cpe_wan/   4G WAN 域：USB Host/CDC/ECM 生命周期、NAPT/DNS、链路管理器与恢复策略
 components/cpe_core/  配置存储/校验、随机凭据、会话认证、状态、启动计数
 components/app_wifi/  SoftAP 生命周期（启动、运行时应用、主动去认证）
 components/web_console/  Web 管理面（会话认证、REST API、SPIFFS 前端）

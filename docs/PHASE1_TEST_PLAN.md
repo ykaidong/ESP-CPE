@@ -65,13 +65,13 @@ Select-String -Path components\app_wifi\*,components\web_console\**\* -Pattern '
 Select-String -Path components\web_console\router_web\modem_http_config.c -Pattern 'httpd_uri_t|basic_auth|strncmp\('
 # 不应有网络 IO 的 ESP_ERROR_CHECK
 Select-String -Path components\web_console\router_web\modem_http_config.c -Pattern 'ESP_ERROR_CHECK'
-# main 不应再整栈拆装 USB Host
-Select-String -Path main\main.c -Pattern 'usb_host_install|usb_stack_tear_down|usb_host_uninstall'
+# main/cpe_wan 不应再整栈拆装 USB Host（usb_wan.c 中的说明性注释除外）
+Select-String -Path main\main.c,components\cpe_wan\*.c -Pattern 'usb_host_install|usb_stack_tear_down|usb_host_uninstall' | Where-Object { $_.Line -notmatch '^\s*\*' }
 # 驱动与组件版本
 Get-Content components\iot_usbh_cdc\idf_component.yml, components\iot_usbh_ecm\idf_component.yml
 ```
 
-期望：固定凭据 0 命中；`ESP_ERROR_CHECK` 在网络 IO 处 0 命中；`main.c` 不出现上述 USB 重装符号；fork 版本为 3.1.1 / 0.4.2。
+期望：固定凭据 0 命中；`ESP_ERROR_CHECK` 在网络 IO 处 0 命中；`main.c` / `components/cpe_wan` 不出现上述 USB 重装符号（注释除外）；fork 版本为 3.1.1 / 0.4.2。
 
 ## 4. 已知未覆盖（Phase 2/3）
 

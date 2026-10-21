@@ -67,20 +67,23 @@
 ## 三、阶段一架构
 
 ```text
-app_main
+app_main（main/main.c 只做启动编排）
  ├─ nvs_flash_init / esp_netif_init / event_loop
  ├─ cpe_core_init
  │    ├─ cpe_config_init   （NVS 校验、首启随机凭据、串口打印）
  │    ├─ cpe_auth_init     （PBKDF2 口令、会话表、CSRF）
  │    └─ cpe_status_init   （线程安全状态快照）
+ ├─ cpe_wan_events_register()  （IOT_ETH / IP 事件，须早于 ECM 驱动创建）
  ├─ app_wifi_start()       （SoftAP：来自 cpe_config，校验失败回退默认值）
+ ├─ cpe_wan_ap_hook_register() （AP 重启后重新应用 NAPT/上游 DNS）
  ├─ modem_http_start()     （SPIFFS + httpd：登录/状态/配置/故障页）
- └─ cpe_link task          （后台链路管理器，永不阻塞主流程）
-      ├─ usb_host_install（幂等、显式错误处理）
-      ├─ usbh_cdc_driver_install / iot_eth_new_usb_ecm / iot_eth_install
-      ├─ 事件：IOT_ETH CONNECTED/DISCONNECTED、IP_EVENT_ETH_GOT_IP
-      ├─ ONLINE：set_default_netif + ip_napt_enable + 上游 DNS 下发给 AP
-      └─ 失败：无设备 → 模组复位/根端口掉电；无 IP → 只重启 DHCP；ECM 卡死 → 有界重启；FAULT 保底（AP/Web 保持）
+ └─ cpe_wan_start()        （模组 RESET 脉冲 + 创建 cpe_link 任务，永不阻塞主流程）
+      └─ cpe_link task     （components/cpe_wan/link_manager.c，后台链路管理器）
+           ├─ usb_host_install（幂等、显式错误处理）
+           ├─ usbh_cdc_driver_install / iot_eth_new_usb_ecm / iot_eth_install
+           ├─ 事件：IOT_ETH CONNECTED/DISCONNECTED、IP_EVENT_ETH_GOT_IP
+           ├─ ONLINE：set_default_netif + ip_napt_enable + 上游 DNS 下发给 AP
+           └─ 失败：无设备 → 模组复位/根端口掉电；无 IP → 只重启 DHCP；ECM 卡死 → 有界重启；FAULT 保底（AP/Web 保持）
 ```
 
 > 启动各阶段的日志、状态机迁移、每个等待点的超时与原因，见 **[RUNTIME_FLOW.md](RUNTIME_FLOW.md)**。
@@ -98,7 +101,12 @@ app_main
 - `web_console`（Web 管理面，公开头 `cpe_web.h`）：
   - `esp_err_t modem_http_start(void);` / `esp_err_t modem_http_stop(void);`
   - `void cpe_web_station_names_erase_all(void);`（Web 与复位键恢复出厂共用）
-- `main` 对外不暴露重试/拆栈 API；恢复逻辑全部在后台任务内。
+- `cpe_wan`（4G WAN 域，公开头 `cpe_wan.h`）：
+  - `esp_err_t cpe_wan_events_register(void);`（事件循环创建后、ECM 驱动创建前调用）
+  - `esp_err_t cpe_wan_ap_hook_register(void);`（须在 `app_wifi_start()` 之后调用）
+  - `esp_err_t cpe_wan_start(void);`（模组 RESET 脉冲 + 创建后台链路管理器任务）
+  - `void cpe_wan_log_heap(const char *reason);`（诊断用）
+- `main` 只做启动编排；对外不暴露重试/拆栈 API；WAN 恢复逻辑全部在 cpe_wan 的后台任务内。
 
 ### 3.2 凭据策略（阶段一开始执行）
 
@@ -153,7 +161,8 @@ app_main
 | 交付物 | 位置 | 说明 |
 | --- | --- | --- |
 | 产品核心组件 | `components/cpe_core/` | 配置存储/校验、随机凭据、PBKDF2 口令、会话+CSRF、状态机、NVS 启动计数、恢复出厂 |
-| 新启动架构 | `main/main.c` | AP/Web 先行；USB Host 只装一次；后台链路管理器（L1 ECM 重建 / L2 端口掉电 / L3 有界重启 / FAULT 保底） |
+| 新启动架构 | `main/main.c` | AP/Web 先行；只做启动编排、OTA 校验与复位键 |
+| 4G WAN 组件 | `components/cpe_wan/` | USB Host 只装一次；后台链路管理器（L1 ECM 重建 / L2 端口掉电 / L3 有界重启 / FAULT 保底）；NAPT 与上游 DNS |
 | 分区与构建 | `partitions_16m_ota.csv`、`sdkconfig.defaults*`、`.gitignore` | 16MB 双 OTA；`sdkconfig` 不再入库；关键补丁配置进 defaults |
 | 驱动本地 fork | `components/iot_usbh_cdc/`（3.1.3）、`components/iot_usbh_ecm/`（0.4.2） | P0-1/P1-2~P1-8/P1-11 逐条修复；NEW_DEV 补发；DEFER_DATA_POLL；enum_filter_cb 透传；枚举速度日志 |
 | SoftAP | `components/app_wifi/` | AP 启动与运行时应用、错误返回而不 abort、去认证 |
