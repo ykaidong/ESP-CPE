@@ -298,7 +298,7 @@ menu "CPE Application Configuration"
     config CPE_AT_POLL_INTERVAL_S
         depends on CPE_AT_ENABLE
         int "AT telemetry poll interval (seconds)"
-        default 30
+        default 5
         range 5 600
         help
             How often signal strength, carrier and registration state are

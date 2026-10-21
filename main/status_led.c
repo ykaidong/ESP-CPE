@@ -7,13 +7,14 @@
  *
  * Pattern priority, highest first:
  *   factory reset pending        blue blink
- *   WAN got an IP                green solid
- *   WAN link up, no IP yet       red solid
+ *   WAN ready                    green solid
+ *   WAN link up, not ready       red solid
  *   no WAN link                  red blink
  *
- * "Network is up" is the link manager's view: link up and an IP acquired
- * (cpe_status.got_ip). The firmware does not probe the internet, so an outage
- * upstream of the modem is not visible here.
+ * "WAN ready" is the link manager's view (link up and an IP acquired,
+ * cpe_status.got_ip) plus, when AT telemetry is available, a SIM card that is
+ * registered on the network. The modem's ECM DHCP server can hand out an IP
+ * with no SIM inserted, so got_ip alone is not proof of a usable WAN.
  */
 
 #include <stdbool.h>
@@ -72,12 +73,23 @@ static esp_err_t led_send(uint8_t r, uint8_t g, uint8_t b)
     return rmt_tx_wait_all_done(s_chan, 100);
 }
 
+/* AT telemetry is authoritative when it has been read: a SIM card must be
+ * present and the modem registered. Without AT (modem exposes no usable AT
+ * interface, or CPE_AT_ENABLE is off) keep the transport view. */
+static bool network_ready(const cpe_status_t *st)
+{
+    if (!st->sim_valid) {
+        return true;
+    }
+    return st->sim_inserted && st->modem_registered;
+}
+
 static led_mode_t mode_from_status(const cpe_status_t *st)
 {
     if (s_factory_reset) {
         return LED_BLUE_BLINK;
     }
-    if (st->got_ip) {
+    if (st->got_ip && network_ready(st)) {
         return LED_GREEN_SOLID;
     }
     if (st->link_up) {

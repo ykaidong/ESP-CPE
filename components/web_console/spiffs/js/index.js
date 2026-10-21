@@ -225,7 +225,9 @@
         setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
         setText('status-rssi', status.rssi_valid ? (status.rssi + ' dBm') : '未知');
         setText('status-carrier', status.carrier || '未知');
-        setText('status-registered', status.modem_registered ? '已注册' : '未注册');
+        setText('status-registered', status.sim_valid
+            ? (status.modem_registered ? '已注册' : '未注册')
+            : '未知');
         setText('status-modem-model', status.modem_model || '未知');
         setText('status-modem-fw', status.modem_fw || '未知');
         setText('status-imei', status.imei || '未知');
@@ -242,9 +244,22 @@
         setText('status-last-error', status.last_error || '无');
         setText('connect-time', formatDuration(Number(status.uptime_s) || 0));
 
-        setText('internet-state', status.link_up
-            ? '移动数据已连接'
-            : (status.usb_connected ? '正在获取网络…' : '未检测到 4G 模块'));
+        /* AT telemetry tells whether the WAN can actually work: got_ip alone
+         * is misleading, the modem's DHCP server may answer without a SIM. */
+        var simKnown = status.sim_valid === true;
+        var internetState;
+        if (simKnown && !status.sim_inserted) {
+            internetState = '未安装 SIM 卡';
+        } else if (simKnown && !status.modem_registered) {
+            internetState = '未注册移动网络';
+        } else if (status.got_ip) {
+            internetState = '移动数据已连接';
+        } else if (status.link_up || status.usb_connected) {
+            internetState = '正在获取网络…';
+        } else {
+            internetState = '未检测到 4G 模块';
+        }
+        setText('internet-state', internetState);
 
         var apSsid = status.ap && typeof status.ap.ssid === 'string' ? status.ap.ssid : '';
         setText('wifi-state', apSsid ? ('2.4 GHz Wi-Fi 正常（' + apSsid + '）') : '2.4 GHz Wi-Fi 正常');
@@ -255,6 +270,12 @@
                 banner.textContent = '当前处于故障状态：4G 链路未就绪，系统会自动重试。' +
                     '您仍可以通过本页面修改 WLAN 配置或恢复出厂设置。';
                 banner.className = 'status-banner status-banner-warn';
+            } else if (simKnown && !status.sim_inserted) {
+                banner.textContent = '未检测到 SIM 卡，4G 网络不可用。插入 SIM 卡后系统会自动恢复。';
+                banner.className = 'status-banner status-banner-warn';
+            } else if (simKnown && !status.modem_registered) {
+                banner.textContent = 'SIM 卡已安装，但尚未注册到移动网络，正在等待网络注册。';
+                banner.className = 'status-banner status-banner-info';
             } else if (!status.link_up) {
                 banner.textContent = '正在等待 4G 网络就绪，本页面在链路恢复前仍可正常使用。';
                 banner.className = 'status-banner status-banner-info';
