@@ -224,6 +224,18 @@
         setText('status-link', status.link_up ? '已连接' : '未连接');
         setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
         setText('status-rssi', status.rssi_valid ? (status.rssi + ' dBm') : '未知');
+        setText('status-carrier', status.carrier || '未知');
+        setText('status-registered', status.modem_registered ? '已注册' : '未注册');
+        setText('status-modem-model', status.modem_model || '未知');
+        setText('status-modem-fw', status.modem_fw || '未知');
+        setText('status-imei', status.imei || '未知');
+        setText('status-sim', status.sim_valid
+            ? (status.sim_inserted ? '已安装' : '未安装')
+            : '未知');
+        /* Only meaningful when the modem reported a card as present. */
+        setText('status-phone', (status.sim_valid && !status.sim_inserted)
+            ? '--'
+            : (status.phone_number || '未知'));
         setText('status-recovery', String(status.recovery_attempts || 0));
         setText('status-boot', String(status.boot_count || 0));
         setText('status-device-name', status.device_name || '-');

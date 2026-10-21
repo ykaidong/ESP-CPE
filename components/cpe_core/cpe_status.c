@@ -117,6 +117,60 @@ void cpe_status_set_rssi(int rssi, bool valid)
     xSemaphoreGive(s_lock);
 }
 
+void cpe_status_set_modem_info(const char *model, const char *fw, const char *imei)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(s_status.modem_model, sizeof(s_status.modem_model), "%s", model != NULL ? model : "");
+    snprintf(s_status.modem_fw, sizeof(s_status.modem_fw), "%s", fw != NULL ? fw : "");
+    snprintf(s_status.imei, sizeof(s_status.imei), "%s", imei != NULL ? imei : "");
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_carrier(const char *carrier)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(s_status.carrier, sizeof(s_status.carrier), "%s", carrier != NULL ? carrier : "");
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_modem_registered(bool registered)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.modem_registered = registered;
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_sim(bool inserted, bool valid)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.sim_inserted = inserted;
+    s_status.sim_valid = valid;
+    xSemaphoreGive(s_lock);
+}
+
+void cpe_status_set_phone_number(const char *number)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(s_status.phone_number, sizeof(s_status.phone_number), "%s",
+             number != NULL ? number : "");
+    xSemaphoreGive(s_lock);
+}
+
 void cpe_status_set_recovery_attempts(uint32_t attempts)
 {
     if (!s_inited) {

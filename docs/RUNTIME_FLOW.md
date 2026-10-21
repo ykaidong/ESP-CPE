@@ -48,7 +48,9 @@
  ├─ 8. cpe_wan_start()         （可选）模组 RESET 脉冲（仅当配置了 CPE_MODULE_RESET_GPIO），
  │                            保证外部供电的模组从干净 USB 状态开始枚举；
  │                            随后创建 cpe_link 后台链路管理器（见第 3、4 节）
- └─ 9. reset_button_start()    按键监控：启动后双击打印凭据 / 长按 10s 恢复出厂（见第 8 节）
+ ├─ 9. cpe_at_start()          只读 AT 遥测：在模组 AT 接口上另开一个 CDC 端口，
+ │                            轮询信号/运营商/注册状态（`CPE_AT_ENABLE`，见第 7 节）
+ └─ 10. reset_button_start()   按键监控：启动后双击打印凭据 / 长按 10s 恢复出厂（见第 8 节）
 ```
 
 启动失败的降级策略：
@@ -258,6 +260,15 @@ lm_tick()
 - SoftAP 与 Web 在 4G 之前启动，任何链路状态下都可访问 `http://192.168.4.1`；
 - Web 服务器的监听 socket **只绑定 SoftAP 网口**（`httpd_config_t.if_name`），4G WAN 侧无法访问管理面；
 - Web 状态页每 5s 轮询一次 `/status`；客户端列表在页签激活时每 4s 轮询；
+- 只读 AT 遥测（`components/cpe_at/`）在 ECM 数据端口之外再打开模组的 AT 接口
+  （vendor-specific 或 CDC-ACM），连接时读取 `ATI` / `AT+CGSN`，之后每
+  `CPE_AT_POLL_INTERVAL_S`（默认 30s）轮询 `AT+CSQ` / `AT+COPS?` / `AT+CEREG?` /
+  `AT+CPIN?` / `AT+CNUM`，结果写入 `cpe_status` 并显示在状态页（信号、运营商、
+  注册状态、SIM 卡是否插入、电话号码）。号码取决于运营商是否写入 SIM 卡，
+  未写入时状态页显示“未知”。探测前不发送 DTR/RTS 等类请求（托管 USB Host 无控制传输
+  超时，未完成的请求会永久占住设备默认管道），连接后设置 `AT+CSCS="GSM"`，
+  并兼容 UCS2 十六进制回显的运营商名。只发送只读命令，不影响数据连接；AT 端口不可用时
+  其余功能照常工作；
 - 只有 `ONLINE` 状态下 NAPT 才开启，此时 AP 客户端才能访问外网；
 - 认证：会话 Cookie（`CPE_SID`）+ CSRF 双提交；首次登录强制修改管理员口令；
   连续 5 次失败锁定 60s，之后按 120s/240s/480s/600s 指数退避；会话空闲 30 分钟失效；

@@ -223,3 +223,20 @@ app_main（main/main.c 只做启动编排）
 
 > 现场结论：对外部供电的 4G 模组，产品硬件必须提供 RESET_N→GPIO 或受控供电，否则主机复位后可能枚举失败。README 已补充接线说明。
 
+### 6.7 只读 AT 遥测（阶段一后补充，2026-10-21）
+
+- 新增 `components/cpe_at/`：在 ECM 数据端口之外打开模组的 AT 接口（vendor-specific 或 CDC-ACM），
+  连接时读取 `ATI` / `AT+CGSN`，之后每 `CPE_AT_POLL_INTERVAL_S`（默认 30s）轮询
+  `AT+CSQ` / `AT+COPS?` / `AT+CEREG?`（不支持 CEREG 时回退 CREG）/
+  `AT+CPIN?`（SIM 卡是否插入）/ `AT+CNUM`（SIM 卡内存储的 MSISDN）。
+- 只发送只读命令，不影响数据连接；AT 接口不存在/不响应时组件自动重试，其余功能不受影响。
+- 兼容性处理：探测前**不发** `SET_CONTROL_LINE_STATE`（DTR/RTS）——托管 USB Host
+  未实现 `usb_transfer_t.timeout_ms`，接口若不完成该类请求会让设备默认管道永久挂起，
+  连带 ECM 控制请求失败；本模组无需 DTR 即可应答。连接后设置 `AT+CSCS="GSM"`，
+  并对 `+COPS?` 的运营商名做 UCS2 十六进制兜底解码；
+  命令响应按行级 `OK`/`ERROR` 判定，发送前二次排空迟到的上一条响应。
+- 新增 `cpe_status` 字段 `imei / carrier / modem_registered / sim_valid / sim_inserted /
+  phone_number`，`/api/status` 与状态页同步展示；此前无数据源的
+  `rssi / modem_model / modem_fw` 一并填充（`public_ip` 仍无数据源）。
+  号码取决于运营商是否写入 EF_MSISDN，未写入时状态页显示“未知”。
+- 可通过 `CPE_AT_ENABLE`（默认 y）关闭整个功能。

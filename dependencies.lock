@@ -53,7 +53,7 @@ dependencies:
     - esp32s3
     - esp32s31
     - esp32p4
-    version: 3.1.4
+    version: 3.1.5
   espressif/usb:
     component_hash: 99eee72ea224d9117d4c342442717a1f20bf8112e2ab5d7d7038b827874f4c92
     dependencies:
@@ -89,6 +89,6 @@ direct_dependencies:
 - espressif/usb
 - idf
 - iot_usbh_ecm
-manifest_hash: 14d36e005f074cac0b67476c683ae9bb4a872dcc1526faa4c5b91ccfc44e09d3
+manifest_hash: e9242271250660eeadf03eaa53d4975bddf7b9ff2db0dbb8ddd868e4bdcf38dc
 target: esp32s3
 version: 3.0.0

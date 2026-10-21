@@ -1,5 +1,18 @@
 # ChangeLog
 
+## v3.1.5 - 2026-10-21
+
+Local ESP-CPE fork (not an upstream release). Bug fix:
+
+* `usbh_cdc_register_dev_event_cb()` no longer crashes when called while
+  `usbh_cdc_driver_install()` is still running. The driver object is published
+  before the USB Host library and the client are brought up, so a caller
+  polling the API (the AT telemetry task retries every second) could reach
+  `_cdc_replay_existing_devices()` and call `usb_host_device_addr_list_fill()`
+  before `usb_host_install()`, dereferencing the NULL `p_usbh_obj`
+  (LoadProhibited). Registration now returns `ESP_ERR_INVALID_STATE` until the
+  install has completed; the flag is cleared again at the start of uninstall.
+
 ## v3.1.4 - 2026-10-19
 
 Local ESP-CPE fork (not an upstream release). Bug fix:

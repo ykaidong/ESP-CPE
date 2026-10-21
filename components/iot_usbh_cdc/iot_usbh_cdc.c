@@ -76,6 +76,7 @@ typedef struct {
     SLIST_HEAD(list_dev, usbh_cdc_dev_s) cdc_devices_list;   /*!< List of opened devices */
     bool dispatch_stopped;                               /*!< No more device event callbacks are dispatched */
     int dispatch_active;                                 /*!< Number of device event dispatching in progress */
+    volatile bool installed;                             /*!< Set when driver_install() completed, cleared when uninstall starts */
 } usbh_cdc_obj_t;
 
 typedef struct usbh_cdc_dev_s {
@@ -1591,6 +1592,9 @@ esp_err_t usbh_cdc_driver_install(const usbh_cdc_driver_config_t *config)
     usbh_cdc_obj->cdc_client_hdl = usb_client;
 
     xTaskNotifyGive(driver_task_h);
+    /* Publish readiness last: registering an event callback replays the devices
+     * already on the bus, which requires the host library and this client. */
+    usbh_cdc_obj->installed = true;
     return ESP_OK;
 
 err:
@@ -1659,6 +1663,9 @@ esp_err_t usbh_cdc_driver_uninstall(void)
         return ESP_OK;
     }
     usbh_cdc_obj_t *usbh_cdc_obj = p_usbh_cdc_obj;
+    /* Refuse new registrations before teardown starts: registration replays
+     * devices through the host library, which is about to be uninstalled. */
+    usbh_cdc_obj->installed = false;
     esp_err_t ret = ESP_OK;
 
     // Stop dispatching device events before touching the callback list
@@ -1713,7 +1720,11 @@ esp_err_t usbh_cdc_driver_uninstall(void)
 
 esp_err_t usbh_cdc_register_dev_event_cb(const usb_device_match_id_t *dev_match_id_list, usbh_cdc_device_event_callback_t event_cb, void *user_data)
 {
-    ESP_RETURN_ON_FALSE(p_usbh_cdc_obj, ESP_ERR_INVALID_STATE, TAG, "usbh cdc not installed");
+    /* The object is published early in driver_install(); only accept callbacks
+     * once the host library and the client are ready, because registration
+     * replays the devices already on the bus. */
+    ESP_RETURN_ON_FALSE(p_usbh_cdc_obj && p_usbh_cdc_obj->installed,
+                        ESP_ERR_INVALID_STATE, TAG, "usbh cdc not installed");
     ESP_RETURN_ON_FALSE(dev_match_id_list, ESP_ERR_INVALID_ARG, TAG, "dev_match_id_list is NULL");
     ESP_RETURN_ON_FALSE(event_cb, ESP_ERR_INVALID_ARG, TAG, "event_cb is NULL");
 

@@ -2,10 +2,10 @@
 
 本文件记录用户明确要求 AI 代理遵守的持久化规则。每次会话开始或恢复后，先读本文件。
 
-## 1. ESP-IDF 编译验证规则（用户 2026-10-17 要求）
+## 1. ESP-IDF 编译验证规则（用户 2026-10-17 要求，2026-10-21 更新）
 
-1. **每次需要做编译验证之前，必须先询问用户**：由用户手动构建验证，还是由 AI 代理构建验证。
-   不得未经询问直接开始构建。
+1. **默认由用户手动完成编译验证**（用户 2026-10-21 指示：“除非指定，编译验证均由我来完成”）。
+   AI 代理不得自行开始构建；只有用户明确指定“本次由 AI 构建”时才可执行。
 2. 若由 **AI 代理构建**：不能直接执行 `idf.py build` —— 必须先启动 ESP-IDF 的 PowerShell 环境。
    用户提供的启动命令为：
 
@@ -21,7 +21,7 @@
 
 ## 2. 其他既有约定
 
-- 设备/模组：ESP32-S3 + 16MB Flash + 通用 USB ECM 模组（无 AT 依赖）。
-- 阶段推进：每阶段 `idf.py build` 通过（用户手动或代理执行，取决于每次询问结果）后再进入下一阶段；当前进度见 `docs/IMPLEMENTATION_PLAN.md`。
+- 设备/模组：ESP32-S3 + 16MB Flash + 通用 USB ECM 模组。AT 仅用于可选只读遥测（`components/cpe_at/`），ECM 数据链路不依赖 AT。
+- 阶段推进：每阶段 `idf.py build` 通过（默认用户手动，AI 仅在明确指定时执行）后再进入下一阶段；当前进度见 `docs/IMPLEMENTATION_PLAN.md`。
 - 不提交 `sdkconfig`/`sdkconfig.old`；关键配置写入 `sdkconfig.defaults*`。
-- 本地 fork：`components/iot_usbh_cdc`（3.1.3）、`components/iot_usbh_ecm`（0.4.2），修改需更新 CHANGELOG 与版本。
+- 本地 fork：`components/iot_usbh_cdc`（3.1.5）、`components/iot_usbh_ecm`（0.4.4），修改需更新 CHANGELOG 与版本。

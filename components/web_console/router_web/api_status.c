@@ -30,7 +30,7 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     bool cfg_ok = (cpe_config_get(&cfg) == ESP_OK);
 
     cpe_web_sbuf_t sb;
-    cpe_web_sbuf_init(&sb, 768);
+    cpe_web_sbuf_init(&sb, 1024);
     cpe_web_sbuf_appendf(&sb, "{\"status\":\"ok\",\"must_change\":%s,",
                          cpe_config_admin_must_change() ? "true" : "false");
     cpe_web_sbuf_appendf(&sb, "\"state\":%d,\"state_text\":", (int)status.state);
@@ -48,6 +48,17 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
     cpe_web_sbuf_append_json_string(&sb, status.modem_model);
     cpe_web_sbuf_append(&sb, ",\"modem_fw\":");
     cpe_web_sbuf_append_json_string(&sb, status.modem_fw);
+    cpe_web_sbuf_append(&sb, ",\"imei\":");
+    cpe_web_sbuf_append_json_string(&sb, status.imei);
+    cpe_web_sbuf_append(&sb, ",\"carrier\":");
+    cpe_web_sbuf_append_json_string(&sb, status.carrier);
+    cpe_web_sbuf_appendf(&sb, ",\"modem_registered\":%s",
+                         status.modem_registered ? "true" : "false");
+    cpe_web_sbuf_appendf(&sb, ",\"sim_valid\":%s,\"sim_inserted\":%s",
+                         status.sim_valid ? "true" : "false",
+                         status.sim_inserted ? "true" : "false");
+    cpe_web_sbuf_append(&sb, ",\"phone_number\":");
+    cpe_web_sbuf_append_json_string(&sb, status.phone_number);
     cpe_web_sbuf_appendf(&sb, ",\"uptime_s\":%" PRIu32 ",\"recovery_attempts\":%" PRIu32
                          ",\"boot_count\":%" PRIu32 ",\"last_error\":",
                          status.uptime_s, status.recovery_attempts, status.boot_count);

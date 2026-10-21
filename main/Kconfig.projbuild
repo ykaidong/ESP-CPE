@@ -284,4 +284,25 @@ menu "CPE Application Configuration"
             Time the blinking patterns stay on and off. 500 ms gives a calm
             1 Hz blink.
 
+    config CPE_AT_ENABLE
+        bool "Enable read-only AT telemetry on the modem AT port"
+        default y
+        help
+            Open a second CDC port on the modem AT interface (vendor specific
+            or CDC-ACM) and poll AT+CSQ / AT+COPS? / AT+CEREG? together with
+            ATI / AT+CGSN once. The values are shown on the Web status page.
+            Only read-only commands are sent, so the data connection is not
+            disturbed. Disable this when the modem does not expose a usable
+            AT interface next to the ECM one.
+
+    config CPE_AT_POLL_INTERVAL_S
+        depends on CPE_AT_ENABLE
+        int "AT telemetry poll interval (seconds)"
+        default 30
+        range 5 600
+        help
+            How often signal strength, carrier and registration state are
+            refreshed. The modem identity (model, firmware, IMEI) is read once
+            when the AT port is opened.
+
 endmenu

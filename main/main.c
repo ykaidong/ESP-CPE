@@ -27,6 +27,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 
+#include "cpe_at.h"
 #include "cpe_core.h"
 #include "cpe_ota.h"
 #include "app_wifi.h"
@@ -135,6 +136,13 @@ void app_main(void)
         while (1) {
             vTaskDelay(pdMS_TO_TICKS(10000));
         }
+    }
+
+    /* Read-only AT telemetry on the modem AT port (second CDC port). It is
+     * optional: the WAN data path does not depend on it. */
+    err = cpe_at_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "AT telemetry not started (%s)", esp_err_to_name(err));
     }
 
     /* Long-press the same button to restore factory settings. */
