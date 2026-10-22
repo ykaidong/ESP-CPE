@@ -15,6 +15,56 @@
 
 ---
 
+## 进度（截至 2026-10-23）
+
+| 项 | 状态 | 提交 |
+|---|---|---|
+| 1.1 OTA 上传移出 httpd 单任务 | 完成 | `d33fc5b` |
+| 1.2 重启前宽限延时移出 handler | 完成 | `3fd33a9` |
+| 1.3 `/wlan_advance` 复用 apply 任务 | 完成 | `f8556c0` |
+| 1.4 AP 重启后的 NAPT/DNS 重应用移出事件循环 | 完成 | `8e474fe` |
+| 1.5 netif action 走 TCP/IP 线程 | 完成 | `28c65d0`（`c372f83` 修返回值） |
+| 1.6 ECM 句柄并发保护 | **部分完成，锁已回退** | 见下节 |
+| 2.1 延迟重启统一入口 | 完成 | `14af5e6` |
+| 2.2 恢复出厂统一入口 | 完成 | `5d5e5f7` |
+| 2.3–2.6 | 未开始 | — |
+| 批次 3（3.1–3.8） | 未开始 | — |
+| 批次 4（清理 10 项） | 未开始 | — |
+
+### 1.6 遗留说明（需重新设计）
+
+`s_ecm` 的递归互斥量曾完整实现（`28c65d0`），但真机验证时造成死锁并被撤销（`bcca642`）：
+
+- 事件回调（默认事件循环任务）通过 `wan_ecm_eth_handle()` / `wan_ecm_netif()` 取锁；
+- 链路管理任务在 teardown 期间持锁，内部阻塞在 `esp_netif_tcpip_exec()` / `esp_netif_destroy()`
+  （要等 TCP/IP 线程，而该线程可能正往事件循环投递事件）；
+- 结果：事件循环任务永久阻塞，teardown 也回不来 → `Tearing down ECM driver` 之后没有
+  `ECM driver ready`，`httpd` 持续报 `Failed to post esp_http_server event: ESP_ERR_TIMEOUT`。
+
+**结论**：事件回调绝不能阻塞等待。彻底解决需要 ECM 侧"引用计数或延迟释放"
+（回调只取快照且不等待，teardown 延后真正释放），方案确认后单独立项；
+当前仍保持"句柄由链路管理任务独占、回调只比较指针"的既有约束。
+`esp_netif_action_stop/connected` 走 TCP/IP 线程的部分保留。
+
+### 期间的实测修复（非审计项）
+
+| 提交 | 内容 |
+|---|---|
+| `79931a2` | 更新上游 DNS 时不再重启 DHCP 服务器（避免 IP 重复分配） |
+| `ab17e41` | DHCP 的 DNS 选项改为开机时启用：`OP_SET` 在服务器运行期间必返 `ALREADY_STARTED`，运行时只校验 |
+| `bcca642` | CDC 驱动安装提前到 `cpe_wan_start()`，消除 AT 事件注册的开机竞态 |
+
+### 与计划的偏差
+
+- **2.1**：实现为 `cpe_wan_reboot_deferred(reset_modem_first, reason)`，放在 `cpe_wan` 而非
+  `cpe_core/cpe_system.c`。原因：该动作需要 `cpe_at`（AT 复位模组）与 `app_wifi`（deauth 站点），
+  而这两个组件都依赖 `cpe_core`，放进 `cpe_core` 会形成循环依赖。
+  5 处调用点中 4 处已改用它；`link_manager` 的受控重启保持内联（需停在自身循环里）。
+- **2.2**：`cpe_system_factory_reset()` 落在 `cpe_core`，跨组件清理（站点昵称、维护策略）
+  通过注册钩子完成，同时修掉审计 A7 的反向依赖（`cpe_config` 不再直接清启动计数）。
+
+---
+
 ## 批次 0：基线验证（阻塞后批，用户侧）
 
 | 项 | 内容 | 通过标准 |
