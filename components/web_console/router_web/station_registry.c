@@ -31,7 +31,11 @@ static const char *TAG = "cpe_web";
 typedef struct sta_node {
     SLIST_ENTRY(sta_node) field;
     uint8_t mac[6];
+    /* What the console shows: the user's nickname, else the DHCP hostname,
+     * else the MAC in hex. */
     char name[CPE_WEB_STA_NAME_MAX_LEN + 1];
+    char hostname[ESP_NETIF_HOSTNAME_MAX_LEN];  /* DHCP option 12, "" if absent */
+    bool renamed;                               /* name was set by the user */
     esp_ip4_addr_t ip;
     int64_t start_time_us;  /* esp_timer_get_time() when the station connected */
 } sta_node_t;
@@ -52,7 +56,10 @@ static void sta_add_node(const uint8_t mac[6])
     }
     memcpy(node->mac, mac, sizeof(node->mac));
     node->start_time_us = esp_timer_get_time();
-    if (cpe_web_station_name_load(mac, node->name, sizeof(node->name)) != ESP_OK) {
+    if (cpe_web_station_name_load(mac, node->name, sizeof(node->name)) == ESP_OK) {
+        node->renamed = true;
+    } else {
+        /* Until the DHCP hostname is known, show the MAC. */
         cpe_web_mac_to_hex(mac, node->name);
     }
 
@@ -106,7 +113,7 @@ static void sta_remove_node(const uint8_t mac[6])
     xSemaphoreGive(s_sta_mutex);
 }
 
-static void sta_update_ip(const uint8_t mac[6], uint32_t ip)
+static void sta_update_lease(const uint8_t mac[6], uint32_t ip, const char *hostname)
 {
     if (s_sta_mutex == NULL) {
         return;
@@ -118,6 +125,14 @@ static void sta_update_ip(const uint8_t mac[6], uint32_t ip)
     SLIST_FOREACH(node, &s_sta_list, field) {
         if (memcmp(node->mac, mac, sizeof(node->mac)) == 0) {
             node->ip.addr = ip;
+            /* A nickname chosen in the console always wins over the name the
+             * client reports. The hostname is printable (IDF sanitizes option
+             * 12) but untrusted, so it is copied with snprintf into a fixed
+             * buffer and never interpreted. */
+            if (!node->renamed && hostname != NULL && hostname[0] != '\0') {
+                snprintf(node->hostname, sizeof(node->hostname), "%s", hostname);
+                snprintf(node->name, sizeof(node->name), "%s", hostname);
+            }
             break;
         }
     }
@@ -157,6 +172,8 @@ bool cpe_web_sta_node_rename(const uint8_t mac[6], const char *name)
     SLIST_FOREACH(node, &s_sta_list, field) {
         if (memcmp(node->mac, mac, sizeof(node->mac)) == 0) {
             snprintf(node->name, sizeof(node->name), "%s", name);
+            /* From now on the DHCP hostname must not overwrite this name. */
+            node->renamed = true;
             found = true;
             break;
         }
@@ -183,10 +200,19 @@ static void sta_free_all(void)
 
 size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max)
 {
-    size_t count = 0;
+    if (out == NULL || max == 0) {
+        return 0;
+    }
+    if (max > CPE_WEB_STA_SNAPSHOT_MAX) {
+        max = CPE_WEB_STA_SNAPSHOT_MAX;
+    }
     if (s_sta_mutex == NULL) {
         return 0;
     }
+
+    size_t count = 0;
+    uint8_t macs[CPE_WEB_STA_SNAPSHOT_MAX][6];
+
     if (xSemaphoreTake(s_sta_mutex, pdMS_TO_TICKS(CPE_WEB_STA_LOCK_TIMEOUT_MS)) != pdTRUE) {
         return 0;
     }
@@ -197,6 +223,7 @@ size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max)
         }
         snprintf(out[count].name, sizeof(out[count].name), "%s", node->name);
         cpe_web_mac_to_colon(node->mac, out[count].mac);
+        memcpy(macs[count], node->mac, sizeof(macs[count]));
         esp_ip4_addr_t addr = node->ip;
         if (addr.addr != 0) {
             esp_ip4addr_ntoa(&addr, out[count].ip, sizeof(out[count].ip));
@@ -207,6 +234,36 @@ size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max)
         count++;
     }
     xSemaphoreGive(s_sta_mutex);
+
+    /* Refresh from the live lease table. The DHCP server drops the oldest lease
+     * without notification when its table is full, so an address tracked from
+     * the event stream may already belong to another station. The lookup is
+     * done outside the lock because it hops to the TCP/IP task. */
+    esp_netif_t *ap = app_wifi_get_ap_netif();
+    if (ap != NULL) {
+        for (size_t i = 0; i < count; i++) {
+            esp_netif_pair_mac_ip_t pair = { 0 };
+            memcpy(pair.mac, macs[i], sizeof(pair.mac));
+            if (esp_netif_dhcps_get_clients_by_mac(ap, 1, &pair) == ESP_OK && pair.ip.addr != 0) {
+                esp_ip4addr_ntoa(&pair.ip, out[i].ip, sizeof(out[i].ip));
+            }
+        }
+    }
+
+    /* Two stations on one address means the server reassigned an address that
+     * is still in use: report it instead of silently showing a broken list. */
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(out[i].ip, "0.0.0.0") == 0) {
+            continue;
+        }
+        for (size_t j = 0; j < i; j++) {
+            if (strcmp(out[i].ip, out[j].ip) == 0) {
+                ESP_LOGW(TAG, "Duplicate IP %s: %s and %s",
+                         out[i].ip, out[j].mac, out[i].mac);
+                break;
+            }
+        }
+    }
     return count;
 }
 
@@ -262,6 +319,9 @@ void cpe_web_station_event_handler(void *arg, esp_event_base_t event_base,
         sta_remove_node(event->mac);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_ASSIGNED_IP_TO_CLIENT) {
         ip_event_assigned_ip_to_client_t *event = (ip_event_assigned_ip_to_client_t *)event_data;
-        sta_update_ip(event->mac, event->ip.addr);
+        /* event->hostname carries DHCP option 12 when the client sends it and
+         * CONFIG_LWIP_DHCPS_REPORT_CLIENT_HOSTNAME is enabled (it is). Empty
+         * when the client does not provide a name. */
+        sta_update_lease(event->mac, event->ip.addr, event->hostname);
     }
 }
