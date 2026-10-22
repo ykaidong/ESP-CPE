@@ -41,6 +41,7 @@
             var password = CPE.byId('password');
             var hidden = CPE.byId('select');
             var deviceName = CPE.byId('deviceName');
+            var maxSta = CPE.byId('maxSta');
 
             if (ssid) {
                 ssid.value = typeof data.ssid === 'string' ? data.ssid : '';
@@ -59,6 +60,9 @@
                 deviceName.value = typeof data.device_name === 'string' ? data.device_name : '';
             }
             currentMaxSta = Number(data.max_sta) || 8;
+            if (maxSta) {
+                maxSta.value = String(currentMaxSta);
+            }
         });
     }
 
@@ -100,24 +104,32 @@
             showMessage('设备名称长度不能超过 32 个字符', true);
             return;
         }
+        var maxStaInput = CPE.byId('maxSta');
+        var maxSta = maxStaInput ? Number(maxStaInput.value) : currentMaxSta;
+        if (!(maxSta >= 1 && maxSta <= 10)) {
+            showMessage('最大设备数必须为 1~10', true);
+            return;
+        }
 
         var body = {
             ssid: ssid,
             password: password,
             if_hide_ssid: !!(hiddenInput && hiddenInput.checked),
-            max_sta: currentMaxSta
+            max_sta: maxSta
         };
         if (deviceName.length > 0) {
             body.device_name = deviceName;
         }
 
         CPE.postJson(GENERAL_URL, body, SAVE_TIMEOUT_MS).then(function () {
+            currentMaxSta = maxSta;
             passwordInput.value = '';
-            showMessage('基本设置已保存。若修改了 WLAN 名称或密码，请使用新参数重新连接 Wi-Fi。', false);
+            showMessage('基本设置已保存。若修改了 WLAN 名称、密码或最大设备数，请使用新参数重新连接 Wi-Fi。', false);
         }).catch(function (error) {
             if (error.message === 'network_error') {
-                /* Changing SSID/password restarts the SoftAP and drops this
-                 * HTTP connection before the response can be read. */
+                /* Changing SSID/password/max_sta restarts the SoftAP and drops
+                 * this HTTP connection before the response can be read. */
+                currentMaxSta = maxSta;
                 passwordInput.value = '';
                 showMessage('设置已提交，设备无线可能正在重启；请使用新的 WLAN 参数重新连接后刷新页面确认。', false);
             } else {
