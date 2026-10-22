@@ -38,55 +38,6 @@ menu "CPE Application Configuration"
                 USB bConfigurationValue to select for the matched device.
     endif
 
-    config CPE_USB_TASK_STACK_SIZE
-        int "USB client task stack size"
-        default 4096
-        range 2048 16384
-
-    config CPE_USB_TASK_PRIORITY
-        int "USB client task priority"
-        default 10
-        range 5 23
-        help
-            Keep this below the lwIP/Wi-Fi task priorities (18 by default).
-            The official example used configMAX_PRIORITIES-1 (24), which could
-            starve the network stack.
-
-    config CPE_USB_TASK_CORE_ID
-        int "USB task core id (-1 = no affinity)"
-        default -1
-
-    config CPE_LINK_TIMEOUT_MS
-        int "Timeout waiting for the USB 4G link (ms)"
-        default 30000
-        range 1000 600000
-        help
-            If no USB link is reported within this time the link manager
-            rebuilds the ECM driver and eventually power-cycles the root port.
-
-    config CPE_IP_TIMEOUT_MS
-        int "Timeout waiting for an IP address after link up (ms)"
-        default 90000
-        range 10000 300000
-        help
-            A link up without an IP usually means no SIM / PDP not activated,
-            but right after a USB re-enumeration the modem may still be
-            re-attaching to the network and can take tens of seconds before its
-            DHCP server answers. Keep this generous: the device MUST stay
-            reachable through SoftAP/Web in that case; no automatic reboot is
-            performed.
-
-    config CPE_IP_DHCP_RESTARTS
-        int "DHCP-client restarts before rebuilding the ECM driver"
-        default 2
-        range 0 10
-        help
-            When the link is up but no IP arrives, keep the ECM/USB session
-            alive and only restart the DHCP client this many times first.
-            Tearing the ECM driver down resets the modem USB interface, which
-            gives the DHCP server a much shorter window on the next attempt.
-            0 keeps the old behaviour (rebuild ECM on the first timeout).
-
     config CPE_MAX_RECOVERY_ATTEMPTS
         int "ECM soft-recovery attempts before escalating"
         default 3
@@ -96,92 +47,6 @@ menu "CPE Application Configuration"
         int "Delay between recovery attempts (ms)"
         default 60000
         range 5000 600000
-
-    config CPE_MAX_REBOOTS
-        int "Maximum consecutive controlled reboots before staying in fault mode"
-        default 3
-        range 0 10
-        help
-            The boot counter is persisted in NVS and cleared after the device
-            has been online for CPE_HEALTHY_CLEAR_SECONDS, so a panic loop can
-            never restart forever. 0 disables controlled reboots.
-
-    config CPE_HEALTHY_CLEAR_SECONDS
-        int "Uptime required to clear the boot counter (seconds)"
-        default 120
-        range 10 3600
-
-    config CPE_MAINT_ECM_PERIOD_MIN
-        int "Periodic ECM interface rebuild (minutes, 0 = disabled)"
-        default 0
-        range 0 43200
-        help
-            Every N minutes the ECM network interface is torn down and rebuilt
-            WITHOUT rebooting the ESP32: the SoftAP and the web console stay
-            up, the modem is not reset, only the WAN interface is recreated.
-            The WAN is unavailable for a few seconds while the DHCP client
-            obtains a new lease.
-
-            This clears driver/lwIP/modem-session state that slowly degrades
-            over long runs and is the cheapest way to recover a WAN path that
-            is "up but not passing traffic". The action is skipped while an
-            OTA upload or an unvalidated OTA image is pending and the request
-            is executed by the link manager task, never concurrently with its
-            own recovery actions.
-
-            This Kconfig value is only the DEFAULT (first boot / factory
-            reset): the active value is stored in NVS and can be changed at
-            runtime from the management console (/api/system/maintenance).
-
-            0 disables the periodic rebuild.
-
-    config CPE_MAINT_REBOOT_PERIOD_MIN
-        int "Periodic device reboot (minutes, 0 = disabled)"
-        default 0
-        range 0 43200
-        help
-            Every N minutes the ESP32 reboots after the standard pre-restart
-            cleanup (AT+CFUN=1,1 when the AT port is available, then Wi-Fi
-            deauthentication). This is the last-resort cure for a firmware or
-            modem state that a soft recovery cannot fix. All SoftAP clients
-            are disconnected and the 4G link is down for tens of seconds.
-
-            A scheduled reboot is skipped while an OTA upload/image validation
-            is in progress and it is counted by a dedicated NVS guard
-            (CPE_MAINT_MAX_SCHED_REBOOTS): after that many consecutive
-            scheduled reboots that never reached a steady state (the link
-            manager left the boot phase) the timer stops rebooting and only
-            reports the fault, so a firmware that cannot come back up is not
-            rebooted forever. A missing SIM/modem does not count as unhealthy,
-            only a device that keeps failing to boot does.
-
-            This Kconfig value is only the DEFAULT (first boot / factory
-            reset): the active value is stored in NVS and can be changed at
-            runtime from the management console (/api/system/maintenance).
-
-            0 disables the periodic reboot.
-
-    config CPE_MAINT_RESET_MODEM
-        bool "Reset the 4G module before a scheduled reboot"
-        default y
-        help
-            Send AT+CFUN=1,1 (best effort, bounded to about 3 s) before the
-            scheduled reboot so the modem re-enumerates cleanly afterwards.
-            Only applies to the scheduled reboot: the periodic ECM rebuild
-            never resets the modem. Disable this when the modem drops off the
-            bus during its own reset and needs a physical replug.
-
-    config CPE_MAINT_MAX_SCHED_REBOOTS
-        int "Consecutive scheduled reboots without a healthy period"
-        default 3
-        range 1 20
-        help
-            The count is persisted in NVS and cleared once the device has been
-            in a steady state for CPE_HEALTHY_CLEAR_SECONDS ("steady" = the
-            link manager left the boot phase, the 4G link itself is not
-            required). When the limit is reached the scheduled reboot is frozen
-            (and reported in the status error text) instead of rebooting a
-            device that cannot boot.
 
     config CPE_OTA_VALIDATE_DELAY_MS
         int "Delay before validating a newly flashed OTA image (ms)"
@@ -345,46 +210,5 @@ menu "CPE Application Configuration"
         help
             Time the blinking patterns stay on and off. 500 ms gives a calm
             1 Hz blink.
-
-    config CPE_AT_ENABLE
-        bool "Enable AT telemetry (and modem reset before deliberate restarts)"
-        default y
-        help
-            Open a second CDC port on the modem AT interface (vendor specific
-            or CDC-ACM) and poll AT+CSQ / AT+COPS? / AT+CEREG? / AT+CGATT? /
-            AT+CGACT? / AT+QCSQ / AT+QTEMP together with ATI / AT+CGSN once.
-            The values are shown on the Web status page. Telemetry uses only
-            read-only commands, so the data connection is not disturbed.
-            The single state-changing command is AT+CFUN=1,1: before every
-            deliberate restart (Web reboot, factory reset, OTA, reset button,
-            controlled reboot) the modem is asked to reset so it re-enumerates
-            cleanly after the ESP boots. This is best effort and bounded; a
-            missing AT port never delays the restart.
-            QCSQ and QTEMP are Quectel extensions: other modems simply answer
-            ERROR and the corresponding rows stay "unknown". Disable this when
-            the modem does not expose a usable AT interface next to the ECM
-            one.
-
-    config CPE_AT_POLL_INTERVAL_S
-        depends on CPE_AT_ENABLE
-        int "AT telemetry poll interval (seconds)"
-        default 5
-        range 5 600
-        help
-            How often signal strength, carrier and registration state are
-            refreshed. The modem identity (model, firmware, IMEI) is read once
-            when the AT port is opened.
-
-    config CPE_AT_MODEM_RESET_TIMEOUT_MS
-        depends on CPE_AT_ENABLE
-        int "Modem reset wait before restart (ms)"
-        default 3000
-        range 1000 10000
-        help
-            How long a deliberate restart waits for the AT task to finish
-            AT+CFUN=1,1. The wait is bounded on purpose: a wedged AT port must
-            never delay the restart. 3000 ms covers one 2 s AT command plus the
-            task wake-up and schedule jitter. Raise it only if a slow modem
-            regularly answers FWKCHANG/OK later than that.
 
 endmenu

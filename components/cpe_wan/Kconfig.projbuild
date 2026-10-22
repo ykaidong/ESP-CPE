@@ -1,0 +1,52 @@
+menu "CPE WAN Configuration"
+
+    config CPE_USB_TASK_STACK_SIZE
+        int "USB client task stack size"
+        default 4096
+        range 2048 16384
+
+    config CPE_USB_TASK_PRIORITY
+        int "USB client task priority"
+        default 10
+        range 5 23
+        help
+            Keep this below the lwIP/Wi-Fi task priorities (18 by default).
+            The official example used configMAX_PRIORITIES-1 (24), which could
+            starve the network stack.
+
+    config CPE_USB_TASK_CORE_ID
+        int "USB task core id (-1 = no affinity)"
+        default -1
+
+    config CPE_LINK_TIMEOUT_MS
+        int "Timeout waiting for the USB 4G link (ms)"
+        default 30000
+        range 1000 600000
+        help
+            If no USB link is reported within this time the link manager
+            rebuilds the ECM driver and eventually power-cycles the root port.
+
+    config CPE_IP_TIMEOUT_MS
+        int "Timeout waiting for an IP address after link up (ms)"
+        default 90000
+        range 10000 300000
+        help
+            A link up without an IP usually means no SIM / PDP not activated,
+            but right after a USB re-enumeration the modem may still be
+            re-attaching to the network and can take tens of seconds before its
+            DHCP server answers. Keep this generous: the device MUST stay
+            reachable through SoftAP/Web in that case; no automatic reboot is
+            performed.
+
+    config CPE_IP_DHCP_RESTARTS
+        int "DHCP-client restarts before rebuilding the ECM driver"
+        default 2
+        range 0 10
+        help
+            When the link is up but no IP arrives, keep the ECM/USB session
+            alive and only restart the DHCP client this many times first.
+            Tearing the ECM driver down resets the modem USB interface, which
+            gives the DHCP server a much shorter window on the next attempt.
+            0 keeps the old behaviour (rebuild ECM on the first timeout).
+
+endmenu

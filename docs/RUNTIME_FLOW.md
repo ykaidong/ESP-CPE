@@ -3,7 +3,9 @@
 > 适用固件：ESP32-S3 / 16MB Flash / 双 OTA / `iot_usbh_cdc` 3.1.3 + `iot_usbh_ecm` 0.4.2
 >
 > 代码位置：`main/main.c`（启动编排、OTA 校验）、`components/cpe_wan/`（USB/ECM 生命周期、
-> NAPT/DNS、链路管理器与恢复策略）、`main/Kconfig.projbuild`（全部超时/次数阈值）、
+> NAPT/DNS、链路管理器与恢复策略）、`components/*/Kconfig.projbuild`（各模块自己的超时/次数
+> 阈值：`cpe_wan`、`cpe_maintenance`、`cpe_at`、`cpe_core`、`app_wifi`、`web_console`）、
+> `main/Kconfig.projbuild`（板级 GPIO、OTA 与恢复重试等应用级选项）、
 > `components/cpe_core/`（配置、认证、状态、启动计数）
 
 ## 1. 设计原则
