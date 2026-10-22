@@ -63,22 +63,30 @@ static esp_err_t wlan_advance_mutate(cpe_config_t *cfg, void *arg)
  * listener itself (the radio does not restart when the apply fails). */
 #define WLAN_APPLY_SETTLE_MS         200
 
+/* Shared by /wlan_general (SSID/password/max_sta restart the AP and its netif,
+ * so the listener has to go down first) and /wlan_advance (channel/bandwidth
+ * keep the AP running, so the listener stays up). */
 typedef struct {
     cpe_config_t prev;
     cpe_config_t next;
-    wlan_general_update_t update;
+    wlan_general_update_t update;   /* /wlan_general only */
+    cpe_config_mutator_t mutate;
+    void *mutate_arg;
+    bool suspend_listener;
 } wlan_apply_job_t;
 
-static void wlan_general_apply_task(void *arg)
+static void wlan_apply_task(void *arg)
 {
     wlan_apply_job_t *job = arg;
 
     /* Let the response leave the radio before its socket is closed. */
     vTaskDelay(pdMS_TO_TICKS(WLAN_APPLY_REPLY_GRACE_MS));
 
-    /* Close the listener ahead of the radio restart so the browser sees a clean
+    /* Close the listener ahead of a radio restart so the browser sees a clean
      * close instead of a half-open socket stuck in its connection pool. */
-    cpe_web_listener_suspend_for_ap_restart();
+    if (job->suspend_listener) {
+        cpe_web_listener_suspend_for_ap_restart();
+    }
 
     /* app_wifi_apply() reads the persisted configuration as its rollback
      * baseline, so it must run before cpe_config_update(). Errors can no longer
@@ -87,7 +95,7 @@ static void wlan_general_apply_task(void *arg)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to apply new WLAN settings: %s", esp_err_to_name(err));
     } else {
-        err = cpe_config_update(wlan_general_mutate, &job->update);
+        err = cpe_config_update(job->mutate, job->mutate_arg);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to persist WLAN settings: %s", esp_err_to_name(err));
             (void)app_wifi_apply(&job->prev); /* roll the radio back */
@@ -297,7 +305,10 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
         job->next = next;
         job->update.next = &job->next;
         job->update.set_password = password_changed;
-        if (xTaskCreate(wlan_general_apply_task, "cpe_wlan_apply",
+        job->mutate = wlan_general_mutate;
+        job->mutate_arg = &job->update;
+        job->suspend_listener = true;
+        if (xTaskCreate(wlan_apply_task, "cpe_wlan_apply",
                         WLAN_APPLY_TASK_STACK, job, WLAN_APPLY_TASK_PRIO,
                         NULL) == pdPASS) {
             cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
@@ -405,9 +416,26 @@ static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
 
     if (ap_changed) {
         /* Channel changes keep the AP (and its netif) running, so the listener
-         * survives; only give the reply time to leave the radio. */
-        vTaskDelay(pdMS_TO_TICKS(WLAN_APPLY_REPLY_GRACE_MS));
+         * survives; only give the reply time to leave the radio. The apply
+         * sequence runs in the helper task /wlan_general uses: it writes flash
+         * and must not block the HTTP server task. */
+        wlan_apply_job_t *job = calloc(1, sizeof(*job));
+        if (job != NULL) {
+            job->prev = current;
+            job->next = next;
+            job->mutate = wlan_advance_mutate;
+            job->mutate_arg = &job->next;
+            job->suspend_listener = false;
+            if (xTaskCreate(wlan_apply_task, "cpe_wlan_apply",
+                            WLAN_APPLY_TASK_STACK, job, WLAN_APPLY_TASK_PRIO,
+                            NULL) == pdPASS) {
+                return reply_err;
+            }
+            ESP_LOGW(TAG, "No memory for the WLAN apply task, applying inline");
+            free(job);
+        }
 
+        vTaskDelay(pdMS_TO_TICKS(WLAN_APPLY_REPLY_GRACE_MS));
         err = app_wifi_apply(&next);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to apply advanced WLAN settings: %s",
