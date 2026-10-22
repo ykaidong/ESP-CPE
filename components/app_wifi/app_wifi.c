@@ -23,6 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -39,6 +40,18 @@ static const char *TAG = "app_wifi";
 
 #define APP_WIFI_BW_20              WIFI_BW20
 #define APP_WIFI_BW_40              WIFI_BW40
+
+/* One hour instead of the IDF default of two: a shorter lease frees a stale
+ * address sooner, which matters because the DHCP server deletes the oldest
+ * lease without notification once its table is full. */
+#define APP_WIFI_DHCP_LEASE_S       3600
+
+/* The lease table must be able to hold every station the SoftAP accepts,
+ * otherwise the DHCP server silently recycles the oldest address while that
+ * station is still using it (two clients end up with the same IP). */
+#if CONFIG_LWIP_DHCPS_MAX_STATION_NUM < CPE_MAX_STA_MAX
+#error "CONFIG_LWIP_DHCPS_MAX_STATION_NUM must be >= CPE_MAX_STA_MAX"
+#endif
 
 static bool s_wifi_inited;
 static bool s_wifi_started;
@@ -128,6 +141,42 @@ static esp_err_t ap_apply_static_ip(esp_netif_t *ap_netif)
     }
     ESP_LOGI(TAG, "AP IP address set to %s", CONFIG_SERVER_IP);
     return ESP_OK;
+}
+
+/**
+ * @brief Apply the DHCP lease time used for the SoftAP clients.
+ *
+ * The lease time can only be changed while the server is stopped, and it must
+ * be applied after ap_apply_static_ip(): restarting the server keeps the option
+ * but not a previous change made on another instance.
+ */
+static esp_err_t ap_apply_dhcp_lease(esp_netif_t *ap_netif)
+{
+    dhcps_time_t lease_time = APP_WIFI_DHCP_LEASE_S;
+
+    esp_err_t err = esp_netif_dhcps_stop(ap_netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGE(TAG, "Failed to stop AP DHCP server: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET,
+                                 ESP_NETIF_IP_ADDRESS_LEASE_TIME,
+                                 &lease_time, sizeof(lease_time));
+    if (err != ESP_OK) {
+        /* Non-fatal: the server keeps the IDF default lease time. */
+        ESP_LOGW(TAG, "Failed to set the DHCP lease time: %s", esp_err_to_name(err));
+    }
+
+    esp_err_t start_err = esp_netif_dhcps_start(ap_netif);
+    if (start_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restart AP DHCP server: %s", esp_err_to_name(start_err));
+        return start_err;
+    }
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "AP DHCP lease time set to %d s", APP_WIFI_DHCP_LEASE_S);
+    }
+    return err;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -231,6 +280,12 @@ esp_err_t app_wifi_start(void)
     err = ap_apply_static_ip(s_ap_netif);
     if (err != ESP_OK) {
         goto fail_netif;
+    }
+
+    /* Bounded lease + a table big enough for max_sta: see the #error above. */
+    err = ap_apply_dhcp_lease(s_ap_netif);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Continuing with the default DHCP lease time");
     }
 
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();

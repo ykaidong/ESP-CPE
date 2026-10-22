@@ -53,6 +53,16 @@ CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=512
 # ---- Crash behaviour -----------------------------------------------------
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
 
+# ---- SoftAP DHCP server ---------------------------------------------------
+# The lease table must hold at least as many clients as the SoftAP can accept
+# (CPE_MAX_STA_MAX = 10). With the IDF default of 8 the server silently deletes
+# the oldest lease when the list is full (dhcpserver.c: kill_oldest_dhcps_pool)
+# and then hands that IP to a new station while the old one still uses it, which
+# shows up as two clients with the same address.
+CONFIG_LWIP_DHCPS_MAX_STATION_NUM=16
+# Keep the client hostname (DHCP option 12) so the console can show it.
+CONFIG_LWIP_DHCPS_REPORT_CLIENT_HOSTNAME=y
+
 # ---- Periodic maintenance (see main/Kconfig.projbuild) --------------------
 # Disabled by default: no periodic ECM rebuild and no periodic reboot until it
 # is enabled from the management console ("定时维护" on the status page), which
