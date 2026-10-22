@@ -137,8 +137,10 @@ static void reset_button_task(void *arg)
             }
             ESP_LOGW(TAG, "Rebooting; double-click within %d ms after boot to print "
                      "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            cpe_wan_reboot(true);
+            if (cpe_wan_reboot_deferred(true, "reset button") != ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(300));
+                cpe_wan_reboot(true);
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));

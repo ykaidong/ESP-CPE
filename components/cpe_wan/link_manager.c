@@ -11,6 +11,8 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -291,6 +293,59 @@ void cpe_wan_reboot(bool reset_modem_first)
     }
     app_wifi_deauth_all_stations();
     esp_restart();
+}
+
+/* One-shot task behind cpe_wan_reboot_deferred(): wait for the grace period,
+ * then run the cleanup/restart outside the caller's task context. */
+#define REBOOT_TASK_STACK       3072
+#define REBOOT_TASK_PRIO        5
+#define REBOOT_REASON_LEN       40
+
+typedef struct {
+    bool reset_modem_first;
+    char reason[REBOOT_REASON_LEN];
+} reboot_job_t;
+
+/* Several sources (web console, maintenance, reset button) may ask for a
+ * restart within the grace period: only the first request creates a task. */
+static bool s_reboot_pending;
+
+static void reboot_task(void *arg)
+{
+    reboot_job_t *job = arg;
+    bool reset_modem_first = job->reset_modem_first;
+    ESP_LOGW(TAG, "Restarting (%s)", job->reason);
+    free(job);
+
+    vTaskDelay(pdMS_TO_TICKS(CPE_WAN_REBOOT_GRACE_MS));
+    cpe_wan_reboot(reset_modem_first);
+    vTaskDelete(NULL);
+}
+
+esp_err_t cpe_wan_reboot_deferred(bool reset_modem_first, const char *reason)
+{
+    /* A restart that is already queued wins: reporting ESP_OK keeps the second
+     * caller from falling back to an inline restart. */
+    if (__atomic_exchange_n(&s_reboot_pending, true, __ATOMIC_ACQ_REL)) {
+        return ESP_OK;
+    }
+
+    reboot_job_t *job = calloc(1, sizeof(*job));
+    if (job == NULL) {
+        __atomic_store_n(&s_reboot_pending, false, __ATOMIC_RELEASE);
+        return ESP_ERR_NO_MEM;
+    }
+    job->reset_modem_first = reset_modem_first;
+    if (reason != NULL) {
+        snprintf(job->reason, sizeof(job->reason), "%s", reason);
+    }
+    if (xTaskCreate(reboot_task, "cpe_reboot", REBOOT_TASK_STACK, job,
+                    REBOOT_TASK_PRIO, NULL) != pdPASS) {
+        free(job);
+        __atomic_store_n(&s_reboot_pending, false, __ATOMIC_RELEASE);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 /* The modem is on the bus but the ECM link never came up: controlled reboot is

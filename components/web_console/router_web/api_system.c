@@ -26,26 +26,12 @@ static const char *TAG = "cpe_web";
 
 /* Restarting is requested from a handler, but it must not run there: the grace
  * delay and the modem reset inside cpe_wan_reboot() would keep the single HTTP
- * server task busy after the reply has been queued. */
-#define SYSTEM_REBOOT_TASK_STACK     2048
-#define SYSTEM_REBOOT_TASK_PRIO      5
-/* Time the queued reply gets to leave the socket before esp_restart(). */
-#define SYSTEM_REBOOT_GRACE_MS       500
-
-static void system_reboot_task(void *arg)
-{
-    (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(SYSTEM_REBOOT_GRACE_MS));
-    cpe_wan_reboot(true);
-    vTaskDelete(NULL);
-}
-
+ * server task busy after the reply has been queued. The shared helper waits for
+ * the queued reply to leave the socket first. */
 static void schedule_system_reboot(void)
 {
-    if (xTaskCreate(system_reboot_task, "cpe_reboot", SYSTEM_REBOOT_TASK_STACK, NULL,
-                    SYSTEM_REBOOT_TASK_PRIO, NULL) != pdPASS) {
+    if (cpe_wan_reboot_deferred(true, "web console") != ESP_OK) {
         ESP_LOGW(TAG, "No memory for the reboot task, restarting from the handler");
-        vTaskDelay(pdMS_TO_TICKS(SYSTEM_REBOOT_GRACE_MS));
         cpe_wan_reboot(true);
     }
 }

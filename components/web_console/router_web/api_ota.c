@@ -275,10 +275,13 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
     cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"ota_ready\",\"reboot\":true}");
     err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
-    /* Let the response leave the socket, then boot the new image. */
+    /* The response is queued; the shared helper waits for it to leave the
+     * socket and then boots the new image. */
     ESP_LOGW(TAG, "Firmware update stored, restarting into the new image");
-    vTaskDelay(pdMS_TO_TICKS(800));
-    cpe_wan_reboot(true);
+    if (cpe_wan_reboot_deferred(true, "firmware update") != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(800));
+        cpe_wan_reboot(true);
+    }
     return err;
 }
 

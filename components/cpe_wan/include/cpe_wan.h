@@ -21,6 +21,13 @@ extern "C" {
 #endif
 
 /**
+ * How long cpe_wan_reboot_deferred() waits before restarting: a reply that was
+ * just queued on a socket (HTTP, or the web console's reboot confirmation) has
+ * time to leave the radio before the device goes down.
+ */
+#define CPE_WAN_REBOOT_GRACE_MS     500
+
+/**
  * @brief Register the 4G link event handlers (IOT_ETH and IP events).
  *
  * Must be called after the default event loop has been created and before the
@@ -86,6 +93,23 @@ void cpe_wan_request_ecm_rebuild(void);
  * @param reset_modem_first  Send AT+CFUN=1,1 before deauthenticating/restarting.
  */
 void cpe_wan_reboot(bool reset_modem_first);
+
+/**
+ * @brief Queue the restart above instead of running it in the caller's task.
+ *
+ * Waits CPE_WAN_REBOOT_GRACE_MS first, so a reply that was just queued on a
+ * socket still leaves the device, and then runs cpe_wan_reboot() on a one-shot
+ * task: the modem reset and the station deauthentication can block for seconds
+ * and must never hold up the HTTP server task, the event loop or (in the worst
+ * case) the caller's own loop.
+ *
+ * @param reset_modem_first  See cpe_wan_reboot().
+ * @param reason             Short text logged with the restart (may be NULL).
+ *
+ * @return ESP_OK when the helper task was created, ESP_ERR_NO_MEM otherwise
+ *         (the caller decides whether to restart inline).
+ */
+esp_err_t cpe_wan_reboot_deferred(bool reset_modem_first, const char *reason);
 
 #ifdef __cplusplus
 }

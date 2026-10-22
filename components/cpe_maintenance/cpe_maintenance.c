@@ -405,9 +405,12 @@ static void maint_reboot(maint_ctx_t *ctx, int64_t now)
              "reset modem: %s)",
              next, ctx->cfg.reboot_period_min, now / 1000000LL,
              ctx->cfg.reset_modem ? "yes" : "no");
-    /* Give the log line and the NVS commit time to settle before the restart. */
-    vTaskDelay(pdMS_TO_TICKS(200));
-    cpe_wan_reboot(ctx->cfg.reset_modem);
+    /* The shared helper waits for the log line and the NVS commit to settle
+     * before restarting, without blocking the maintenance task. */
+    if (cpe_wan_reboot_deferred(ctx->cfg.reset_modem, "scheduled reboot") != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        cpe_wan_reboot(ctx->cfg.reset_modem);
+    }
 }
 
 static void maintenance_task(void *arg)
