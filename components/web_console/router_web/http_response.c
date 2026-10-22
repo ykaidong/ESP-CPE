@@ -54,7 +54,7 @@ esp_err_t cpe_web_send_json_body(httpd_req_t *req, const char *status_line,
         ESP_LOGW(TAG, "Failed to send HTTP response: %s", esp_err_to_name(err));
         return ESP_FAIL;
     }
-    return close_socket ? ESP_FAIL : ESP_OK;
+    return close_socket ? CPE_WEB_CLOSE_SOCKET : ESP_OK;
 }
 
 esp_err_t cpe_web_send_error_response(httpd_req_t *req, const char *status_line,
@@ -68,11 +68,11 @@ esp_err_t cpe_web_send_error_response(httpd_req_t *req, const char *status_line,
 
 /* httpd_resp_set_hdr() keeps the pointer, it does not copy the string, and the
  * header is only serialized when the response is sent. The HTTP server is a
- * single task, so a static buffer is safe here (a stack buffer would dangle). */
+ * single task, so a static buffer is safe here (a stack buffer would dangle).
+ * set/clear share one buffer per cookie: a response never both sets and clears
+ * the same cookie. */
 static char s_session_cookie_hdr[96];
-static char s_clear_cookie_hdr[96];
 static char s_csrf_cookie_hdr[96];
-static char s_clear_csrf_cookie_hdr[96];
 
 esp_err_t cpe_web_set_session_cookie(httpd_req_t *req, const char *session)
 {
@@ -106,21 +106,21 @@ esp_err_t cpe_web_set_csrf_cookie(httpd_req_t *req, const char *csrf)
 
 void cpe_web_clear_csrf_cookie(httpd_req_t *req)
 {
-    int n = snprintf(s_clear_csrf_cookie_hdr, sizeof(s_clear_csrf_cookie_hdr),
+    int n = snprintf(s_csrf_cookie_hdr, sizeof(s_csrf_cookie_hdr),
                      "%s=; Path=/; SameSite=Strict; Max-Age=0",
                      CPE_WEB_CSRF_COOKIE_NAME);
-    if (n > 0 && (size_t)n < sizeof(s_clear_csrf_cookie_hdr)) {
-        (void)httpd_resp_set_hdr(req, "Set-Cookie", s_clear_csrf_cookie_hdr);
+    if (n > 0 && (size_t)n < sizeof(s_csrf_cookie_hdr)) {
+        (void)httpd_resp_set_hdr(req, "Set-Cookie", s_csrf_cookie_hdr);
     }
 }
 
 esp_err_t cpe_web_clear_session_cookie(httpd_req_t *req)
 {
-    int n = snprintf(s_clear_cookie_hdr, sizeof(s_clear_cookie_hdr),
+    int n = snprintf(s_session_cookie_hdr, sizeof(s_session_cookie_hdr),
                      "%s=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
                      CPE_WEB_SESSION_COOKIE_NAME);
-    if (n < 0 || (size_t)n >= sizeof(s_clear_cookie_hdr)) {
+    if (n < 0 || (size_t)n >= sizeof(s_session_cookie_hdr)) {
         return ESP_ERR_INVALID_SIZE;
     }
-    return httpd_resp_set_hdr(req, "Set-Cookie", s_clear_cookie_hdr);
+    return httpd_resp_set_hdr(req, "Set-Cookie", s_session_cookie_hdr);
 }

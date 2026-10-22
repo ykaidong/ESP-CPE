@@ -120,6 +120,11 @@ esp_err_t cpe_web_register_uris(httpd_handle_t server, const httpd_uri_t *uris,
 
 /* --- http_response.c ----------------------------------------------------- */
 
+/* Handler return value that also closes the connection and skips the
+ * unread-body purge: the HTTP server treats any non-OK return as "close the
+ * socket". Use it to distinguish "sent and closed" from a real send failure. */
+#define CPE_WEB_CLOSE_SOCKET            ESP_FAIL
+
 esp_err_t cpe_web_send_json_body(httpd_req_t *req, const char *status_line,
                                  const char *json, bool close_socket);
 esp_err_t cpe_web_send_error_response(httpd_req_t *req, const char *status_line,

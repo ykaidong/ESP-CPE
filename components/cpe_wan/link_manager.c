@@ -172,6 +172,7 @@ static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t
         ctx->enum_reset_attempts = 0;
         ctx->online_start_us = now;
         cpe_status_set_recovery_attempts(0);
+        cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
         cpe_status_set_state(CPE_STATE_ONLINE, "online");
         ESP_LOGI(TAG, "CPE online (WAN IP %s)", st->ip);
     }
@@ -229,6 +230,7 @@ static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
 
     ctx->ip_attempts++;
     cpe_status_set_recovery_attempts(ctx->ip_attempts);
+    cpe_status_set_recovery_stage(CPE_RECOVERY_IP);
     ESP_LOGW(TAG, "Link up but no IP after %d ms (attempt %"PRIu32")",
              CONFIG_CPE_IP_TIMEOUT_MS, ctx->ip_attempts);
 
@@ -333,6 +335,7 @@ static lm_tick_result_t lm_wait_usb(lm_ctx_t *ctx, int64_t now)
 
     ctx->usb_attempts++;
     cpe_status_set_recovery_attempts(ctx->usb_attempts);
+    cpe_status_set_recovery_stage(CPE_RECOVERY_USB);
     cpe_status_set_error("no USB link from 4G modem");
     ESP_LOGW(TAG, "No USB link after %d ms (attempt %"PRIu32")",
              CONFIG_CPE_LINK_TIMEOUT_MS, ctx->usb_attempts);

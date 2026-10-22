@@ -8,7 +8,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -96,11 +95,9 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
 
     char ssid[CPE_SSID_MAX_LEN + 1] = { 0 };
     char password[CPE_WIFI_PASS_MAX_LEN + 1] = { 0 };
-    char auth_mode[16] = { 0 };
     char device_name[CPE_DEVICE_NAME_MAX_LEN + 1] = { 0 };
     bool has_ssid = false;
     bool has_password = false;
-    bool has_auth_mode = false;
     bool has_device_name = false;
     bool has_hidden = false;
     bool hidden = false;
@@ -116,14 +113,6 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
         err = cpe_web_json_get_string_unescaped(ctx.parser, "password",
                                                 password, sizeof(password));
         has_password = (err == ESP_OK);
-        if (err == ESP_ERR_NOT_FOUND) {
-            err = ESP_OK;
-        }
-    }
-    if (err == ESP_OK) {
-        err = cpe_web_json_get_string_unescaped(ctx.parser, "auth_mode",
-                                                auth_mode, sizeof(auth_mode));
-        has_auth_mode = (err == ESP_OK);
         if (err == ESP_ERR_NOT_FOUND) {
             err = ESP_OK;
         }
@@ -163,11 +152,6 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
             return cpe_web_send_error_response(req, HTTPD_400, "invalid_password", false);
         }
         password_changed = true;
-    }
-    if (has_auth_mode && strcasecmp(auth_mode, "WPA2_PSK") != 0) {
-        cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "unsupported_auth_mode", false);
     }
     if (has_device_name && cpe_config_validate_device_name(device_name) != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));

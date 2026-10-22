@@ -72,8 +72,9 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
                          (int)status.modem_temp,
                          status.modem_temp_valid ? "true" : "false");
     cpe_web_sbuf_appendf(&sb, ",\"uptime_s\":%" PRIu32 ",\"recovery_attempts\":%" PRIu32
-                         ",\"boot_count\":%" PRIu32 ",\"last_error\":",
-                         status.uptime_s, status.recovery_attempts, status.boot_count);
+                         ",\"recovery_stage\":%d,\"boot_count\":%" PRIu32 ",\"last_error\":",
+                         status.uptime_s, status.recovery_attempts,
+                         (int)status.recovery_stage, status.boot_count);
     cpe_web_sbuf_append_json_string(&sb, status.last_error);
     cpe_web_sbuf_append(&sb, ",\"device_name\":");
     cpe_web_sbuf_append_json_string(&sb, cfg_ok ? cfg.device_name : "");

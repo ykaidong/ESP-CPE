@@ -42,7 +42,7 @@
 static const char *TAG = "cpe_web";
 
 /* Set once modem_http_start() completed; guards event handlers that may race
- * with modem_http_stop(). */
+ * with a listener restart. */
 static bool s_started;
 static bool s_events_registered;
 static bool s_listener_restart_pending;
@@ -187,9 +187,7 @@ static void http_listener_restart_task(void *arg)
             ESP_LOGW(TAG, "httpd_stop during listener restart failed: %s",
                      esp_err_to_name(err));
         }
-        /* Retry in case the netif is still coming up. Keeping s_started set
-         * lets a later modem_http_stop() unregister the handlers and release
-         * the station registry even if every attempt fails. */
+        /* Retry in case the netif is still coming up. */
         for (int attempt = 0; attempt < 3; attempt++) {
             err = start_http_server();
             if (err == ESP_OK) {
@@ -309,43 +307,4 @@ fail:
     free_rest_context();
     cpe_web_station_registry_deinit();
     return err;
-}
-
-esp_err_t modem_http_stop(void)
-{
-    if (!s_started) {
-        return ESP_OK;
-    }
-
-    /* Stop accepting event callbacks first, then give an in-flight callback a
-     * chance to return before the station list is released. */
-    s_started = false;
-    bool had_events = s_events_registered;
-    s_events_registered = false;
-    if (had_events) {
-        cpe_web_station_registry_enable(false);
-        (void)esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_AP_START,
-                                           on_wifi_ap_start);
-        (void)esp_event_handler_unregister(IP_EVENT, IP_EVENT_ASSIGNED_IP_TO_CLIENT,
-                                           cpe_web_station_event_handler);
-        (void)esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                           cpe_web_station_event_handler);
-    }
-    vTaskDelay(pdMS_TO_TICKS(20));
-
-    if (s_server != NULL) {
-        esp_err_t err = httpd_stop(s_server);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "httpd_stop failed: %s", esp_err_to_name(err));
-        }
-        s_server = NULL;
-    }
-
-    free_rest_context();
-
-    /* No handler can run anymore, so the list can be released safely. */
-    cpe_web_station_registry_deinit();
-
-    ESP_LOGI(TAG, "Management web server stopped");
-    return ESP_OK;
 }

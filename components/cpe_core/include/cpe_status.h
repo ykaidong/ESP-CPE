@@ -23,6 +23,12 @@ typedef enum {
     CPE_STATE_FAULT,        /*!< Recoverable failure, AP/Web still available */
 } cpe_state_t;
 
+typedef enum {
+    CPE_RECOVERY_NONE = 0,  /*!< Healthy, no recovery in progress */
+    CPE_RECOVERY_USB,       /*!< Waiting for / recovering the USB link */
+    CPE_RECOVERY_IP,        /*!< Link up but no IP (DHCP/PDP recovery) */
+} cpe_recovery_stage_t;
+
 typedef struct {
     cpe_state_t state;
     char state_text[48];
@@ -54,6 +60,7 @@ typedef struct {
     bool modem_temp_valid;
     uint32_t uptime_s;
     uint32_t recovery_attempts;
+    cpe_recovery_stage_t recovery_stage;
     uint32_t boot_count;
     char last_error[96];
 } cpe_status_t;
@@ -86,6 +93,7 @@ void cpe_status_set_signal_quality(int rsrp, int rsrq, int sinr, bool valid);
 /** Module temperature in degrees Celsius reported by AT+QTEMP. */
 void cpe_status_set_modem_temp(int temp_c, bool valid);
 void cpe_status_set_recovery_attempts(uint32_t attempts);
+void cpe_status_set_recovery_stage(cpe_recovery_stage_t stage);
 void cpe_status_set_boot_count(uint32_t boot_count);
 void cpe_status_set_error(const char *fmt, ...);
 

@@ -229,6 +229,16 @@ void cpe_status_set_recovery_attempts(uint32_t attempts)
     xSemaphoreGive(s_lock);
 }
 
+void cpe_status_set_recovery_stage(cpe_recovery_stage_t stage)
+{
+    if (!s_inited) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_status.recovery_stage = stage;
+    xSemaphoreGive(s_lock);
+}
+
 void cpe_status_set_boot_count(uint32_t boot_count)
 {
     if (!s_inited) {
