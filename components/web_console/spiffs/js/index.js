@@ -23,6 +23,11 @@
     var uptimeBaseMs = 0;
     var uptimeSynced = false;
     var uptimeTimer = null;
+    /* Set when a status poll fails: the page can no longer reach the device, so
+     * the local estimate would keep ticking and every other value on screen
+     * would silently stay at its last reading. */
+    var statusStale = false;
+    var lastStatusAt = null;
     /* The API value is read before the response travels back, so a poll usually
      * lags the local estimate slightly. Only correct clearly conflicting
      * values; re-basing every poll makes the seconds repeat. */
@@ -54,6 +59,11 @@
             return minutes + '分钟' + rest + '秒';
         }
         return rest + '秒';
+    }
+
+    function formatClock(date) {
+        return pad2(date.getHours()) + ':' + pad2(date.getMinutes()) + ':' +
+            pad2(date.getSeconds());
     }
 
     function makeButton(label, className, index) {
@@ -279,7 +289,7 @@
     }
 
     function renderUptime() {
-        if (!uptimeSynced) {
+        if (!uptimeSynced || statusStale) {
             return;
         }
         var elapsedMs = performance.now() - uptimeBaseMs;
@@ -388,15 +398,41 @@
         }
     }
 
+    /* The last successful reading is kept on screen, but it must be labelled:
+     * otherwise a frozen page looks live (and the local uptime keeps counting
+     * even though the device was never contacted again). */
+    function showStaleStatus() {
+        var banner = CPE.byId('status-banner');
+        if (!banner) {
+            return;
+        }
+        var lastSeen = lastStatusAt
+            ? '，当前显示的是 ' + formatClock(lastStatusAt) + ' 的数据'
+            : '';
+        banner.textContent = '与设备失去连接，正在重试' + lastSeen + '；恢复后会自动更新。';
+        banner.className = 'status-banner status-banner-warn';
+    }
+
     function refreshStatus() {
         if (statusTimer) {
             clearTimeout(statusTimer);
             statusTimer = null;
         }
         CPE.getStatus().then(function (status) {
+            statusStale = false;
+            lastStatusAt = new Date();
             renderStatus(status);
         }).catch(function () {
-            /* 401 already redirected. */
+            /* 401 already redirected to the login page. */
+            if (statusStale) {
+                return;
+            }
+            statusStale = true;
+            if (uptimeTimer) {
+                clearTimeout(uptimeTimer);
+                uptimeTimer = null;
+            }
+            showStaleStatus();
         }).then(function () {
             statusTimer = setTimeout(refreshStatus, 5000);
         });
