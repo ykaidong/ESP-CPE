@@ -92,24 +92,44 @@ static void wan_apply_upstream_dns(void)
         return;
     }
 
-    esp_err_t err = esp_netif_dhcps_stop(ap);
-    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-        ESP_LOGW(TAG, "Failed to stop AP DHCP server: %s", esp_err_to_name(err));
+    /* The server is NEVER stopped here. dhcps_stop() frees the whole lease
+     * table and dhcps_start() resets the allocation cursor to the first
+     * address, so a station that is already using an address keeps it while the
+     * server hands the very same address out to the next client: two stations
+     * end up with one IP (and the station registry reports "Duplicate IP").
+     * Both calls below only write fields of the running server, no restart is
+     * needed for them. */
+    dhcps_offer_t offer_dns = OFFER_DNS;
+    esp_err_t err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
+                                           &offer_dns, sizeof(offer_dns));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to enable the DHCP DNS option: %s", esp_err_to_name(err));
+    }
+
+    /* Nothing to do when the value is already the one the server offers: this
+     * runs on every 4G reconnect and on every SoftAP restart. */
+    esp_netif_dns_info_t cur = {0};
+    if (esp_netif_get_dns_info(ap, ESP_NETIF_DNS_MAIN, &cur) == ESP_OK &&
+            cur.ip.u_addr.ip4.addr == dns.ip.u_addr.ip4.addr) {
         return;
     }
-    dhcps_offer_t offer_dns = OFFER_DNS;
-    err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
-                                 &offer_dns, sizeof(offer_dns));
-    if (err == ESP_OK) {
-        err = esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
-    }
-    if (esp_netif_dhcps_start(ap) != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to restart AP DHCP server");
-    }
+
+    err = esp_netif_set_dns_info(ap, ESP_NETIF_DNS_MAIN, &dns);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to apply upstream DNS to AP DHCP: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "AP clients now use upstream DNS " IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+        return;
+    }
+    ESP_LOGI(TAG, "AP clients now use upstream DNS " IPSTR, IP2STR(&dns.ip.u_addr.ip4));
+
+    /* A client only refreshes its options at T1 (half of the 3600 s lease), so
+     * without this it would keep the old DNS for about 30 minutes. Forcing a
+     * re-association makes it re-request its lease: the lease table survived,
+     * so every station keeps its address and only the options change. */
+    wifi_sta_list_t sta_list = { 0 };
+    if (esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK && sta_list.num > 0) {
+        ESP_LOGI(TAG, "Deauthenticating %u station(s) so they pick up the new DNS",
+                 (unsigned)sta_list.num);
+        app_wifi_deauth_all_stations();
     }
 }
 

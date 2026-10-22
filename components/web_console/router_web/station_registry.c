@@ -235,17 +235,33 @@ size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max)
     }
     xSemaphoreGive(s_sta_mutex);
 
-    /* Refresh from the live lease table. The DHCP server drops the oldest lease
-     * without notification when its table is full, so an address tracked from
-     * the event stream may already belong to another station. The lookup is
-     * done outside the lock because it hops to the TCP/IP task. */
+    /* Refresh from the live lease table. An address tracked from the event
+     * stream can be stale: the server drops the oldest lease without
+     * notification when its table is full, and restarting the server frees the
+     * whole table while the station keeps using its address. The lookup is done
+     * outside the lock because it hops to the TCP/IP task. */
     esp_netif_t *ap = app_wifi_get_ap_netif();
     if (ap != NULL) {
         for (size_t i = 0; i < count; i++) {
             esp_netif_pair_mac_ip_t pair = { 0 };
             memcpy(pair.mac, macs[i], sizeof(pair.mac));
-            if (esp_netif_dhcps_get_clients_by_mac(ap, 1, &pair) == ESP_OK && pair.ip.addr != 0) {
+            bool have_ip = (esp_netif_dhcps_get_clients_by_mac(ap, 1, &pair) == ESP_OK &&
+                            pair.ip.addr != 0);
+            if (!have_ip) {
+                /* No lease: fall back to the ARP cache, which still knows the
+                 * address the station is actually using (a lease the server
+                 * forgot, or a static address). */
+                pair.ip.addr = 0;
+                have_ip = (esp_netif_arp_get_client_by_mac(ap, &pair) == ESP_OK &&
+                           pair.ip.addr != 0);
+            }
+            if (have_ip) {
                 esp_ip4addr_ntoa(&pair.ip, out[i].ip, sizeof(out[i].ip));
+            } else {
+                /* Neither leased nor in the ARP cache: the address is gone, so
+                 * do not keep showing the old one (it would look like two
+                 * stations sharing an address). */
+                snprintf(out[i].ip, sizeof(out[i].ip), "0.0.0.0");
             }
         }
     }
