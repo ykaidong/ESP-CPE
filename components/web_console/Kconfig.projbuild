@@ -6,4 +6,16 @@ menu "CPE Web Console"
         help
             Specify the mount point in VFS.
 
+    config CPE_WEB_HTTP_LOG
+        bool "Log every HTTP request (method, URI, client IP, duration)"
+        default n
+        help
+            Print one line when a request enters a handler and one line when it
+            returns, with the client address and the time the handler took.
+
+            Useful to tell "the request never reached the device" (Wi-Fi/ARP
+            problem) apart from "the device was busy" (httpd blocked) and from
+            "the handler is slow". Keep it off in normal operation: the status
+            page polls every few seconds and each poll produces two lines.
+
 endmenu

@@ -65,7 +65,7 @@ esp_netif_t *app_wifi_get_ap_netif(void);
  * keys, the AP silently drops its frames, and the management console stays
  * unreachable until the user reconnects Wi-Fi manually.
  *
- * Blocks for ~200 ms so the deauth frame(s) can leave the radio. Calling it
+ * Blocks for ~100 ms so the deauth frame(s) can leave the radio. Calling it
  * while Wi-Fi is not started only logs a warning.
  */
 void app_wifi_deauth_all_stations(void);

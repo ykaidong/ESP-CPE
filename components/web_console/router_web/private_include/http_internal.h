@@ -115,6 +115,11 @@ typedef struct {
 /* --- http_common.c ------------------------------------------------------- */
 
 void cpe_web_secure_wipe(void *ptr, size_t len);
+
+/* Reset the per-request log table before a (re)registration round. No-op
+ * unless CONFIG_CPE_WEB_HTTP_LOG is enabled. */
+void cpe_web_route_log_reset(void);
+
 esp_err_t cpe_web_register_uris(httpd_handle_t server, const httpd_uri_t *uris,
                                 size_t count);
 
@@ -194,6 +199,21 @@ void cpe_web_station_event_handler(void *arg, esp_event_base_t event_base,
 size_t cpe_web_sta_snapshot(cpe_web_sta_snapshot_t *out, size_t max);
 bool cpe_web_sta_node_exists(const uint8_t mac[6]);
 bool cpe_web_sta_node_rename(const uint8_t mac[6], const char *name);
+
+/* --- modem_http_config.c ------------------------------------------------- */
+
+/* Stop the listening socket before the SoftAP is restarted (app_wifi_apply()).
+ * The socket is bound to the AP netif and lwIP drops the binding when the
+ * interface goes down, so closing it first gives the browser a clean close
+ * instead of a half-open connection. Must not be called from an HTTP handler
+ * (httpd_stop() waits for that very task to exit); call it from a helper task
+ * after the response has been queued. */
+void cpe_web_listener_suspend_for_ap_restart(void);
+
+/* Re-create the listener when a scheduled SoftAP restart did not happen (apply
+ * failed, or only the channel/bandwidth changed). No-op while the AP netif is
+ * down or a re-creation is already queued. */
+void cpe_web_listener_ensure_up(void);
 
 /* --- API modules --------------------------------------------------------- */
 

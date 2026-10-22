@@ -41,6 +41,13 @@
 
 static const char *TAG = "cpe_web";
 
+/* Settle delay before the listener is re-created after WIFI_EVENT_AP_START.
+ * The AP netif and its DHCP server are already up when the event is delivered,
+ * so this only has to absorb the driver's own start-up latency; a failed bind
+ * is retried below. */
+#define CPE_WEB_RELISTEN_DELAY_MS   150
+#define CPE_WEB_RELISTEN_ATTEMPTS   5
+
 /* Set once modem_http_start() completed; guards event handlers that may race
  * with a listener restart. */
 static bool s_started;
@@ -156,6 +163,9 @@ static esp_err_t start_http_server(void)
         return err;
     }
 
+    /* A re-registration round follows every listener re-creation. */
+    cpe_web_route_log_reset();
+
     err = register_api_handlers(s_server);
     if (err != ESP_OK) {
         (void)httpd_stop(s_server);
@@ -168,38 +178,50 @@ static esp_err_t start_http_server(void)
     return ESP_OK;
 }
 
-/* Reconfiguring the SoftAP (SSID, password, channel, bandwidth, hidden SSID,
- * max clients) restarts the Wi-Fi AP. The listening socket is bound to that
- * netif, and lwIP drops the binding when the interface goes down: afterwards
- * the device answers ICMP but TCP connects to port 80 are refused. httpd only
- * logs the accept error and never re-creates the socket, so the listener has
- * to be rebuilt once the AP is back. */
-static void http_listener_restart_task(void *arg)
+/* Tear the current listener down (when there is one) and bind a fresh socket to
+ * the AP netif. MUST NOT run inside an HTTP handler: httpd_stop() waits for the
+ * server task it is called from to exit and would deadlock. */
+static esp_err_t rebuild_http_server(void)
 {
-    /* Wait for the restarted AP to bring its netif and DHCP server up. */
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    if (s_started && s_server != NULL) {
+    if (s_server != NULL) {
         httpd_handle_t old = s_server;
         s_server = NULL;
-        esp_err_t err = httpd_stop(old);
-        if (err != ESP_OK) {
+        esp_err_t stop_err = httpd_stop(old);
+        if (stop_err != ESP_OK) {
             ESP_LOGW(TAG, "httpd_stop during listener restart failed: %s",
-                     esp_err_to_name(err));
-        }
-        /* Retry in case the netif is still coming up. */
-        for (int attempt = 0; attempt < 3; attempt++) {
-            err = start_http_server();
-            if (err == ESP_OK) {
-                break;
-            }
-            ESP_LOGE(TAG, "Failed to re-create the HTTP listener (attempt %d): %s",
-                     attempt + 1, esp_err_to_name(err));
-            if (attempt < 2) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
-            }
+                     esp_err_to_name(stop_err));
         }
     }
+
+    /* Retry in case the netif/lwIP are still settling. */
+    esp_err_t err = ESP_FAIL;
+    for (int attempt = 0; attempt < CPE_WEB_RELISTEN_ATTEMPTS; attempt++) {
+        err = start_http_server();
+        if (err == ESP_OK) {
+            return ESP_OK;
+        }
+        ESP_LOGE(TAG, "Failed to re-create the HTTP listener (attempt %d/%d): %s",
+                 attempt + 1, CPE_WEB_RELISTEN_ATTEMPTS, esp_err_to_name(err));
+        if (attempt + 1 < CPE_WEB_RELISTEN_ATTEMPTS) {
+            vTaskDelay(pdMS_TO_TICKS(CPE_WEB_RELISTEN_DELAY_MS));
+        }
+    }
+    return err;
+}
+
+/* Reconfiguring the SoftAP (SSID, password, hidden SSID, max clients) restarts
+ * the Wi-Fi AP. The listening socket is bound to that netif, and lwIP drops the
+ * binding when the interface goes down: afterwards the device answers ICMP but
+ * TCP connects to port 80 are refused. The normal path already stops the
+ * listener *before* the radio restarts (cpe_web_listener_suspend_for_ap_restart);
+ * this task covers every other case and re-creates the listener once the AP is
+ * back. */
+static void http_listener_restart_task(void *arg)
+{
+    ESP_LOGW(TAG, "SoftAP restarted, re-creating the HTTP listener");
+
+    vTaskDelay(pdMS_TO_TICKS(CPE_WEB_RELISTEN_DELAY_MS));
+    (void)rebuild_http_server();
     s_listener_restart_pending = false;
     vTaskDelete(NULL);
 }
@@ -216,6 +238,45 @@ static void on_wifi_ap_start(void *arg, esp_event_base_t base,
         s_listener_restart_pending = false;
         ESP_LOGE(TAG, "No memory to schedule HTTP listener re-creation");
     }
+}
+
+void cpe_web_listener_suspend_for_ap_restart(void)
+{
+    if (!s_started || s_server == NULL) {
+        return;
+    }
+
+    /* Closing the sockets before the netif goes down turns what the browser
+     * would otherwise see as a half-open connection (it keeps that socket in
+     * its pool until TCP gives up) into an immediate, clean close, and it frees
+     * the httpd task before the radio restart starts. */
+    httpd_handle_t old = s_server;
+    s_server = NULL;
+    esp_err_t err = httpd_stop(old);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "httpd_stop ahead of the SoftAP restart failed: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+    ESP_LOGI(TAG, "HTTP listener stopped ahead of the SoftAP restart");
+}
+
+void cpe_web_listener_ensure_up(void)
+{
+    if (!s_started || s_server != NULL || s_listener_restart_pending) {
+        return;
+    }
+
+    /* While the AP is down WIFI_EVENT_AP_START is still on its way; binding to
+     * a netif that is not up yet would fail (and the event handler rebuilds the
+     * listener anyway). */
+    esp_netif_t *ap_netif = app_wifi_get_ap_netif();
+    if (ap_netif == NULL || !esp_netif_is_netif_up(ap_netif)) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Restoring the HTTP listener (no SoftAP restart was observed)");
+    (void)rebuild_http_server();
 }
 
 esp_err_t modem_http_start(void)

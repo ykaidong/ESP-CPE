@@ -7,6 +7,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -45,6 +46,63 @@ static esp_err_t wlan_advance_mutate(cpe_config_t *cfg, void *arg)
     cfg->ap_channel = next->ap_channel;
     cfg->ap_bandwidth = next->ap_bandwidth;
     return ESP_OK;
+}
+
+/* Saving /wlan_general restarts the SoftAP, and the HTTP listener must be
+ * closed before the radio goes down. httpd_stop() waits for the task that runs
+ * the current handler to exit, so it cannot be called from the handler itself:
+ * the apply sequence runs in this short-lived helper task. */
+#define WLAN_APPLY_TASK_STACK        4096
+#define WLAN_APPLY_TASK_PRIO         5
+
+/* Time the queued reply gets to leave the radio before the listener closes its
+ * socket. */
+#define WLAN_APPLY_REPLY_GRACE_MS    120
+
+/* Time WIFI_EVENT_AP_START gets to arrive before the task restores the
+ * listener itself (the radio does not restart when the apply fails). */
+#define WLAN_APPLY_SETTLE_MS         200
+
+typedef struct {
+    cpe_config_t prev;
+    cpe_config_t next;
+    wlan_general_update_t update;
+} wlan_apply_job_t;
+
+static void wlan_general_apply_task(void *arg)
+{
+    wlan_apply_job_t *job = arg;
+
+    /* Let the response leave the radio before its socket is closed. */
+    vTaskDelay(pdMS_TO_TICKS(WLAN_APPLY_REPLY_GRACE_MS));
+
+    /* Close the listener ahead of the radio restart so the browser sees a clean
+     * close instead of a half-open socket stuck in its connection pool. */
+    cpe_web_listener_suspend_for_ap_restart();
+
+    /* app_wifi_apply() reads the persisted configuration as its rollback
+     * baseline, so it must run before cpe_config_update(). Errors can no longer
+     * be reported to the client, only logged. */
+    esp_err_t err = app_wifi_apply(&job->next);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to apply new WLAN settings: %s", esp_err_to_name(err));
+    } else {
+        err = cpe_config_update(wlan_general_mutate, &job->update);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to persist WLAN settings: %s", esp_err_to_name(err));
+            (void)app_wifi_apply(&job->prev); /* roll the radio back */
+        }
+    }
+
+    /* WIFI_EVENT_AP_START re-creates the listener on its own; this call only
+     * matters when the radio never restarted (failed apply). */
+    vTaskDelay(pdMS_TO_TICKS(WLAN_APPLY_SETTLE_MS));
+    cpe_web_listener_ensure_up();
+
+    cpe_web_secure_wipe(job->next.ap_password, sizeof(job->next.ap_password));
+    cpe_web_secure_wipe(job->prev.ap_password, sizeof(job->prev.ap_password));
+    free(job);
+    vTaskDelete(NULL);
 }
 
 static esp_err_t wlan_general_get_handler(httpd_req_t *req)
@@ -231,12 +289,27 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
      * them make the console look unreachable until TCP gives up. */
     esp_err_t reply_err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
-    /* Let the reply leave the radio before the AP restarts. */
-    vTaskDelay(pdMS_TO_TICKS(500));
+    /* Hand the radio work to a helper task: the listener has to be closed
+     * before the AP restarts, and httpd_stop() cannot run inside a handler. */
+    wlan_apply_job_t *job = calloc(1, sizeof(*job));
+    if (job != NULL) {
+        job->prev = current;
+        job->next = next;
+        job->update.next = &job->next;
+        job->update.set_password = password_changed;
+        if (xTaskCreate(wlan_general_apply_task, "cpe_wlan_apply",
+                        WLAN_APPLY_TASK_STACK, job, WLAN_APPLY_TASK_PRIO,
+                        NULL) == pdPASS) {
+            cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
+            return reply_err;
+        }
+        ESP_LOGW(TAG, "No memory for the WLAN apply task, applying inline");
+        cpe_web_secure_wipe(job->next.ap_password, sizeof(job->next.ap_password));
+        free(job);
+    }
 
-    /* Keep the original order: app_wifi_apply() reads the persisted config as
-     * its rollback baseline, so it must run before cpe_config_update().
-     * Errors can no longer be reported to the client, only logged. */
+    /* Fallback: apply inline. The listener stays up here and is rebuilt by the
+     * WIFI_EVENT_AP_START handler once the AP is back. */
     err = app_wifi_apply(&next);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to apply new WLAN settings: %s", esp_err_to_name(err));
@@ -331,7 +404,9 @@ static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
     esp_err_t reply_err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
     if (ap_changed) {
-        vTaskDelay(pdMS_TO_TICKS(500));
+        /* Channel changes keep the AP (and its netif) running, so the listener
+         * survives; only give the reply time to leave the radio. */
+        vTaskDelay(pdMS_TO_TICKS(WLAN_APPLY_REPLY_GRACE_MS));
 
         err = app_wifi_apply(&next);
         if (err != ESP_OK) {

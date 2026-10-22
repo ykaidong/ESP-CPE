@@ -468,6 +468,8 @@ void app_wifi_deauth_all_stations(void)
                  esp_err_to_name(err));
         return;
     }
-    /* Let the deauth frame(s) reach the air before the caller resets the radio. */
-    vTaskDelay(pdMS_TO_TICKS(200));
+    /* Let the deauth frame(s) reach the air before the caller resets the radio.
+     * The frame is handed to the radio synchronously, so a short settle delay is
+     * enough. */
+    vTaskDelay(pdMS_TO_TICKS(100));
 }
