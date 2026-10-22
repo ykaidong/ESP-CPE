@@ -17,8 +17,8 @@
     height: 64px;
 }
 
+/* Height is set by the "Scroll model" block at the end of this file. */
 .content-base {
-    height: calc(100% - 64px);
     background-color: #f5f7fa;
 }
 
@@ -134,19 +134,18 @@
     background-color: #2468a9;
 }
 
-/* Page chrome: white tab bar over the grey content background. The right
- * column is the scroll container (body and .content-base are overflow:hidden)
- * and the tab bar stays pinned while the cards scroll. */
+/* Page chrome: white tab bar over the grey content background. Scrolling is
+ * done by the document (see "Scroll model" at the end of this file) so mobile
+ * browsers keep native inertia and on-screen keyboard handling; the tab bar
+ * sticks right below the pinned header. */
 .right-base {
-    height: 100%;
+    height: auto;
     min-width: 0;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
 }
 
 .page-header {
     position: sticky;
-    top: 0;
+    top: 64px;
     z-index: 10;
     height: 44px;
     line-height: 44px;
@@ -915,6 +914,285 @@
 
     .upload-row .save-btn {
         width: 100%;
+        margin-left: 0;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Scroll model
+ *
+ * The vendor stylesheet pinned every level to 100% height and hid overflow on
+ * html/body, so the only scroller was .right-base. On mobile that container is
+ * sized against the layout viewport, which the address bar and the on-screen
+ * keyboard shrink: the last rows ended up outside the visible area and could
+ * not be scrolled into view. The document scrolls natively now; header and tab
+ * bar stay pinned with position: sticky.
+ * ------------------------------------------------------------------------- */
+html,
+body {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+}
+
+body,
+.home-base {
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+
+.home-base {
+    height: auto;
+}
+
+.content-base {
+    height: auto;
+    min-height: calc(100vh - 64px);
+    min-height: calc(100dvh - 64px);
+    overflow: visible;
+}
+
+.header-base {
+    position: sticky;
+    top: 0;
+    z-index: 1200;
+}
+
+/* The vendor page container clipped its content (overflow: hidden), which cut
+ * the client table at the card edge with no way to scroll to the other columns. */
+.page-content {
+    overflow: visible;
+}
+
+/* .home-base has no fixed height any more, so the percentages used by the
+ * login backdrop collapse; size it in viewport units instead. */
+.login-base {
+    height: auto;
+    min-height: calc(100vh - 64px);
+    min-height: calc(100dvh - 64px);
+}
+
+@media (min-width: 769px) {
+    /* Left navigation stays in view while the document scrolls. */
+    .left-base {
+        position: sticky;
+        top: 64px;
+        align-self: flex-start;
+        height: calc(100vh - 64px);
+        height: calc(100dvh - 64px);
+        overflow-y: auto;
+    }
+}
+
+/* ---- Client list: real scroll container instead of a clipped table ------ */
+.client-list-scroll {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* The host name is the rename entry point, so it is a real button with a
+ * visible hit area instead of a borderless disabled input. */
+.client-list .client-name-btn {
+    display: inline-block;
+    max-width: 100%;
+    padding: 2px 6px;
+    margin-left: -6px;
+    border: 0;
+    border-radius: 6px;
+    background-color: transparent;
+    color: #1f2d3d;
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background-color 0.2s;
+}
+
+.client-list .client-name-btn:hover {
+    background-color: #f0f6fd;
+}
+
+.client-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.client-actions .edit-btn,
+.client-actions .del-btn {
+    height: 32px;
+    min-width: 64px;
+    padding: 0 12px;
+    border: 1px solid #d9e2ec;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #2468a9;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.client-actions .edit-btn:hover {
+    border-color: #2468a9;
+    background-color: #f4f8fd;
+}
+
+.client-actions .del-btn {
+    border-color: #f0c4c4;
+    background-color: #fff8f8;
+    color: #cf1322;
+}
+
+.client-actions .del-btn:hover {
+    background-color: #ffecec;
+}
+
+.page-content table.client-list tr.client-empty-row td {
+    padding: 26px 8px;
+    color: #8c8c8c;
+    font-size: 14px;
+}
+
+/* ---- Client list on phones: one card per client ------------------------ */
+@media (max-width: 720px) {
+    .client-list-scroll {
+        overflow-x: visible;
+    }
+
+    .page-content table.client-list {
+        display: block;
+        min-width: 0;
+        border-collapse: separate;
+    }
+
+    .client-list thead {
+        display: none;
+    }
+
+    .client-list tbody {
+        display: block;
+    }
+
+    .page-content table.client-list tr {
+        display: block;
+        margin: 0 0 12px;
+        padding: 12px 14px;
+        border: 1px solid #e8eef5;
+        border-radius: 10px;
+        background-color: #ffffff;
+    }
+
+    /* The vendor zebra striping would make neighbouring cards look different. */
+    .page-content table.client-list tr:nth-child(even) {
+        background-color: #ffffff;
+    }
+
+    /* .page-content table.tableStyle td already has two class selectors, so the
+     * card rules need the same prefix to win. */
+    .page-content table.client-list tr td {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        height: auto !important;
+        padding: 4px 0;
+        border: 0;
+        line-height: 1.5;
+        text-align: left;
+        word-break: break-all;
+    }
+
+    .page-content table.client-list tr td::before {
+        content: attr(data-label);
+        flex: 0 0 66px;
+        color: #8c8c8c;
+        font-size: 12px;
+    }
+
+    .page-content table.client-list tr td.client-cell-name {
+        padding: 0 0 8px;
+        margin-bottom: 6px;
+        border-bottom: 1px dashed #eef2f8;
+    }
+
+    .page-content table.client-list tr td.client-cell-name::before,
+    .page-content table.client-list tr td.client-cell-actions::before {
+        content: none;
+    }
+
+    .client-list .client-name-btn {
+        padding: 4px 8px;
+        margin-left: -8px;
+        font-size: 15px;
+    }
+
+    .page-content table.client-list tr td.client-cell-actions {
+        padding-top: 12px;
+    }
+
+    /* Empty state: a plain message instead of an empty card. */
+    .page-content table.client-list tr.client-empty-row {
+        padding: 6px 0;
+        border: 0;
+        background-color: transparent;
+    }
+
+    .page-content table.client-list tr.client-empty-row td {
+        justify-content: center;
+        padding: 10px 0;
+        text-align: center;
+    }
+
+    .page-content table.client-list tr.client-empty-row td::before {
+        content: none;
+    }
+
+    .client-actions {
+        width: 100%;
+        gap: 10px;
+    }
+
+    .client-actions .edit-btn,
+    .client-actions .del-btn {
+        flex: 1;
+        height: 38px;
+        font-size: 14px;
+    }
+
+    .client-actions .edit-line {
+        display: none;
+    }
+
+    /* Dialogs become bottom sheets so the input stays clear of the keyboard. */
+    .modal-overlay {
+        align-items: flex-end;
+    }
+
+    .modal-panel {
+        width: 100%;
+        max-width: 100%;
+        padding: 20px 18px calc(18px + env(safe-area-inset-bottom));
+        border-radius: 16px 16px 0 0;
+    }
+
+    .modal-input {
+        height: 44px;
+        font-size: 16px;
+    }
+
+    .modal-actions {
+        gap: 10px;
+    }
+
+    .modal-actions .save-btn,
+    .modal-actions .cancel-btn {
+        flex: 1;
+        height: 44px;
         margin-left: 0;
     }
 }

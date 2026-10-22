@@ -15,6 +15,11 @@
     var STATE_FAULT = 4;
 
     var stationList = [];
+    /* mac -> { row, nameButton, macCell, ipCell, timeCell }. Rows are reused
+     * between polls so the list no longer flickers (and loses the reading
+     * position) every refresh; a modal dialog means the table can keep
+     * updating while a name is being renamed. */
+    var stationRows = {};
     var stationTimer = null;
     var statusTimer = null;
     /* Uptime is reported once per status poll; count locally from the last
@@ -32,9 +37,6 @@
      * lags the local estimate slightly. Only correct clearly conflicting
      * values; re-basing every poll makes the seconds repeat. */
     var UPTIME_RESYNC_THRESHOLD_S = 3;
-    /* While a host name is being edited the periodic refresh must not rebuild
-     * the table, otherwise the input is wiped every 4 s. */
-    var stationEditing = false;
 
     function setText(id, text) {
         var node = CPE.byId(id);
@@ -66,66 +68,88 @@
             pad2(date.getSeconds());
     }
 
-    function makeButton(label, className, index) {
-        var button = document.createElement('input');
-        button.type = 'button';
-        button.value = label;
-        button.className = className;
-        button.setAttribute('data-index', String(index));
-        return button;
+    function stationField(station, key) {
+        return typeof station[key] === 'string' ? station[key] : '';
     }
 
-    function makeCell(text) {
+    function findStation(mac) {
+        for (var i = 0; i < stationList.length; i++) {
+            if (stationField(stationList[i], 'mac_str') === mac) {
+                return stationList[i];
+            }
+        }
+        return null;
+    }
+
+    function createCell(text, label, extraClass) {
         var cell = document.createElement('td');
+        cell.className = extraClass ? 'client-cell ' + extraClass : 'client-cell';
+        /* The label is read by CSS (td::before) when the table collapses into
+         * cards on a phone; setting it here keeps the markup declarative. */
+        cell.setAttribute('data-label', label);
         cell.textContent = text;
         return cell;
     }
 
-    function renderStationRow(station, index) {
+    /* Update an existing row in place: recreating the table on every poll made
+     * the list visibly shake while scrolling on a phone. */
+    function updateStationRow(entry, station) {
+        var name = stationField(station, 'name_str') || '未知设备';
+        if (entry.nameButton.textContent !== name) {
+            entry.nameButton.textContent = name;
+        }
+        entry.nameButton.title = name;
+
+        var mac = stationField(station, 'mac_str');
+        if (entry.macCell.textContent !== mac) {
+            entry.macCell.textContent = mac;
+        }
+        var ip = stationField(station, 'ip_str');
+        if (entry.ipCell.textContent !== ip) {
+            entry.ipCell.textContent = ip;
+        }
+        var online = formatDuration(Number(station.online_time_s) || 0);
+        if (entry.timeCell.textContent !== online) {
+            entry.timeCell.textContent = online;
+        }
+    }
+
+    function createStationRow(station) {
+        var mac = stationField(station, 'mac_str');
         var row = document.createElement('tr');
 
-        var nameCell = document.createElement('td');
-        var nameInput = document.createElement('input');
-        nameInput.type = 'text';
-        nameInput.className = 'list-name';
-        nameInput.disabled = true;
-        nameInput.maxLength = 32;
-        /* value assignment (not innerHTML) keeps host names inert. */
-        nameInput.value = typeof station.name_str === 'string' ? station.name_str : '';
-        nameCell.appendChild(nameInput);
-        row.appendChild(nameCell);
+        var nameCell = createCell('', '主机名', 'client-cell-name');
+        var nameButton = document.createElement('button');
+        nameButton.type = 'button';
+        nameButton.className = 'client-name-btn';
+        nameButton.addEventListener('click', function () {
+            openRenameDialog(mac);
+        });
+        nameCell.appendChild(nameButton);
 
-        row.appendChild(makeCell(typeof station.mac_str === 'string' ? station.mac_str : ''));
-        row.appendChild(makeCell(typeof station.ip_str === 'string' ? station.ip_str : ''));
+        var macCell = createCell(mac, 'MAC 地址');
+        var ipCell = createCell('', 'IP 地址');
+        var timeCell = createCell('', '连接时间');
 
-        var onlineSeconds = Number(station.online_time_s) || 0;
-        row.appendChild(makeCell(formatDuration(onlineSeconds)));
-
-        var actionCell = document.createElement('td');
+        var actionCell = createCell('', '操作', 'client-cell-actions');
         var actionWrap = document.createElement('div');
-        actionWrap.className = 'flex flex-jcc';
+        actionWrap.className = 'client-actions';
 
-        var editButton = makeButton('编辑', 'edit-btn', index);
-        var deleteButton = makeButton('删除', 'del-btn', index);
-
+        var editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'edit-btn';
+        editButton.textContent = '重命名';
         editButton.addEventListener('click', function () {
-            if (editButton.value === '编辑') {
-                stationEditing = true;
-                if (stationTimer) {
-                    clearTimeout(stationTimer);
-                    stationTimer = null;
-                }
-                nameInput.disabled = false;
-                nameInput.focus();
-                editButton.value = '确认';
-            } else {
-                renameStation(index, nameInput.value, nameInput, editButton);
-            }
+            openRenameDialog(mac);
         });
 
+        var deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'del-btn';
+        deleteButton.textContent = '断开';
         deleteButton.addEventListener('click', function () {
             if (window.confirm('确定要断开并删除该客户端吗？')) {
-                deleteStation(index);
+                deleteStation(mac);
             }
         });
 
@@ -135,9 +159,22 @@
         actionWrap.appendChild(divider);
         actionWrap.appendChild(deleteButton);
         actionCell.appendChild(actionWrap);
+
+        row.appendChild(nameCell);
+        row.appendChild(macCell);
+        row.appendChild(ipCell);
+        row.appendChild(timeCell);
         row.appendChild(actionCell);
 
-        return row;
+        var entry = {
+            row: row,
+            nameButton: nameButton,
+            macCell: macCell,
+            ipCell: ipCell,
+            timeCell: timeCell
+        };
+        updateStationRow(entry, station);
+        return entry;
     }
 
     function updateStationCounts(data) {
@@ -149,23 +186,97 @@
         return list;
     }
 
-    function renderStationList(data) {
-        if (stationEditing) {
-            /* Do not destroy the row the administrator is editing. */
+    function findRow(body, className) {
+        for (var i = 0; i < body.children.length; i++) {
+            if (body.children[i].className === className) {
+                return body.children[i];
+            }
+        }
+        return null;
+    }
+
+    /* Rows are only re-appended when the order really changed: moving nodes on
+     * every poll drops the focus and the scroll anchor on a phone. */
+    function syncRows(body, order) {
+        var current = [];
+        for (var i = 0; i < body.children.length; i++) {
+            var child = body.children[i];
+            if (child.className !== 'client-empty-row') {
+                current.push(child);
+            }
+        }
+        var changed = current.length !== order.length;
+        for (var j = 0; !changed && j < order.length; j++) {
+            if (current[j] !== order[j]) {
+                changed = true;
+            }
+        }
+        if (!changed) {
             return;
         }
+        order.forEach(function (row) {
+            body.appendChild(row);
+        });
+    }
+
+    function updateEmptyState(body, isEmpty) {
+        var existing = findRow(body, 'client-empty-row');
+        if (!isEmpty) {
+            if (existing) {
+                body.removeChild(existing);
+            }
+            return;
+        }
+        if (existing) {
+            return;
+        }
+        var row = document.createElement('tr');
+        row.className = 'client-empty-row';
+        var cell = document.createElement('td');
+        cell.colSpan = 5;
+        cell.textContent = '当前没有在线客户端';
+        row.appendChild(cell);
+        body.appendChild(row);
+    }
+
+    function renderStationList(data) {
         var body = CPE.byId('tbody');
         if (!body) {
             return;
         }
-        while (body.firstChild) {
-            body.removeChild(body.firstChild);
-        }
         stationList = updateStationCounts(data);
 
+        var seen = {};
+        var order = [];
+
         stationList.forEach(function (station, index) {
-            body.appendChild(renderStationRow(station, index));
+            var mac = stationField(station, 'mac_str');
+            /* Index is only a fallback: a station without a MAC must not make
+             * two rows share one cache entry. */
+            var key = mac || ('idx' + index);
+            var entry = stationRows[key];
+            if (entry) {
+                updateStationRow(entry, station);
+            } else {
+                entry = createStationRow(station);
+                stationRows[key] = entry;
+            }
+            seen[key] = true;
+            order.push(entry.row);
         });
+
+        Object.keys(stationRows).forEach(function (key) {
+            if (!seen[key]) {
+                var stale = stationRows[key];
+                if (stale.row.parentNode) {
+                    stale.row.parentNode.removeChild(stale.row);
+                }
+                delete stationRows[key];
+            }
+        });
+
+        syncRows(body, order);
+        updateEmptyState(body, order.length === 0);
     }
 
     /* Fetch the counts once at page load so the network tab shows meaningful
@@ -183,10 +294,6 @@
             clearTimeout(stationTimer);
             stationTimer = null;
         }
-        if (stationEditing) {
-            stationTimer = setTimeout(refreshStations, 4000);
-            return;
-        }
         CPE.getJson(STATION_URL).then(function (data) {
             renderStationList(data);
         }).catch(function () {
@@ -196,40 +303,103 @@
         });
     }
 
-    function renameStation(index, name, input, button) {
-        var station = stationList[index];
+    /* Rename dialog. A modal works on every viewport, keeps both buttons within
+     * reach of the thumb on a phone (the inline editor lived in the last table
+     * column, which is off-screen there) and leaves the polling untouched. */
+    function openRenameDialog(mac) {
+        var station = findStation(mac);
         if (!station) {
-            return;
-        }
-        if (name.length === 0 || name.length > 32) {
-            window.alert('主机名长度必须为 1~32 个字符');
-            return;
-        }
-        button.disabled = true;
-        CPE.postJson(CHANGE_NAME_URL, {
-            name_str: name,
-            mac_str: station.mac_str
-        }).then(function () {
-            input.disabled = true;
-            input.value = name;
-            button.value = '编辑';
-        }).catch(function (error) {
-            window.alert(CPE.errorText(error));
-        }).then(function () {
-            stationEditing = false;
-            button.disabled = false;
+            window.alert('该客户端已离线，请稍后重试');
             refreshStations();
+            return;
+        }
+
+        var overlay = CPE.createElement('div', { className: 'modal-overlay' });
+        var panel = CPE.createElement('div', { className: 'modal-panel' });
+        var title = CPE.createElement('div', { className: 'modal-title', text: '重命名客户端' });
+
+        var hintText = 'MAC ' + mac;
+        if (stationField(station, 'ip_str')) {
+            hintText += ' · IP ' + stationField(station, 'ip_str');
+        }
+        var hint = CPE.createElement('div', {
+            className: 'modal-hint',
+            text: hintText + '（主机名 1~32 个字符）'
         });
+
+        var input = CPE.createElement('input', {
+            type: 'text',
+            className: 'modal-input',
+            maxlength: '32',
+            autocomplete: 'off',
+            enterkeyhint: 'done'
+        });
+        /* value assignment (not innerHTML) keeps host names inert. */
+        input.value = stationField(station, 'name_str');
+
+        var errorBox = CPE.createElement('div', { className: 'modal-error' });
+        var actions = CPE.createElement('div', { className: 'modal-actions' });
+        var submit = CPE.createElement('button', { className: 'save-btn', type: 'button', text: '保存' });
+        var cancel = CPE.createElement('button', { className: 'cancel-btn', type: 'button', text: '取消' });
+
+        function close() {
+            if (overlay.parentNode) {
+                overlay.parentNode.removeChild(overlay);
+            }
+        }
+
+        function save() {
+            var name = input.value;
+            if (name.length === 0 || name.length > 32) {
+                errorBox.textContent = '主机名长度必须为 1~32 个字符';
+                input.focus();
+                return;
+            }
+            errorBox.textContent = '';
+            submit.disabled = true;
+            cancel.disabled = true;
+            CPE.postJson(CHANGE_NAME_URL, {
+                name_str: name,
+                mac_str: mac
+            }).then(function () {
+                close();
+                refreshStations();
+            }).catch(function (error) {
+                submit.disabled = false;
+                cancel.disabled = false;
+                errorBox.textContent = CPE.errorText(error);
+            });
+        }
+
+        submit.addEventListener('click', save);
+        cancel.addEventListener('click', close);
+        input.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                save();
+            }
+        });
+        overlay.addEventListener('click', function (event) {
+            if (event.target === overlay) {
+                close();
+            }
+        });
+
+        actions.appendChild(cancel);
+        actions.appendChild(submit);
+        panel.appendChild(title);
+        panel.appendChild(hint);
+        panel.appendChild(input);
+        panel.appendChild(errorBox);
+        panel.appendChild(actions);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        input.focus();
+        input.select();
     }
 
-    function deleteStation(index) {
-        var station = stationList[index];
-        if (!station) {
-            return;
-        }
-        stationEditing = false;
+    function deleteStation(mac) {
         CPE.postJson(DELETE_DEVICE_URL, {
-            mac_str: station.mac_str
+            mac_str: mac
         }).then(function () {
             refreshStations();
         }).catch(function (error) {
@@ -444,8 +614,7 @@
             return;
         }
         if (showNetwork) {
-            /* Leaving the client tab abandons a pending edit and stops polling. */
-            stationEditing = false;
+            /* Leaving the client tab stops polling. */
             if (stationTimer) {
                 clearTimeout(stationTimer);
                 stationTimer = null;

@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,minimum-scale=1.0">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ESP-CPE 管理后台</title>
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/cpe.css">
@@ -115,18 +115,20 @@
         <div class="page-content" id="customerShow" hidden>
           <div class="page-title">在线客户端</div>
           <div class="page-detail">
-            <table class="tableStyle tCenter">
-                <thead>
-                    <tr>
-                        <th>主机名</th>
-                        <th>MAC 地址</th>
-                        <th>IP 地址</th>
-                        <th>连接时间</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="tbody"></tbody>
-            </table>
+            <div class="client-list-scroll">
+              <table class="tableStyle tCenter client-list">
+                  <thead>
+                      <tr>
+                          <th>主机名</th>
+                          <th>MAC 地址</th>
+                          <th>IP 地址</th>
+                          <th>连接时间</th>
+                          <th>操作</th>
+                      </tr>
+                  </thead>
+                  <tbody id="tbody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
