@@ -17,6 +17,16 @@
     var stationList = [];
     var stationTimer = null;
     var statusTimer = null;
+    /* Uptime is reported once per status poll; count locally from the last
+     * synced value instead of advancing a counter on every timer tick. */
+    var uptimeBaseS = 0;
+    var uptimeBaseMs = 0;
+    var uptimeSynced = false;
+    var uptimeTimer = null;
+    /* The API value is read before the response travels back, so a poll usually
+     * lags the local estimate slightly. Only correct clearly conflicting
+     * values; re-basing every poll makes the seconds repeat. */
+    var UPTIME_RESYNC_THRESHOLD_S = 3;
     /* While a host name is being edited the periodic refresh must not rebuild
      * the table, otherwise the input is wiped every 4 s. */
     var stationEditing = false;
@@ -218,7 +228,88 @@
         });
     }
 
+    /* Map the modem's signal reading to the five-bar icon. RSRP is the LTE
+     * quality metric, so prefer it; RSSI is only a fallback for modems that
+     * report CSQ without QCSQ. */
+    function signalLevel(status) {
+        if (status.qcsq_valid && typeof status.rsrp === 'number') {
+            if (status.rsrp >= -85) {
+                return 5;
+            }
+            if (status.rsrp >= -95) {
+                return 4;
+            }
+            if (status.rsrp >= -105) {
+                return 3;
+            }
+            if (status.rsrp >= -115) {
+                return 2;
+            }
+            return 1;
+        }
+        if (status.rssi_valid && typeof status.rssi === 'number') {
+            if (status.rssi >= -65) {
+                return 5;
+            }
+            if (status.rssi >= -75) {
+                return 4;
+            }
+            if (status.rssi >= -85) {
+                return 3;
+            }
+            if (status.rssi >= -95) {
+                return 2;
+            }
+            return 1;
+        }
+        return 0;
+    }
+
+    var SIGNAL_LABELS = ['信号强度未知', '信号很弱', '信号较弱', '信号一般', '信号良好', '信号很强'];
+
+    function renderSignalIcon(status) {
+        var icon = CPE.byId('signal-icon');
+        if (!icon) {
+            return;
+        }
+        var level = signalLevel(status);
+        /* SVG elements expose className as a read-only SVGAnimatedString. */
+        icon.setAttribute('class', level === 0 ? 'signal-icon' : 'signal-icon level-' + level);
+        icon.setAttribute('aria-label', SIGNAL_LABELS[level]);
+    }
+
+    function renderUptime() {
+        if (!uptimeSynced) {
+            return;
+        }
+        var elapsedMs = performance.now() - uptimeBaseMs;
+        setText('connect-time', formatDuration(uptimeBaseS + elapsedMs / 1000));
+        /* Re-arm against the next whole second instead of using a fixed 1 s
+         * interval: interval drift can skip or repeat a second, which reads as
+         * the clock stuttering. */
+        if (uptimeTimer) {
+            clearTimeout(uptimeTimer);
+        }
+        uptimeTimer = setTimeout(renderUptime, 1000 - elapsedMs % 1000 + 15);
+    }
+
+    function syncUptime(status) {
+        var serverS = Number(status.uptime_s) || 0;
+        var now = performance.now();
+        var localS = uptimeSynced
+            ? uptimeBaseS + (now - uptimeBaseMs) / 1000
+            : serverS;
+        if (!uptimeSynced || Math.abs(serverS - localS) >= UPTIME_RESYNC_THRESHOLD_S) {
+            uptimeBaseS = serverS;
+            uptimeBaseMs = now;
+            uptimeSynced = true;
+        }
+        renderUptime();
+    }
+
     function renderStatus(status) {
+        renderSignalIcon(status);
+        syncUptime(status);
         setText('status-state', status.state_text || '未知');
         setText('status-usb', status.usb_connected ? '已连接' : '未连接');
         setText('status-link', status.link_up ? '已连接' : '未连接');
@@ -254,7 +345,6 @@
         setText('status-boot', String(status.boot_count || 0));
         setText('status-device-name', status.device_name || '-');
         setText('status-last-error', status.last_error || '无');
-        setText('connect-time', formatDuration(Number(status.uptime_s) || 0));
 
         /* AT telemetry tells whether the WAN can actually work: got_ip alone
          * is misleading, the modem's DHCP server may answer without a SIM. */
@@ -353,6 +443,13 @@
         }
         CPE.bindMenu();
         bindActions();
+        /* Background tabs throttle timers; catch up as soon as the page is
+         * visible again instead of leaving a stale time on screen. */
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) {
+                renderUptime();
+            }
+        });
         var networkTab = CPE.byId('tab-network');
         var clientTab = CPE.byId('tab-clients');
         if (networkTab) {

@@ -26,7 +26,16 @@
           <div class="page-title">基本状态</div>
           <div class="stat-grid">
             <div class="stat-card">
-              <div class="stat-icon"><img src="./img/signal.svg" alt="internet"></div>
+              <div class="stat-icon">
+                <svg class="signal-icon" id="signal-icon" viewBox="0 0 1024 1024" role="img"
+                     aria-label="信号强度未知">
+                  <rect class="signal-bar" x="12" y="692.803" width="167.411" height="319.197"></rect>
+                  <rect class="signal-bar" x="220.146" y="525.392" width="167.411" height="486.608"></rect>
+                  <rect class="signal-bar" x="428.291" y="357.982" width="167.410" height="654.018"></rect>
+                  <rect class="signal-bar" x="636.444" y="190.570" width="167.410" height="821.430"></rect>
+                  <rect class="signal-bar" x="844.590" y="12.000" width="167.410" height="1000.000"></rect>
+                </svg>
+              </div>
               <div class="stat-body">
                 <span class="stat-label">因特网</span>
                 <span class="stat-value" id="internet-state">正在获取状态…</span>
@@ -52,7 +61,7 @@
           <div class="stat-grid stat-grid-compact">
             <div class="stat-card stat-card-plain">
               <div class="stat-body">
-                <span class="stat-label">连续持续时间</span>
+                <span class="stat-label">运行时长</span>
                 <span class="stat-value" id="connect-time">--</span>
               </div>
             </div>

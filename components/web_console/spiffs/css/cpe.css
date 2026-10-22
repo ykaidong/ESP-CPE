@@ -487,6 +487,40 @@
     object-fit: contain;
 }
 
+/* The internet card icon doubles as an LTE signal meter: index.js sets
+ * level-1..level-5 from RSRP/RSSI, and the level also selects the color. */
+.signal-icon {
+    width: 26px;
+    height: 26px;
+    color: #c2ccd9;
+}
+
+.signal-icon .signal-bar {
+    fill: #ccd7e4;
+}
+
+.signal-icon.level-1 .signal-bar:nth-child(-n+1),
+.signal-icon.level-2 .signal-bar:nth-child(-n+2),
+.signal-icon.level-3 .signal-bar:nth-child(-n+3),
+.signal-icon.level-4 .signal-bar:nth-child(-n+4),
+.signal-icon.level-5 .signal-bar:nth-child(-n+5) {
+    fill: currentColor;
+}
+
+.signal-icon.level-1,
+.signal-icon.level-2 {
+    color: #d64545;
+}
+
+.signal-icon.level-3 {
+    color: #d99a1b;
+}
+
+.signal-icon.level-4,
+.signal-icon.level-5 {
+    color: #2f9e44;
+}
+
 .stat-body {
     display: flex;
     flex-direction: column;
