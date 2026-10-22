@@ -29,6 +29,11 @@
 
 static const char *TAG = "cpe";
 
+/* Set by cpe_wan_request_ecm_rebuild() (any task) and consumed by the link
+ * manager on its next tick. The ECM handles are not locked, so a scheduled
+ * rebuild must never run in the caller's context. */
+static volatile bool s_ecm_rebuild_req;
+
 /* Heap watermark helper: free heap alone is not enough to spot a leak or
  * fragmentation, so also log the historical minimum and the largest internal
  * block. Only called on link transitions and once at boot. */
@@ -352,8 +357,41 @@ static lm_tick_result_t lm_wait_usb(lm_ctx_t *ctx, int64_t now)
     return lm_escalate_usb_fault(ctx);
 }
 
+/* Periodic maintenance requested by cpe_maintenance: rebuild the ECM interface
+ * once, without resetting the modem and without spending the recovery budget.
+ * The netif/DHCP/link events bring the WAN back on their own; if the modem does
+ * not re-link within CPE_LINK_TIMEOUT_MS the normal recovery policy takes over
+ * from a clean slate. */
+static lm_tick_result_t lm_scheduled_rebuild(lm_ctx_t *ctx)
+{
+    ESP_LOGW(TAG, "Scheduled ECM rebuild: recreating the WAN interface");
+
+    ctx->usb_attempts = 0;
+    ctx->ip_attempts = 0;
+    ctx->enum_reset_attempts = 0;
+    ctx->dhcp_restarts = 0;
+    ctx->wait_start_us = 0;
+    ctx->was_online = false;
+    cpe_status_set_recovery_attempts(0);
+    cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
+
+    wan_ecm_teardown();
+    /* Set the state after the teardown cleared the link flags, so the web
+     * console does not briefly show "online" with a dead interface. */
+    cpe_status_set_state(CPE_STATE_BOOT, "scheduled ECM rebuild");
+    lm_enter_phase(ctx, LM_PHASE_BOOT);
+    /* Leave the modem/CDC state alone for a moment before the next tick
+     * creates the driver again. */
+    vTaskDelay(pdMS_TO_TICKS(500));
+    return LM_TICK_ACTION;
+}
+
 static lm_tick_result_t lm_tick(lm_ctx_t *ctx)
 {
+    if (__atomic_exchange_n(&s_ecm_rebuild_req, false, __ATOMIC_ACQ_REL)) {
+        return lm_scheduled_rebuild(ctx);
+    }
+
     if (!lm_ensure_ready(ctx)) {
         return LM_TICK_ACTION;
     }
@@ -393,4 +431,9 @@ esp_err_t wan_link_manager_start(void)
 {
     BaseType_t created = xTaskCreate(link_manager_task, "cpe_link", 4096, NULL, 6, NULL);
     return created == pdPASS ? ESP_OK : ESP_FAIL;
+}
+
+void cpe_wan_request_ecm_rebuild(void)
+{
+    __atomic_store_n(&s_ecm_rebuild_req, true, __ATOMIC_RELEASE);
 }

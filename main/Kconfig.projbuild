@@ -111,6 +111,78 @@ menu "CPE Application Configuration"
         default 120
         range 10 3600
 
+    config CPE_MAINT_ECM_PERIOD_MIN
+        int "Periodic ECM interface rebuild (minutes, 0 = disabled)"
+        default 0
+        range 0 43200
+        help
+            Every N minutes the ECM network interface is torn down and rebuilt
+            WITHOUT rebooting the ESP32: the SoftAP and the web console stay
+            up, the modem is not reset, only the WAN interface is recreated.
+            The WAN is unavailable for a few seconds while the DHCP client
+            obtains a new lease.
+
+            This clears driver/lwIP/modem-session state that slowly degrades
+            over long runs and is the cheapest way to recover a WAN path that
+            is "up but not passing traffic". The action is skipped while an
+            OTA upload or an unvalidated OTA image is pending and the request
+            is executed by the link manager task, never concurrently with its
+            own recovery actions.
+
+            This Kconfig value is only the DEFAULT (first boot / factory
+            reset): the active value is stored in NVS and can be changed at
+            runtime from the management console (/api/system/maintenance).
+
+            0 disables the periodic rebuild.
+
+    config CPE_MAINT_REBOOT_PERIOD_MIN
+        int "Periodic device reboot (minutes, 0 = disabled)"
+        default 0
+        range 0 43200
+        help
+            Every N minutes the ESP32 reboots after the standard pre-restart
+            cleanup (AT+CFUN=1,1 when the AT port is available, then Wi-Fi
+            deauthentication). This is the last-resort cure for a firmware or
+            modem state that a soft recovery cannot fix. All SoftAP clients
+            are disconnected and the 4G link is down for tens of seconds.
+
+            A scheduled reboot is skipped while an OTA upload/image validation
+            is in progress and it is counted by a dedicated NVS guard
+            (CPE_MAINT_MAX_SCHED_REBOOTS): after that many consecutive
+            scheduled reboots that never reached a steady state (the link
+            manager left the boot phase) the timer stops rebooting and only
+            reports the fault, so a firmware that cannot come back up is not
+            rebooted forever. A missing SIM/modem does not count as unhealthy,
+            only a device that keeps failing to boot does.
+
+            This Kconfig value is only the DEFAULT (first boot / factory
+            reset): the active value is stored in NVS and can be changed at
+            runtime from the management console (/api/system/maintenance).
+
+            0 disables the periodic reboot.
+
+    config CPE_MAINT_RESET_MODEM
+        bool "Reset the 4G module before a scheduled reboot"
+        default y
+        help
+            Send AT+CFUN=1,1 (best effort, bounded to about 3 s) before the
+            scheduled reboot so the modem re-enumerates cleanly afterwards.
+            Only applies to the scheduled reboot: the periodic ECM rebuild
+            never resets the modem. Disable this when the modem drops off the
+            bus during its own reset and needs a physical replug.
+
+    config CPE_MAINT_MAX_SCHED_REBOOTS
+        int "Consecutive scheduled reboots without a healthy period"
+        default 3
+        range 1 20
+        help
+            The count is persisted in NVS and cleared once the device has been
+            in a steady state for CPE_HEALTHY_CLEAR_SECONDS ("steady" = the
+            link manager left the boot phase, the 4G link itself is not
+            required). When the limit is reached the scheduled reboot is frozen
+            (and reported in the status error text) instead of rebooting a
+            device that cannot boot.
+
     config CPE_OTA_VALIDATE_DELAY_MS
         int "Delay before validating a newly flashed OTA image (ms)"
         default 60000

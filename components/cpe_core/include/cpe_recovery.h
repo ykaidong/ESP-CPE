@@ -42,6 +42,26 @@ esp_err_t cpe_boot_count_increment(uint32_t *count);
 
 esp_err_t cpe_boot_count_clear(void);
 
+/**
+ * @brief Number of consecutive scheduled reboots without a healthy period.
+ *
+ * Kept apart from the boot/recovery counter on purpose: a planned reboot is
+ * maintenance, not a fault, so it must not consume the CPE_MAX_REBOOTS budget.
+ * The value is cleared once the device has been online for
+ * CPE_HEALTHY_CLEAR_SECONDS, which makes a firmware that cannot come back up
+ * stop rebooting after CPE_MAINT_MAX_SCHED_REBOOTS attempts.
+ *
+ * @note Only the maintenance task reads/writes these keys, so the
+ *       read-modify-write below never races with another task.
+ */
+esp_err_t cpe_maint_reboot_count_get(uint32_t *count);
+
+/** @brief Increment and persist the scheduled-reboot counter. */
+esp_err_t cpe_maint_reboot_count_increment(uint32_t *count);
+
+/** @brief Reset the scheduled-reboot counter after a healthy period. */
+esp_err_t cpe_maint_reboot_count_clear(void);
+
 #ifdef __cplusplus
 }
 #endif

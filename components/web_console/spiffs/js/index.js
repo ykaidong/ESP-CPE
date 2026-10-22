@@ -11,6 +11,12 @@
     var STATION_URL = '/system/station_state';
     var CHANGE_NAME_URL = '/system/station_state/change_name';
     var DELETE_DEVICE_URL = '/system/station_state/delete_device';
+    var MAINT_URL = '/api/system/maintenance';
+    /* Keep in sync with CPE_MAINT_PERIOD_MAX_MIN (cpe_maintenance.h). */
+    var MAINT_PERIOD_MAX_MIN = 43200;
+    /* Refresh the "next run" countdown; the input fields are only filled when
+     * the page loads or after saving, so a poll never overwrites typing. */
+    var MAINT_POLL_MS = 30000;
     /* Keep in sync with cpe_status.h (CPE_STATE_FAULT). */
     var STATE_FAULT = 4;
 
@@ -624,6 +630,108 @@
         }
     }
 
+    function formatRemain(seconds) {
+        var total = Math.max(0, Math.floor(seconds));
+        var hours = Math.floor(total / 3600);
+        var minutes = Math.floor((total % 3600) / 60);
+        if (hours > 0) {
+            return hours + ' 小时 ' + minutes + ' 分钟';
+        }
+        if (minutes > 0) {
+            return minutes + ' 分钟';
+        }
+        return total + ' 秒';
+    }
+
+    function formatPeriod(minutes) {
+        if (minutes <= 0) {
+            return '已关闭';
+        }
+        if (minutes % 1440 === 0) {
+            return '每 ' + (minutes / 1440) + ' 天';
+        }
+        if (minutes % 60 === 0) {
+            return '每 ' + (minutes / 60) + ' 小时';
+        }
+        if (minutes > 60) {
+            return '每 ' + Math.floor(minutes / 60) + ' 小时 ' + (minutes % 60) + ' 分钟';
+        }
+        return '每 ' + minutes + ' 分钟';
+    }
+
+    function renderMaintenance(data, fillInputs) {
+        var ecmPeriod = Number(data.ecm_period_min) || 0;
+        var rebootPeriod = Number(data.reboot_period_min) || 0;
+        var nextEcm = Number(data.next_ecm_in_s);
+        var nextReboot = Number(data.next_reboot_in_s);
+        var count = Number(data.sched_reboot_count) || 0;
+
+        if (fillInputs) {
+            var ecmInput = CPE.byId('maint-ecm');
+            var rebootInput = CPE.byId('maint-reboot');
+            if (ecmInput) {
+                ecmInput.value = String(ecmPeriod);
+            }
+            if (rebootInput) {
+                rebootInput.value = String(rebootPeriod);
+            }
+        }
+
+        setText('maint-ecm-value', formatPeriod(ecmPeriod));
+        setText('maint-ecm-hint', ecmPeriod > 0
+            ? (nextEcm >= 0 ? '下次：' + formatRemain(nextEcm) + '后' : '正在排期')
+            : '不重建 ECM 网卡');
+
+        setText('maint-reboot-value', formatPeriod(rebootPeriod));
+        setText('maint-reboot-hint', rebootPeriod > 0
+            ? (nextReboot >= 0 ? '下次：' + formatRemain(nextReboot) + '后' : '正在排期')
+            : '不自动重启设备');
+
+        if (data.reboot_frozen) {
+            setText('maint-state', '已冻结');
+            setText('maint-state-hint', '连续 ' + count + ' 次重启未恢复正常');
+        } else if (count > 0) {
+            setText('maint-state', '恢复观察中');
+            setText('maint-state-hint', '已连续重启 ' + count + ' 次');
+        } else {
+            setText('maint-state', '正常');
+            setText('maint-state-hint', '无异常重启记录');
+        }
+    }
+
+    function loadMaintenance(fillInputs) {
+        return CPE.getJson(MAINT_URL).then(function (data) {
+            renderMaintenance(data, fillInputs);
+            return data;
+        }).catch(function () {
+            /* 401 already redirected to the login page. */
+        });
+    }
+
+    function saveMaintenance() {
+        var ecmInput = CPE.byId('maint-ecm');
+        var rebootInput = CPE.byId('maint-reboot');
+        if (!ecmInput || !rebootInput) {
+            return;
+        }
+        var ecmPeriod = parseInt(ecmInput.value, 10);
+        var rebootPeriod = parseInt(rebootInput.value, 10);
+        if (isNaN(ecmPeriod) || ecmPeriod < 0 || ecmPeriod > MAINT_PERIOD_MAX_MIN ||
+                isNaN(rebootPeriod) || rebootPeriod < 0 || rebootPeriod > MAINT_PERIOD_MAX_MIN) {
+            window.alert('周期必须为 0~43200 的整数（分钟，0 表示关闭）');
+            return;
+        }
+        CPE.postJson(MAINT_URL, {
+            ecm_period_min: ecmPeriod,
+            reboot_period_min: rebootPeriod
+        }).then(function (data) {
+            /* Reflect what the device actually stored and when it will run. */
+            renderMaintenance(data, true);
+        }).catch(function (error) {
+            window.alert(CPE.errorText(error));
+        });
+    }
+
     function bindActions() {
         var changePassword = CPE.byId('btn-change-password');
         if (changePassword) {
@@ -636,6 +744,10 @@
             factoryReset.addEventListener('click', function () {
                 CPE.factoryReset().catch(function () {});
             });
+        }
+        var saveMaint = CPE.byId('btn-save-maint');
+        if (saveMaint) {
+            saveMaint.addEventListener('click', saveMaintenance);
         }
     }
 
@@ -673,6 +785,10 @@
             switchTab(true);
             loadStationCounts();
             refreshStatus();
+            loadMaintenance(true);
+            window.setInterval(function () {
+                loadMaintenance(false);
+            }, MAINT_POLL_MS);
         }).catch(function () {
             /* Forced password change already redirected to the login page. */
         });

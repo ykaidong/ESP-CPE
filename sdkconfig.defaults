@@ -53,6 +53,17 @@ CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=512
 # ---- Crash behaviour -----------------------------------------------------
 CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
 
+# ---- Periodic maintenance (see main/Kconfig.projbuild) --------------------
+# Disabled by default: no periodic ECM rebuild and no periodic reboot until it
+# is enabled from the management console ("定时维护" on the status page), which
+# stores the periods in NVS. These Kconfig values are only the defaults used on
+# first boot / after a factory reset; set them to a number of minutes to have a
+# schedule out of the box.
+CONFIG_CPE_MAINT_ECM_PERIOD_MIN=0
+CONFIG_CPE_MAINT_REBOOT_PERIOD_MIN=0
+CONFIG_CPE_MAINT_RESET_MODEM=y
+CONFIG_CPE_MAINT_MAX_SCHED_REBOOTS=3
+
 # ---- OTA rollback (Phase 3) ---------------------------------------------
 # An OTA image boots in PENDING_VERIFY and is rolled back unless the firmware
 # marks it valid (cpe_ota.c, after CPE_OTA_VALIDATE_DELAY_MS). Direct

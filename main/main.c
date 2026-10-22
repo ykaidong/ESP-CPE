@@ -29,6 +29,7 @@
 
 #include "cpe_at.h"
 #include "cpe_core.h"
+#include "cpe_maintenance.h"
 #include "cpe_ota.h"
 #include "app_wifi.h"
 #include "cpe_web.h"
@@ -149,6 +150,13 @@ void app_main(void)
     err = reset_button_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Reset button monitor not started (%s)", esp_err_to_name(err));
+    }
+
+    /* Periodic maintenance (ECM rebuild / device reboot). Must come after
+     * cpe_wan_start(): the rebuild is executed by the link manager task. */
+    err = cpe_maintenance_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Periodic maintenance not started (%s)", esp_err_to_name(err));
     }
 
     ESP_LOGI(TAG, "CPE started, management console on http://%s", CONFIG_SERVER_IP);

@@ -1,4 +1,4 @@
 idf_component_register(SRC_DIRS "."
                        INCLUDE_DIRS "."
-                       REQUIRES cpe_core app_wifi web_console cpe_wan cpe_at esp_driver_gpio
-                                esp_driver_rmt esp_netif esp_event nvs_flash esp_timer)
+                       REQUIRES cpe_core app_wifi web_console cpe_wan cpe_at cpe_maintenance
+                                esp_driver_gpio esp_driver_rmt esp_netif esp_event nvs_flash esp_timer)

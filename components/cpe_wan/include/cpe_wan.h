@@ -65,6 +65,19 @@ esp_err_t cpe_wan_start(void);
 void cpe_wan_log_heap(const char *reason);
 
 /**
+ * @brief Request a scheduled rebuild of the ECM network interface.
+ *
+ * Safe to call from any task: it only raises a flag. The link manager performs
+ * the teardown/bring-up on its own context on the next tick, because the ECM
+ * handles are not protected by a lock and must never be touched by two tasks.
+ * A scheduled rebuild is maintenance, not a fault: the recovery budget is not
+ * consumed and no modem reset is issued (the USB session is kept).
+ *
+ * @note The request is dropped when link manager is not running.
+ */
+void cpe_wan_request_ecm_rebuild(void);
+
+/**
  * @brief Reboot the device after the standard pre-restart cleanup.
  *
  * Optionally resets the modem (best effort) so it re-enumerates cleanly after
