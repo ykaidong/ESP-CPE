@@ -334,7 +334,7 @@ lm_tick()
 > （Web 重启、Web/按键恢复出厂、OTA、L3 受控重启）都会在 `esp_restart()` 前请求 AT 任务
 > 发送 `AT+CFUN=1,1`，让模组先自行软复位并重新枚举：串口可见
 > `cpe_at: Restarting the modem with AT+CFUN=1,1`。AT 端口不可用或模组无响应时立即跳过
-> （最多等待约 3 s），绝不阻塞重启。掉电、看门狗等非主动复位仍可能挂死，需物理插拔。
+> （最多等待 `CPE_AT_MODEM_RESET_TIMEOUT_MS`，默认 3 s），绝不阻塞重启。掉电、看门狗等非主动复位仍可能挂死，需物理插拔。
 
 ## 10. 相关文档
 

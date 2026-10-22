@@ -9,14 +9,21 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* Bounded wait for cpe_at_modem_reset(): covers one 2 s AT command plus the
- * task wake-up and schedule jitter. */
+ * task wake-up and schedule jitter. Configurable via
+ * CONFIG_CPE_AT_MODEM_RESET_TIMEOUT_MS; the fallback keeps the call sites
+ * compiling when AT telemetry (and therefore the option) is disabled. */
+#ifdef CONFIG_CPE_AT_MODEM_RESET_TIMEOUT_MS
+#define CPE_AT_MODEM_RESET_TIMEOUT_MS  CONFIG_CPE_AT_MODEM_RESET_TIMEOUT_MS
+#else
 #define CPE_AT_MODEM_RESET_TIMEOUT_MS  3000
+#endif
 
 /**
  * @brief Start the AT telemetry task.

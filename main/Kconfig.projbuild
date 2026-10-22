@@ -375,4 +375,16 @@ menu "CPE Application Configuration"
             refreshed. The modem identity (model, firmware, IMEI) is read once
             when the AT port is opened.
 
+    config CPE_AT_MODEM_RESET_TIMEOUT_MS
+        depends on CPE_AT_ENABLE
+        int "Modem reset wait before restart (ms)"
+        default 3000
+        range 1000 10000
+        help
+            How long a deliberate restart waits for the AT task to finish
+            AT+CFUN=1,1. The wait is bounded on purpose: a wedged AT port must
+            never delay the restart. 3000 ms covers one 2 s AT command plus the
+            task wake-up and schedule jitter. Raise it only if a slow modem
+            regularly answers FWKCHANG/OK later than that.
+
 endmenu
