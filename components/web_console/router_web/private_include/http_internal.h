@@ -36,7 +36,7 @@
 #define CPE_WEB_JSON_MAX_DEPTH          6
 
 #define CPE_WEB_STA_NAME_MAX_LEN        32
-#define CPE_WEB_STA_NAME_NVS_NAMESPACE  "sta_names"
+/* The station-nickname namespace lives in cpe_kv.h (CPE_KV_NS_STA_NAMES). */
 #define CPE_WEB_STA_SNAPSHOT_MAX        10
 #define CPE_WEB_STA_LOCK_TIMEOUT_MS     100
 

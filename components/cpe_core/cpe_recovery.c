@@ -6,11 +6,12 @@
 
 #include "esp_log.h"
 #include "nvs.h"
+
+#include "cpe_kv.h"
 #include "cpe_recovery.h"
 
 static const char *TAG = "cpe_recovery";
 
-#define CPE_SYS_NAMESPACE   "cpe_sys"
 #define NVS_KEY_BOOT_COUNT  "boot_cnt"
 #define NVS_KEY_MAINT_COUNT "mnt_cnt"
 
@@ -19,13 +20,13 @@ static const char *TAG = "cpe_recovery";
 static esp_err_t read_u32(const char *key, uint32_t *out)
 {
     nvs_handle_t h;
-    esp_err_t err = nvs_open(CPE_SYS_NAMESPACE, NVS_READONLY, &h);
+    esp_err_t err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READONLY, &h);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         *out = 0;
         return ESP_OK;
     }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open %s: %s", CPE_SYS_NAMESPACE, esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to open %s: %s", CPE_KV_NS_SYSTEM, esp_err_to_name(err));
         *out = 0;
         return err;
     }
@@ -44,10 +45,10 @@ static esp_err_t read_u32(const char *key, uint32_t *out)
 static esp_err_t write_u32(const char *key, uint32_t value)
 {
     nvs_handle_t h;
-    esp_err_t err = nvs_open(CPE_SYS_NAMESPACE, NVS_READWRITE, &h);
+    esp_err_t err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open %s for writing: %s",
-                 CPE_SYS_NAMESPACE, esp_err_to_name(err));
+                 CPE_KV_NS_SYSTEM, esp_err_to_name(err));
         return err;
     }
     err = nvs_set_u32(h, key, value);
@@ -90,10 +91,10 @@ esp_err_t cpe_boot_count_increment(uint32_t *count)
     value++;
 
     nvs_handle_t h;
-    err = nvs_open(CPE_SYS_NAMESPACE, NVS_READWRITE, &h);
+    err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open %s for writing: %s",
-                 CPE_SYS_NAMESPACE, esp_err_to_name(err));
+                 CPE_KV_NS_SYSTEM, esp_err_to_name(err));
         *count = value;
         return err;
     }
@@ -113,7 +114,7 @@ esp_err_t cpe_boot_count_increment(uint32_t *count)
 esp_err_t cpe_boot_count_clear(void)
 {
     nvs_handle_t h;
-    esp_err_t err = nvs_open(CPE_SYS_NAMESPACE, NVS_READWRITE, &h);
+    esp_err_t err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         return err;
     }

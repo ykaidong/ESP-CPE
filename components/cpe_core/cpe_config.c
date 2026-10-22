@@ -16,10 +16,9 @@
 #include "cpe_config.h"
 #include "cpe_config_priv.h"
 #include "cpe_ct.h"
+#include "cpe_kv.h"
 
 static const char *TAG = "cpe_config";
-
-#define CPE_NVS_NAMESPACE   "cpe_cfg"
 
 typedef struct {
     SemaphoreHandle_t lock;
@@ -143,7 +142,7 @@ esp_err_t cpe_config_init(void)
         return ESP_FAIL;
     }
 
-    esp_err_t err = nvs_open(CPE_NVS_NAMESPACE, NVS_READWRITE, &s_cfg.nvs);
+    esp_err_t err = nvs_open(CPE_KV_NS_CONFIG, NVS_READWRITE, &s_cfg.nvs);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open NVS namespace: %s", esp_err_to_name(err));
         cpe_config_deinit();

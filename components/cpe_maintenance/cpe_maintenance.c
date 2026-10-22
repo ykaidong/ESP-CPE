@@ -24,9 +24,9 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "nvs.h"
 
 #include "cpe_core.h"
+#include "cpe_kv.h"
 #include "cpe_ota.h"
 #include "cpe_system.h"
 #include "cpe_wan.h"
@@ -35,7 +35,6 @@
 
 static const char *TAG = "cpe_maint";
 
-#define MAINT_NVS_NAMESPACE "cpe_maint"
 #define NVS_KEY_ECM_MIN     "ecm_min"
 #define NVS_KEY_REBOOT_MIN  "rb_min"
 #define NVS_KEY_RESET_MODEM "rst_modem"
@@ -102,54 +101,48 @@ static void config_load(cpe_maint_config_t *cfg)
 {
     config_defaults(cfg);
 
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(MAINT_NVS_NAMESPACE, NVS_READONLY, &h);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        /* Never configured: the Kconfig defaults apply. */
-        return;
-    }
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_MAINT, false);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to open %s: %s, using defaults",
-                 MAINT_NVS_NAMESPACE, esp_err_to_name(err));
+        /* Never configured (or unreadable): the Kconfig defaults apply.
+         * cpe_kv_open() already logged the unexpected cases. */
         return;
     }
 
     uint32_t value = 0;
-    if (nvs_get_u32(h, NVS_KEY_ECM_MIN, &value) == ESP_OK &&
+    if (cpe_kv_get_u32(&kv, NVS_KEY_ECM_MIN, &value) == ESP_OK &&
             value <= CPE_MAINT_PERIOD_MAX_MIN) {
         cfg->ecm_period_min = value;
     }
-    if (nvs_get_u32(h, NVS_KEY_REBOOT_MIN, &value) == ESP_OK &&
+    if (cpe_kv_get_u32(&kv, NVS_KEY_REBOOT_MIN, &value) == ESP_OK &&
             value <= CPE_MAINT_PERIOD_MAX_MIN) {
         cfg->reboot_period_min = value;
     }
     uint8_t flag = 0;
-    if (nvs_get_u8(h, NVS_KEY_RESET_MODEM, &flag) == ESP_OK) {
+    if (cpe_kv_get_u8(&kv, NVS_KEY_RESET_MODEM, &flag) == ESP_OK) {
         cfg->reset_modem = (flag != 0);
     }
-    nvs_close(h);
+    cpe_kv_close(&kv);
 }
 
 static esp_err_t config_save(const cpe_maint_config_t *cfg)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(MAINT_NVS_NAMESPACE, NVS_READWRITE, &h);
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_MAINT, true);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open %s for writing: %s",
-                 MAINT_NVS_NAMESPACE, esp_err_to_name(err));
         return err;
     }
-    err = nvs_set_u32(h, NVS_KEY_ECM_MIN, cfg->ecm_period_min);
+    err = cpe_kv_set_u32(&kv, NVS_KEY_ECM_MIN, cfg->ecm_period_min);
     if (err == ESP_OK) {
-        err = nvs_set_u32(h, NVS_KEY_REBOOT_MIN, cfg->reboot_period_min);
+        err = cpe_kv_set_u32(&kv, NVS_KEY_REBOOT_MIN, cfg->reboot_period_min);
     }
     if (err == ESP_OK) {
-        err = nvs_set_u8(h, NVS_KEY_RESET_MODEM, cfg->reset_modem ? 1 : 0);
+        err = cpe_kv_set_u8(&kv, NVS_KEY_RESET_MODEM, cfg->reset_modem ? 1 : 0);
     }
     if (err == ESP_OK) {
-        err = nvs_commit(h);
+        err = cpe_kv_commit(&kv);
     }
-    nvs_close(h);
+    cpe_kv_close(&kv);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to persist the maintenance policy: %s", esp_err_to_name(err));
     }
@@ -205,19 +198,14 @@ esp_err_t cpe_maint_config_set(const cpe_maint_config_t *cfg)
 
 esp_err_t cpe_maint_config_reset(void)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(MAINT_NVS_NAMESPACE, NVS_READWRITE, &h);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        err = ESP_OK;
-    } else if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to open %s for erasing: %s",
-                 MAINT_NVS_NAMESPACE, esp_err_to_name(err));
-    } else {
-        err = nvs_erase_all(h);
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_MAINT, true);
+    if (err == ESP_OK) {
+        err = cpe_kv_erase_all(&kv);
         if (err == ESP_OK) {
-            err = nvs_commit(h);
+            err = cpe_kv_commit(&kv);
         }
-        nvs_close(h);
+        cpe_kv_close(&kv);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Failed to erase the maintenance policy: %s", esp_err_to_name(err));
         }

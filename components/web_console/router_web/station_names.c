@@ -10,8 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "nvs.h"
-
+#include "cpe_kv.h"
 #include "cpe_web.h"
 #include "http_internal.h"
 
@@ -108,14 +107,13 @@ esp_err_t cpe_web_station_name_load(const uint8_t mac[6], char *out, size_t out_
     char key[13];
     cpe_web_mac_to_hex(mac, key);
 
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(CPE_WEB_STA_NAME_NVS_NAMESPACE, NVS_READONLY, &handle);
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_STA_NAMES, false);
     if (err != ESP_OK) {
         return err;
     }
-    size_t len = out_len;
-    err = nvs_get_str(handle, key, out, &len);
-    nvs_close(handle);
+    err = cpe_kv_get_str(&kv, key, out, out_len);
+    cpe_kv_close(&kv);
     if (err == ESP_OK && !cpe_web_station_name_valid(out)) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -127,27 +125,26 @@ esp_err_t cpe_web_station_name_save(const uint8_t mac[6], const char *name)
     char key[13];
     cpe_web_mac_to_hex(mac, key);
 
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(CPE_WEB_STA_NAME_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_STA_NAMES, true);
     if (err != ESP_OK) {
         return err;
     }
-    err = nvs_set_str(handle, key, name);
+    err = cpe_kv_set_str(&kv, key, name);
     if (err == ESP_OK) {
-        err = nvs_commit(handle);
+        err = cpe_kv_commit(&kv);
     }
-    nvs_close(handle);
+    cpe_kv_close(&kv);
     return err;
 }
 
 void cpe_web_station_names_erase_all(void)
 {
-    /* Also drop the station nicknames stored in their own namespace. */
-    nvs_handle_t handle;
-    if (nvs_open(CPE_WEB_STA_NAME_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
-        if (nvs_erase_all(handle) == ESP_OK) {
-            (void)nvs_commit(handle);
+    cpe_kv_t kv;
+    if (cpe_kv_open(&kv, CPE_KV_NS_STA_NAMES, true) == ESP_OK) {
+        if (cpe_kv_erase_all(&kv) == ESP_OK) {
+            (void)cpe_kv_commit(&kv);
         }
-        nvs_close(handle);
+        cpe_kv_close(&kv);
     }
 }
