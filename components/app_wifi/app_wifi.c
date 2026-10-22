@@ -491,3 +491,28 @@ void app_wifi_deauth_all_stations(void)
      * enough. */
     vTaskDelay(pdMS_TO_TICKS(100));
 }
+
+esp_err_t app_wifi_sta_disconnect(const uint8_t mac[6])
+{
+    if (mac == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint16_t aid = 0;
+    esp_err_t err = esp_wifi_ap_get_sta_aid(mac, &aid);
+    if (err != ESP_OK) {
+        /* ESP_ERR_NOT_FOUND: the station left on its own in the meantime. */
+        ESP_LOGW(TAG, "Station " MACSTR " is not associated: %s",
+                 MAC2STR(mac), esp_err_to_name(err));
+        return err;
+    }
+
+    err = esp_wifi_deauth_sta(aid);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to deauthenticate " MACSTR ": %s",
+                 MAC2STR(mac), esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "Station " MACSTR " disconnected on request", MAC2STR(mac));
+    return ESP_OK;
+}

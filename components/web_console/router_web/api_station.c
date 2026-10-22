@@ -11,8 +11,8 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
 
+#include "app_wifi.h"
 #include "cpe_config.h"
 #include "http_internal.h"
 
@@ -86,18 +86,14 @@ static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
                                            "station_not_found", false);
     }
 
-    uint16_t aid = 0;
-    err = esp_wifi_ap_get_sta_aid(mac, &aid);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Station " MACSTR " is not associated: %s",
-                 MAC2STR(mac), esp_err_to_name(err));
+    /* The AID lookup and esp_wifi_deauth_sta() live in app_wifi: the console
+     * must not need the Wi-Fi driver's station table. */
+    err = app_wifi_sta_disconnect(mac);
+    if (err == ESP_ERR_NOT_FOUND) {
         return cpe_web_send_error_response(req, CPE_WEB_HTTPD_404_STR,
                                            "station_not_found", false);
     }
-
-    err = esp_wifi_deauth_sta(aid);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to deauthenticate station: %s", esp_err_to_name(err));
         return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
                                            "deauth_failed", false);
     }

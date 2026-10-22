@@ -70,6 +70,20 @@ esp_netif_t *app_wifi_get_ap_netif(void);
  */
 void app_wifi_deauth_all_stations(void);
 
+/**
+ * @brief Deauthenticate a single station.
+ *
+ * Implemented here rather than in the console: resolving the AID and calling
+ * esp_wifi_deauth_sta() is SoftAP knowledge, and the console must not need the
+ * Wi-Fi driver's station table to expose a "disconnect" action.
+ *
+ * @param mac  Station MAC address (must not be NULL).
+ *
+ * @return ESP_OK when the station was disconnected, ESP_ERR_NOT_FOUND when it is
+ *         not associated any more, an IDF error code otherwise.
+ */
+esp_err_t app_wifi_sta_disconnect(const uint8_t mac[6]);
+
 #ifdef __cplusplus
 }
 #endif
