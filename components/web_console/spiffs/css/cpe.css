@@ -64,6 +64,28 @@
     letter-spacing: 1px;
 }
 
+/* Single administrator account: logout is exposed directly in the header. */
+.header-logout {
+    position: absolute;
+    top: 50%;
+    right: 24px;
+    transform: translateY(-50%);
+    z-index: 1100;
+    height: 34px;
+    padding: 0 16px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 17px;
+    background-color: transparent;
+    color: #ffffff;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.header-logout:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
 /* Left navigation: pill-shaped items with a blue accent for the active page. */
 .left-base {
     padding: 16px 12px;
@@ -550,6 +572,22 @@
     min-width: 120px;
 }
 
+.system-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.system-actions .save-btn,
+.system-actions .danger-btn {
+    min-width: 140px;
+}
+
+.system-actions .danger-btn {
+    margin-left: 0;
+}
+
 .line-base {
     align-items: center;
     flex-wrap: wrap;
@@ -576,6 +614,20 @@
 .line-base .content-thr {
     font-size: 12px;
     color: #888888;
+}
+
+.check-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+}
+
+.check-line .content-thr {
+    flex: 1;
+    min-width: 0;
+    margin-left: 0;
+    line-height: 1.5;
 }
 
 .status-banner {
@@ -623,11 +675,39 @@
         flex-basis: 88px;
     }
 
+    .line-base {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        margin-bottom: 16px;
+    }
+
     .line-base .title {
-        width: 100%;
+        width: auto;
+        margin-right: 0;
+        text-align: left;
+        line-height: 1.4;
+        font-size: 13px;
+        color: #666666;
     }
 
     .line-base .content {
+        width: 100%;
+        min-width: 0;
+        height: 40px;
+    }
+
+    .line-base .check-line {
+        margin-top: 2px;
+    }
+
+    .line-base-btn {
+        margin-top: 20px;
+        margin-left: 0;
+    }
+
+    .line-base-btn .save-btn {
         width: 100%;
         min-width: 0;
     }
@@ -649,6 +729,78 @@
     background: #eef1f5;
     padding: 1px 5px;
     border-radius: 4px;
+}
+
+/* Native file inputs render as unstyled browser widgets, so the input is
+ * visually hidden and driven by a label that matches the other buttons. */
+.upload-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px dashed #cfd9e6;
+    border-radius: 10px;
+    background-color: #f8fafc;
+}
+
+.file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    border: 0;
+}
+
+.file-picker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    padding: 0 18px;
+    border: 1px solid #cfd9e6;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #2468a9;
+    font-size: 14px;
+    cursor: pointer;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.file-picker:hover {
+    border-color: #2468a9;
+    background-color: #f4f8fd;
+}
+
+.file-picker.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.file-name {
+    flex: 1;
+    min-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #8c8c8c;
+    font-size: 13px;
+}
+
+.file-name.has-file {
+    color: #1f2d3d;
+}
+
+.upload-row .save-btn {
+    width: auto;
+    min-width: 120px;
+    height: 36px;
+    padding: 0 18px;
+    margin-left: auto;
+    white-space: nowrap;
 }
 
 .progress-wrap {
@@ -686,13 +838,7 @@
     color: #c53030;
 }
 
-#ota-file {
-    max-width: 100%;
-    margin-right: 12px;
-}
-
-.save-btn:disabled,
-#ota-file:disabled {
+.save-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
 }
@@ -713,6 +859,13 @@
         background-image: url("../img/cross.svg");
     }
 
+    .header-logout {
+        right: 58px;
+        height: 30px;
+        padding: 0 12px;
+        font-size: 13px;
+    }
+
     .left-base {
         top: 64px;
         padding: 12px 10px;
@@ -720,5 +873,14 @@
 
     .login-content {
         padding: 28px 22px 24px;
+    }
+
+    .upload-row {
+        padding: 12px;
+    }
+
+    .upload-row .save-btn {
+        width: 100%;
+        margin-left: 0;
     }
 }

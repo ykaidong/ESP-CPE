@@ -291,16 +291,26 @@ var CPE = (function () {
     function bindMenu() {
         var menuButton = byId('menuBtn');
         var menu = byId('leftMenu');
-        if (!menuButton || !menu) {
-            return;
+        if (menuButton && menu) {
+            menuButton.addEventListener('click', function () {
+                /* The menu starts hidden via CSS (display:none), not an inline
+                 * style, so check the computed value instead of style.display. */
+                var open = window.getComputedStyle(menu).display === 'none';
+                menu.style.display = open ? 'block' : 'none';
+                menuButton.className = open ? 'header-menu menu-open' : 'header-menu';
+            });
         }
-        menuButton.addEventListener('click', function () {
-            /* The menu starts hidden via CSS (display:none), not an inline
-             * style, so check the computed value instead of style.display. */
-            var open = window.getComputedStyle(menu).display === 'none';
-            menu.style.display = open ? 'block' : 'none';
-            menuButton.className = open ? 'header-menu menu-open' : 'header-menu';
-        });
+
+        var logoutButton = byId('btn-logout');
+        if (logoutButton) {
+            logoutButton.addEventListener('click', function () {
+                /* Never fail silently: the user must know whether they are
+                 * still logged in. */
+                logout().catch(function (error) {
+                    window.alert(errorText(error));
+                });
+            });
+        }
     }
 
     /* Show one of two tab panels and mark the matching tab as active. Returns

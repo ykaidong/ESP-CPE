@@ -49,11 +49,50 @@
         });
     }
 
+    function formatSizeShort(value) {
+        if (value >= 1024 * 1024) {
+            return (value / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+        if (value >= 1024) {
+            return Math.round(value / 1024) + ' KB';
+        }
+        return value + ' 字节';
+    }
+
     function setBusy(busy) {
         uploading = busy;
         CPE.byId('btn-upload').disabled = busy;
         CPE.byId('ota-file').disabled = busy;
         CPE.byId('btn-reboot').disabled = busy;
+        var picker = CPE.byId('file-picker');
+        if (picker) {
+            picker.className = busy ? 'file-picker disabled' : 'file-picker';
+        }
+    }
+
+    function bindFilePicker() {
+        var input = CPE.byId('ota-file');
+        var fileName = CPE.byId('ota-file-name');
+        var uploadButton = CPE.byId('btn-upload');
+        if (!input) {
+            return;
+        }
+        input.addEventListener('change', function () {
+            var file = input.files && input.files[0];
+            if (fileName) {
+                if (file) {
+                    fileName.textContent = file.name + ' · ' + formatSizeShort(file.size);
+                    fileName.className = 'file-name has-file';
+                } else {
+                    fileName.textContent = '未选择文件';
+                    fileName.className = 'file-name';
+                }
+            }
+            if (uploadButton) {
+                uploadButton.disabled = !file;
+            }
+            setStatus('', false);
+        });
     }
 
     function failUpload(code) {
@@ -201,6 +240,7 @@
 
     function init() {
         CPE.bindMenu();
+        bindFilePicker();
         var uploadButton = CPE.byId('btn-upload');
         if (uploadButton) {
             uploadButton.addEventListener('click', upload);

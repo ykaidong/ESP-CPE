@@ -50,9 +50,11 @@
             写入完成校验通过后设备会自动重启，Wi-Fi 会短暂断开，约 1 分钟后重新连接即可。
             若新固件启动异常，带回滚保护的 bootloader 会自动回到旧版本。
           </div>
-          <div class="line-base-btn flex flex-ac">
-            <input type="file" id="ota-file" accept=".bin,application/octet-stream">
-            <button class="save-btn" type="button" id="btn-upload">上传并升级</button>
+          <div class="upload-row">
+            <input class="file-input" type="file" id="ota-file" accept=".bin,application/octet-stream">
+            <label class="file-picker" for="ota-file" id="file-picker">选择固件</label>
+            <span class="file-name" id="ota-file-name">未选择文件</span>
+            <button class="save-btn" type="button" id="btn-upload" disabled>上传并升级</button>
           </div>
           <div class="progress-wrap" id="progress-wrap" hidden>
             <div class="progress-track">
@@ -63,7 +65,7 @@
           <div class="upgrade-status" id="upgrade-status"></div>
 
           <div class="page-title">其它操作</div>
-          <div class="line-base-btn flex flex-ac">
+          <div class="system-actions flex flex-ac">
             <button class="save-btn" type="button" id="btn-reboot">重启设备</button>
             <button class="cancel-btn" type="button" id="btn-back">返回状态页</button>
           </div>

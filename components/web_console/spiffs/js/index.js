@@ -336,16 +336,6 @@
                 CPE.openPasswordModal(false).catch(function () {});
             });
         }
-        var logout = CPE.byId('btn-logout');
-        if (logout) {
-            logout.addEventListener('click', function () {
-                CPE.logout().catch(function (error) {
-                    /* Never fail silently: the user must know whether they are
-                     * still logged in. */
-                    window.alert(CPE.errorText(error));
-                });
-            });
-        }
         var factoryReset = CPE.byId('btn-factory-reset');
         if (factoryReset) {
             factoryReset.addEventListener('click', function () {

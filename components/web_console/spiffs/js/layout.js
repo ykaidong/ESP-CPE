@@ -20,6 +20,17 @@
         { href: 'upgrade.html', text: '系统升级', pages: ['/upgrade.html'] }
     ];
 
+    /* Single administrator account: the header exposes logout directly instead
+     * of a one-item dropdown. */
+    function renderLogout(header) {
+        var button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'header-logout';
+        button.id = 'btn-logout';
+        button.textContent = '退出登录';
+        header.appendChild(button);
+    }
+
     function renderHeader(withMenu) {
         var header = document.getElementById('app-header');
         if (!header) {
@@ -58,6 +69,7 @@
             menuButton.className = 'header-menu';
             menuButton.id = 'menuBtn';
             header.appendChild(menuButton);
+            renderLogout(header);
         }
     }
 
