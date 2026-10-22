@@ -5,9 +5,9 @@
  *
  * Streaming OTA update helper (see cpe_ota.h).
  *
- * Only one upload can be in progress at a time: the HTTP handler streams the
+ * Only one upload can be in progress at a time: the upload task streams the
  * body chunk by chunk and any second request is rejected with
- * ESP_ERR_INVALID_STATE, so two clients can never write the same partition.
+ * CPE_OTA_ERR_BUSY, so two clients can never write the same partition.
  */
 
 #include <stdio.h>

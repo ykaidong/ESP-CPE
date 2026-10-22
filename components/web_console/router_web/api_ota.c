@@ -23,9 +23,16 @@ static const char *TAG = "cpe_web";
 
 #define OTA_CHUNK_SIZE              4096
 /* Maximum time between two successfully received chunks (not the total upload
- * duration): a slow but progressing client is never aborted. */
-#define OTA_UPLOAD_IDLE_TIMEOUT_US  (180LL * 1000 * 1000)
+ * duration): a slow but progressing client is never aborted. The upload runs on
+ * its own task, so a stuck client no longer blocks the console; 15 s is plenty
+ * for a stalled TCP window to recover. */
+#define OTA_UPLOAD_IDLE_TIMEOUT_US  (15LL * 1000 * 1000)
 #define OTA_DRAIN_TIMEOUT_US        (5LL * 1000 * 1000)
+
+/* Stack and priority of the one-shot upload task (same order of magnitude as
+ * the other console helper tasks). */
+#define OTA_UPLOAD_TASK_STACK       4096
+#define OTA_UPLOAD_TASK_PRIO        5
 
 /*
  * The OTA upload is a binary body (not JSON), so precheck_post() cannot be
@@ -111,37 +118,20 @@ static void ota_drain_unread_body(httpd_req_t *req, size_t unread_len)
     }
 }
 
-static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
+/*
+ * Receive the image and write it to the inactive OTA partition.
+ *
+ * Runs on the upload task created by api_ota_upload_post_handler() with an
+ * async copy of the request: esp_http_server serves every socket from a single
+ * task, so doing this inside the URI handler would block the whole management
+ * console for as long as the upload takes (and a slow or stuck client could
+ * keep it blocked indefinitely).
+ *
+ * The caller owns the request copy and must call
+ * httpd_req_async_handler_complete() after this returns.
+ */
+static esp_err_t ota_upload_run(httpd_req_t *req)
 {
-    esp_err_t pre = precheck_ota_post(req);
-    if (pre != ESP_OK) {
-        return pre;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    esp_err_t err = cpe_web_require_session_mutable(req, session);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    cpe_ota_info_t info;
-    if (cpe_ota_get_info(&info) != ESP_OK) {
-        ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "ota_info_failed", true);
-    }
-    if (info.upload_in_progress) {
-        ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_409_STR,
-                                           "ota_busy", true);
-    }
-    if (info.max_image_size > 0 && req->content_len > info.max_image_size) {
-        ESP_LOGW(TAG, "Rejecting firmware upload of %u bytes (partition is %u bytes)",
-                 (unsigned)req->content_len, (unsigned)info.max_image_size);
-        ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_413_STR,
-                                           "image_too_large", true);
-    }
-
     uint8_t *buf = malloc(OTA_CHUNK_SIZE);
     if (buf == NULL) {
         ota_drain_unread_body(req, req->content_len);
@@ -186,7 +176,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
                                            "invalid_firmware_image", true);
     }
 
-    err = cpe_ota_begin(req->content_len);
+    esp_err_t err = cpe_ota_begin(req->content_len);
     if (err == ESP_ERR_INVALID_SIZE) {
         free(buf);
         ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
@@ -290,6 +280,72 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     vTaskDelay(pdMS_TO_TICKS(800));
     cpe_wan_reboot(true);
     return err;
+}
+
+/* One-shot task that owns the upload: it keeps the single HTTP server task free
+ * while the body is received and written to flash. */
+static void ota_upload_task(void *arg)
+{
+    httpd_req_t *req = (httpd_req_t *)arg;
+
+    (void)ota_upload_run(req);
+
+    /* On success ota_upload_run() has already answered and restarted the
+     * device, so this only runs on the error paths: give the socket back to the
+     * server so it can be reused. */
+    httpd_req_async_handler_complete(req);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
+{
+    esp_err_t pre = precheck_ota_post(req);
+    if (pre != ESP_OK) {
+        return pre;
+    }
+    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
+    esp_err_t err = cpe_web_require_session_mutable(req, session);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    cpe_ota_info_t info;
+    if (cpe_ota_get_info(&info) != ESP_OK) {
+        ota_drain_unread_body(req, req->content_len);
+        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
+                                           "ota_info_failed", true);
+    }
+    if (info.upload_in_progress) {
+        ota_drain_unread_body(req, req->content_len);
+        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_409_STR,
+                                           "ota_busy", true);
+    }
+    if (info.max_image_size > 0 && req->content_len > info.max_image_size) {
+        ESP_LOGW(TAG, "Rejecting firmware upload of %u bytes (partition is %u bytes)",
+                 (unsigned)req->content_len, (unsigned)info.max_image_size);
+        ota_drain_unread_body(req, req->content_len);
+        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_413_STR,
+                                           "image_too_large", true);
+    }
+
+    /* Everything below (reading the body, writing flash, rebooting) must not run
+     * in the HTTP server task: hand an async copy of the request to a dedicated
+     * task and return, so the console keeps serving the other sockets. */
+    httpd_req_t *async_req = NULL;
+    err = httpd_req_async_handler_begin(req, &async_req);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start the asynchronous upload: %s", esp_err_to_name(err));
+        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
+                                           "out_of_memory", true);
+    }
+    if (xTaskCreate(ota_upload_task, "ota_upload", OTA_UPLOAD_TASK_STACK, async_req,
+                    OTA_UPLOAD_TASK_PRIO, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create the upload task");
+        httpd_req_async_handler_complete(async_req);
+        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
+                                           "internal_error", true);
+    }
+    return ESP_OK;
 }
 
 esp_err_t cpe_web_api_ota_register(httpd_handle_t server)
