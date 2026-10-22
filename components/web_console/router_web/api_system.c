@@ -24,6 +24,32 @@
 
 static const char *TAG = "cpe_web";
 
+/* Restarting is requested from a handler, but it must not run there: the grace
+ * delay and the modem reset inside cpe_wan_reboot() would keep the single HTTP
+ * server task busy after the reply has been queued. */
+#define SYSTEM_REBOOT_TASK_STACK     2048
+#define SYSTEM_REBOOT_TASK_PRIO      5
+/* Time the queued reply gets to leave the socket before esp_restart(). */
+#define SYSTEM_REBOOT_GRACE_MS       500
+
+static void system_reboot_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(SYSTEM_REBOOT_GRACE_MS));
+    cpe_wan_reboot(true);
+    vTaskDelete(NULL);
+}
+
+static void schedule_system_reboot(void)
+{
+    if (xTaskCreate(system_reboot_task, "cpe_reboot", SYSTEM_REBOOT_TASK_STACK, NULL,
+                    SYSTEM_REBOOT_TASK_PRIO, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "No memory for the reboot task, restarting from the handler");
+        vTaskDelay(pdMS_TO_TICKS(SYSTEM_REBOOT_GRACE_MS));
+        cpe_wan_reboot(true);
+    }
+}
+
 /* Append the maintenance policy and the schedule the device is following. */
 static void append_maintenance_status(cpe_web_sbuf_t *sb)
 {
@@ -89,9 +115,9 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
     cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"factory_reset\"}");
     err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
-    /* Give the response a chance to leave the socket before restarting. */
-    vTaskDelay(pdMS_TO_TICKS(500));
-    cpe_wan_reboot(true);
+    /* Give the response a chance to leave the socket before restarting; the
+     * wait itself runs on its own task so the console stays responsive. */
+    schedule_system_reboot();
     return err;
 }
 
@@ -114,8 +140,7 @@ static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
     err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
     ESP_LOGW(TAG, "Reboot requested from the web console");
-    vTaskDelay(pdMS_TO_TICKS(500));
-    cpe_wan_reboot(true);
+    schedule_system_reboot();
     return err;
 }
 
