@@ -13,6 +13,7 @@
 #include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
@@ -45,6 +46,27 @@ typedef struct {
 
 static ecm_ctx_t s_ecm;
 static bool s_cdc_installed;
+
+/* s_ecm is written by the link manager task (wan_ecm_teardown() /
+ * wan_ecm_bring_up()) and read from the event loop and from the NAPT task
+ * (wan_ecm_netif() / wan_ecm_eth_handle()), so readers must not observe it
+ * while the driver and the netif are being destroyed. The mutex is recursive
+ * because wan_ecm_bring_up() finishes a previous teardown while holding it. */
+static SemaphoreHandle_t s_ecm_lock;
+
+static void ecm_lock(void)
+{
+    if (s_ecm_lock != NULL) {
+        xSemaphoreTakeRecursive(s_ecm_lock, portMAX_DELAY);
+    }
+}
+
+static void ecm_unlock(void)
+{
+    if (s_ecm_lock != NULL) {
+        xSemaphoreGiveRecursive(s_ecm_lock);
+    }
+}
 
 /* ------------------------------------------------------------------------- */
 /* USB host / CDC driver                                                     */
@@ -135,7 +157,22 @@ static esp_err_t usb_root_port_power_cycle(uint32_t off_ms)
 /* ECM network interface                                                     */
 /* ------------------------------------------------------------------------- */
 
-void wan_ecm_teardown(void)
+/* esp_netif_action_*() are the callbacks esp_netif itself runs in the TCP/IP
+ * thread. Calling them straight from the link manager task races with that
+ * thread over the netif state, so they go through esp_netif_tcpip_exec(),
+ * which blocks until the callback has run in the TCP/IP context. */
+static esp_err_t netif_action_stop(void *ctx)
+{
+    return esp_netif_action_stop(ctx, NULL, 0, NULL);
+}
+
+static esp_err_t netif_action_connected(void *ctx)
+{
+    return esp_netif_action_connected(ctx, NULL, 0, NULL);
+}
+
+/* Body of wan_ecm_teardown(); the caller must hold s_ecm_lock. */
+static void wan_ecm_teardown_locked(void)
 {
     if (!s_ecm.ready && s_ecm.eth == NULL) {
         return;
@@ -149,7 +186,7 @@ void wan_ecm_teardown(void)
          * netif that is about to be destroyed (review P2-4). */
         iot_eth_stop(s_ecm.eth);
         if (s_ecm.netif != NULL) {
-            esp_netif_action_stop(s_ecm.netif, NULL, 0, NULL);
+            (void)esp_netif_tcpip_exec(netif_action_stop, s_ecm.netif);
         }
         /* Disconnect the RX path BEFORE the glue/netif are freed; iot_eth does
          * not clear stack_input_info in del_netif_glue (review P1-1). */
@@ -188,7 +225,15 @@ void wan_ecm_teardown(void)
     cpe_status_set_ip(NULL);
 }
 
-esp_err_t wan_ecm_bring_up(void)
+void wan_ecm_teardown(void)
+{
+    ecm_lock();
+    wan_ecm_teardown_locked();
+    ecm_unlock();
+}
+
+/* Body of wan_ecm_bring_up(); the caller must hold s_ecm_lock. */
+static esp_err_t wan_ecm_bring_up_locked(void)
 {
     if (s_ecm.ready) {
         return ESP_OK;
@@ -196,7 +241,7 @@ esp_err_t wan_ecm_bring_up(void)
     /* A previous teardown may have left an uninstall retry pending: finish it
      * before creating a second instance. */
     if (s_ecm.eth != NULL) {
-        wan_ecm_teardown();
+        wan_ecm_teardown_locked();
         if (s_ecm.eth != NULL) {
             return ESP_ERR_INVALID_STATE;
         }
@@ -235,28 +280,28 @@ esp_err_t wan_ecm_bring_up(void)
     s_ecm.netif = esp_netif_new(&netif_config);
     if (s_ecm.netif == NULL) {
         ESP_LOGE(TAG, "Failed to create ECM netif");
-        wan_ecm_teardown();
+        wan_ecm_teardown_locked();
         return ESP_ERR_NO_MEM;
     }
 
     s_ecm.glue = iot_eth_new_netif_glue(s_ecm.eth);
     if (s_ecm.glue == NULL) {
         ESP_LOGE(TAG, "Failed to create netif glue");
-        wan_ecm_teardown();
+        wan_ecm_teardown_locked();
         return ESP_ERR_NO_MEM;
     }
 
     err = esp_netif_attach(s_ecm.netif, s_ecm.glue);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to attach netif glue: %s", esp_err_to_name(err));
-        wan_ecm_teardown();
+        wan_ecm_teardown_locked();
         return err;
     }
 
     err = iot_eth_start(s_ecm.eth);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start ECM driver: %s", esp_err_to_name(err));
-        wan_ecm_teardown();
+        wan_ecm_teardown_locked();
         return err;
     }
 
@@ -277,21 +322,37 @@ esp_err_t wan_ecm_bring_up(void)
     cpe_status_get(&st);
     if (st.link_up && s_ecm.netif != NULL) {
         ESP_LOGI(TAG, "ECM link was already up, re-syncing the netif");
-        esp_netif_action_connected(s_ecm.netif, NULL, 0, NULL);
+        (void)esp_netif_tcpip_exec(netif_action_connected, s_ecm.netif);
     }
 
     ESP_LOGI(TAG, "ECM driver ready, waiting for the USB modem");
     return ESP_OK;
 }
 
+esp_err_t wan_ecm_bring_up(void)
+{
+    ecm_lock();
+    esp_err_t err = wan_ecm_bring_up_locked();
+    ecm_unlock();
+    return err;
+}
+
 esp_netif_t *wan_ecm_netif(void)
 {
-    return s_ecm.netif;
+    esp_netif_t *netif;
+    ecm_lock();
+    netif = s_ecm.netif;
+    ecm_unlock();
+    return netif;
 }
 
 iot_eth_handle_t wan_ecm_eth_handle(void)
 {
-    return s_ecm.eth;
+    iot_eth_handle_t eth;
+    ecm_lock();
+    eth = s_ecm.eth;
+    ecm_unlock();
+    return eth;
 }
 
 /* Restart the DHCP client on the ECM netif without touching the USB/ECM
@@ -433,6 +494,13 @@ bool wan_usb_device_present(void)
 
 esp_err_t cpe_wan_start(void)
 {
+    if (s_ecm_lock == NULL) {
+        s_ecm_lock = xSemaphoreCreateRecursiveMutex();
+        if (s_ecm_lock == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     esp_err_t err = wan_boot_reset_module();
     if (err != ESP_OK) {
         return err;
