@@ -27,7 +27,10 @@
 | 1.6 ECM 句柄并发保护 | **部分完成，锁已回退** | 见下节 |
 | 2.1 延迟重启统一入口 | 完成 | `14af5e6` |
 | 2.2 恢复出厂统一入口 | 完成 | `5d5e5f7` |
-| 2.3–2.6 | 未开始 | — |
+| 2.3 `app_wifi_sta_disconnect()` | 完成 | `6e143a7` |
+| 2.4 Kconfig 归位 | 完成 | `703ade8` |
+| 2.5 会话/路由表收敛 | 未开始 | — |
+| 2.6 统一 NVS helper | 完成 | `e3a8bd4` |
 | 批次 3（3.1–3.8） | 未开始 | — |
 | 批次 4（清理 10 项） | 未开始 | — |
 
@@ -53,6 +56,7 @@
 | `79931a2` | 更新上游 DNS 时不再重启 DHCP 服务器（避免 IP 重复分配） |
 | `ab17e41` | DHCP 的 DNS 选项改为开机时启用：`OP_SET` 在服务器运行期间必返 `ALREADY_STARTED`，运行时只校验 |
 | `bcca642` | CDC 驱动安装提前到 `cpe_wan_start()`，消除 AT 事件注册的开机竞态 |
+| `0fb6a11` | AT 复位超时由头文件硬编码改为 Kconfig（`CPE_AT_MODEM_RESET_TIMEOUT_MS`，默认 3000，范围 1000–10000） |
 
 ### 与计划的偏差
 
@@ -62,6 +66,12 @@
   5 处调用点中 4 处已改用它；`link_manager` 的受控重启保持内联（需停在自身循环里）。
 - **2.2**：`cpe_system_factory_reset()` 落在 `cpe_core`，跨组件清理（站点昵称、维护策略）
   通过注册钩子完成，同时修掉审计 A7 的反向依赖（`cpe_config` 不再直接清启动计数）。
+- **2.4**：按"谁读谁拥有"归位，选项名与默认值/范围一律不变（现有 `sdkconfig` 取值不受影响）：
+  `CPE_USB_TASK_*`/`CPE_LINK_*`/`CPE_IP_*` → `components/cpe_wan/Kconfig.projbuild`；
+  `CPE_MAX_REBOOTS`/`CPE_HEALTHY_CLEAR_SECONDS`/`CPE_MAINT_*` → `components/cpe_maintenance/`
+  （`CPE_MAX_REBOOTS` 仍由 `link_manager` 读取，仅菜单归属移动，与健康计数归为一组）；
+  `CPE_AT_*` → `components/cpe_at/`。板级 GPIO、USB 枚举、OTA 与恢复重试等应用级选项
+  暂留 `main/Kconfig.projbuild`。
 
 ---
 
