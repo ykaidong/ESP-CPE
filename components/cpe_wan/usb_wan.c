@@ -163,12 +163,14 @@ static esp_err_t usb_root_port_power_cycle(uint32_t off_ms)
  * which blocks until the callback has run in the TCP/IP context. */
 static esp_err_t netif_action_stop(void *ctx)
 {
-    return esp_netif_action_stop(ctx, NULL, 0, NULL);
+    esp_netif_action_stop(ctx, NULL, 0, NULL);
+    return ESP_OK;
 }
 
 static esp_err_t netif_action_connected(void *ctx)
 {
-    return esp_netif_action_connected(ctx, NULL, 0, NULL);
+    esp_netif_action_connected(ctx, NULL, 0, NULL);
+    return ESP_OK;
 }
 
 /* Body of wan_ecm_teardown(); the caller must hold s_ecm_lock. */
