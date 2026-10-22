@@ -295,8 +295,11 @@ var CPE = (function () {
             return;
         }
         menuButton.addEventListener('click', function () {
-            var hidden = menu.style.display === 'none';
-            menu.style.display = hidden ? 'block' : 'none';
+            /* The menu starts hidden via CSS (display:none), not an inline
+             * style, so check the computed value instead of style.display. */
+            var open = window.getComputedStyle(menu).display === 'none';
+            menu.style.display = open ? 'block' : 'none';
+            menuButton.className = open ? 'header-menu menu-open' : 'header-menu';
         });
     }
 

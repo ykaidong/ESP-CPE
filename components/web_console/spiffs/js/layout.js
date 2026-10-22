@@ -27,11 +27,31 @@
         }
         header.className = withMenu ? 'header-base flex flex-jcb' : 'header-base';
 
+        var brand = document.createElement('div');
+        brand.className = 'header-brand';
+
         var logo = document.createElement('img');
-        logo.className = 'header-logo';
-        logo.src = './img/logoBlack.png';
-        logo.alt = 'logo';
-        header.appendChild(logo);
+        logo.className = 'header-brand-logo';
+        logo.src = './img/celllink.svg';
+        logo.alt = 'CellLink';
+
+        var brandText = document.createElement('div');
+        brandText.className = 'header-brand-text';
+
+        var brandName = document.createElement('span');
+        brandName.className = 'header-brand-name';
+        brandName.textContent = 'ESP-CPE';
+
+        var brandSub = document.createElement('span');
+        brandSub.className = 'header-brand-sub';
+        brandSub.textContent = '管理后台';
+
+        brandText.appendChild(brandName);
+        brandText.appendChild(brandSub);
+
+        brand.appendChild(logo);
+        brand.appendChild(brandText);
+        header.appendChild(brand);
 
         if (withMenu) {
             var menuButton = document.createElement('div');
