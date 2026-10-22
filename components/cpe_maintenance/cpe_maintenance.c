@@ -28,6 +28,7 @@
 
 #include "cpe_core.h"
 #include "cpe_ota.h"
+#include "cpe_system.h"
 #include "cpe_wan.h"
 
 #include "cpe_maintenance.h"
@@ -465,6 +466,14 @@ static void maintenance_task(void *arg)
     }
 }
 
+/* The maintenance policy is not part of the security configuration, but a
+ * factory reset must return every user visible setting to its default. Both
+ * reset paths (web console and the physical button) run this hook. */
+static void factory_reset_hook(void)
+{
+    (void)cpe_maint_config_reset();
+}
+
 esp_err_t cpe_maintenance_start(void)
 {
     if (s_started) {
@@ -485,6 +494,13 @@ esp_err_t cpe_maintenance_start(void)
         return ESP_ERR_NO_MEM;
     }
     s_started = true;
+
+    esp_err_t hook_err = cpe_system_register_factory_reset_hook(factory_reset_hook,
+                                                               "maintenance");
+    if (hook_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to register the factory-reset hook: %s",
+                 esp_err_to_name(hook_err));
+    }
 
     if (cfg.ecm_period_min == 0 && cfg.reboot_period_min == 0) {
         ESP_LOGI(TAG, "Periodic maintenance is disabled (both periods are 0), "

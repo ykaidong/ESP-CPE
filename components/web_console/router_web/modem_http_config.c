@@ -36,6 +36,7 @@
 
 #include "app_wifi.h"
 #include "cpe_auth.h"
+#include "cpe_system.h"
 #include "http_internal.h"
 #include "cpe_web.h"
 
@@ -303,6 +304,15 @@ esp_err_t modem_http_start(void)
     err = cpe_web_station_registry_init();
     if (err != ESP_OK) {
         goto fail;
+    }
+
+    /* Both factory-reset paths (this console and the reset button) must clear
+     * the station nicknames, so the console hooks its own erase function into
+     * the shared reset sequence. */
+    err = cpe_system_register_factory_reset_hook(cpe_web_station_names_erase_all,
+                                                 "web console");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to register the factory-reset hook: %s", esp_err_to_name(err));
     }
 
     /* Mark before the first registration so the error path disables the

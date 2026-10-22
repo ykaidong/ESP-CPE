@@ -30,8 +30,8 @@
 #include "esp_timer.h"
 
 #include "cpe_config.h"
+#include "cpe_system.h"
 #include "cpe_wan.h"
-#include "cpe_web.h"
 #include "reset_button.h"
 #include "status_led.h"
 
@@ -122,13 +122,13 @@ static void reset_button_task(void *arg)
             status_led_factory_reset();
             ESP_LOGW(TAG, "Reset button held for %d ms, restoring factory settings",
                      CONFIG_CPE_FACTORY_RESET_HOLD_MS);
-            esp_err_t err = cpe_config_factory_reset();
+            /* Same call as the web console: configuration, station nicknames,
+             * the maintenance policy and the recovery budget are all cleared
+             * there, so both paths leave the same state behind. */
+            esp_err_t err = cpe_system_factory_reset();
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Factory reset failed: %s; rebooting anyway",
                          esp_err_to_name(err));
-            } else {
-                /* Keep the same end state as the web console path. */
-                cpe_web_station_names_erase_all();
             }
             ESP_LOGW(TAG, "Reboot blocked while the button is held: GPIO0 must be "
                      "released before reset, otherwise the ROM enters UART download mode");

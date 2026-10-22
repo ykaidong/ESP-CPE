@@ -15,7 +15,6 @@
 
 #include "cpe_config.h"
 #include "cpe_config_priv.h"
-#include "cpe_recovery.h"
 #include "cpe_ct.h"
 
 static const char *TAG = "cpe_config";
@@ -440,9 +439,9 @@ esp_err_t cpe_config_factory_reset(void)
     memset(&next, 0, sizeof(next));
     xSemaphoreGiveRecursive(s_cfg.lock);
     if (err == ESP_OK) {
-        /* A factory reset also clears the persistent recovery budget, so the
-         * device gets a fresh set of bounded recovery attempts. */
-        (void)cpe_boot_count_clear();
+        /* The persistent recovery budget is cleared by
+         * cpe_system_factory_reset(): keeping it out of the configuration layer
+         * avoids cpe_core depending on the recovery section (audit A7). */
         /* The credentials are printed on the next boot when the reset button
          * is held down while the application starts (only while the admin
          * password has not been changed). */

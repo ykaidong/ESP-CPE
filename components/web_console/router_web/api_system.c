@@ -16,8 +16,8 @@
 #include "esp_system.h"
 
 #include "cpe_auth.h"
-#include "cpe_config.h"
 #include "cpe_maintenance.h"
+#include "cpe_system.h"
 #include "cpe_wan.h"
 #include "cpe_web.h"
 #include "http_internal.h"
@@ -80,17 +80,15 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
     }
     cpe_web_post_end(&ctx);
 
-    err = cpe_config_factory_reset();
+    /* Same call as the reset button: configuration, station nicknames, the
+     * maintenance policy and the recovery budget are all cleared there. */
+    err = cpe_system_factory_reset();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Factory reset failed: %s", esp_err_to_name(err));
         return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
                                            "factory_reset_failed", false);
     }
 
-    cpe_web_station_names_erase_all();
-    /* The maintenance policy is not part of the security configuration, but a
-     * factory reset must return every user visible setting to its default. */
-    (void)cpe_maint_config_reset();
     cpe_auth_logout_all();
     (void)cpe_web_clear_session_cookie(req);
     cpe_web_clear_csrf_cookie(req);
