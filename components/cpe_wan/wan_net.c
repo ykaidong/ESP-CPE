@@ -9,6 +9,7 @@
 #include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
@@ -164,6 +165,20 @@ void wan_link_offline(void)
     }
 }
 
+/* Re-applying NAPT/DNS blocks on the TCP/IP thread (esp_netif_get_ip_info(),
+ * esp_netif_get/set_dns_info()) and deauthenticates every station, so it must
+ * not run in the event loop task: everything else posted to the default event
+ * loop (Wi-Fi, IP, link manager notifications) would wait behind it. */
+#define AP_REAPPLY_TASK_STACK        4096
+#define AP_REAPPLY_TASK_PRIO         5
+
+static void ap_reapply_task(void *arg)
+{
+    (void)arg;
+    wan_link_online();
+    vTaskDelete(NULL);
+}
+
 /* Reconfiguring the SoftAP restarts it, and the Wi-Fi default handler removes
  * and re-adds the lwIP netif. netif_add() resets netif->napt to 0, and
  * ip_napt_forward() is a no-op unless the input netif has napt set, so every
@@ -185,7 +200,11 @@ static void on_ap_start_reapply_napt(void *arg, esp_event_base_t base,
         return;
     }
     ESP_LOGI(TAG, "SoftAP restarted; re-applying NAPT and upstream DNS");
-    wan_link_online();
+    if (xTaskCreate(ap_reapply_task, "cpe_ap_reapply", AP_REAPPLY_TASK_STACK, NULL,
+                    AP_REAPPLY_TASK_PRIO, NULL) != pdPASS) {
+        ESP_LOGW(TAG, "No memory for the NAPT task, re-applying from the event loop");
+        wan_link_online();
+    }
 }
 
 /* ------------------------------------------------------------------------- */
