@@ -13,7 +13,6 @@
 #include <inttypes.h>
 
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "driver/gpio.h"
@@ -46,27 +45,6 @@ typedef struct {
 
 static ecm_ctx_t s_ecm;
 static bool s_cdc_installed;
-
-/* s_ecm is written by the link manager task (wan_ecm_teardown() /
- * wan_ecm_bring_up()) and read from the event loop and from the NAPT task
- * (wan_ecm_netif() / wan_ecm_eth_handle()), so readers must not observe it
- * while the driver and the netif are being destroyed. The mutex is recursive
- * because wan_ecm_bring_up() finishes a previous teardown while holding it. */
-static SemaphoreHandle_t s_ecm_lock;
-
-static void ecm_lock(void)
-{
-    if (s_ecm_lock != NULL) {
-        xSemaphoreTakeRecursive(s_ecm_lock, portMAX_DELAY);
-    }
-}
-
-static void ecm_unlock(void)
-{
-    if (s_ecm_lock != NULL) {
-        xSemaphoreGiveRecursive(s_ecm_lock);
-    }
-}
 
 /* ------------------------------------------------------------------------- */
 /* USB host / CDC driver                                                     */
@@ -173,8 +151,7 @@ static esp_err_t netif_action_connected(void *ctx)
     return ESP_OK;
 }
 
-/* Body of wan_ecm_teardown(); the caller must hold s_ecm_lock. */
-static void wan_ecm_teardown_locked(void)
+void wan_ecm_teardown(void)
 {
     if (!s_ecm.ready && s_ecm.eth == NULL) {
         return;
@@ -227,15 +204,7 @@ static void wan_ecm_teardown_locked(void)
     cpe_status_set_ip(NULL);
 }
 
-void wan_ecm_teardown(void)
-{
-    ecm_lock();
-    wan_ecm_teardown_locked();
-    ecm_unlock();
-}
-
-/* Body of wan_ecm_bring_up(); the caller must hold s_ecm_lock. */
-static esp_err_t wan_ecm_bring_up_locked(void)
+esp_err_t wan_ecm_bring_up(void)
 {
     if (s_ecm.ready) {
         return ESP_OK;
@@ -243,7 +212,7 @@ static esp_err_t wan_ecm_bring_up_locked(void)
     /* A previous teardown may have left an uninstall retry pending: finish it
      * before creating a second instance. */
     if (s_ecm.eth != NULL) {
-        wan_ecm_teardown_locked();
+        wan_ecm_teardown();
         if (s_ecm.eth != NULL) {
             return ESP_ERR_INVALID_STATE;
         }
@@ -282,28 +251,28 @@ static esp_err_t wan_ecm_bring_up_locked(void)
     s_ecm.netif = esp_netif_new(&netif_config);
     if (s_ecm.netif == NULL) {
         ESP_LOGE(TAG, "Failed to create ECM netif");
-        wan_ecm_teardown_locked();
+        wan_ecm_teardown();
         return ESP_ERR_NO_MEM;
     }
 
     s_ecm.glue = iot_eth_new_netif_glue(s_ecm.eth);
     if (s_ecm.glue == NULL) {
         ESP_LOGE(TAG, "Failed to create netif glue");
-        wan_ecm_teardown_locked();
+        wan_ecm_teardown();
         return ESP_ERR_NO_MEM;
     }
 
     err = esp_netif_attach(s_ecm.netif, s_ecm.glue);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to attach netif glue: %s", esp_err_to_name(err));
-        wan_ecm_teardown_locked();
+        wan_ecm_teardown();
         return err;
     }
 
     err = iot_eth_start(s_ecm.eth);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start ECM driver: %s", esp_err_to_name(err));
-        wan_ecm_teardown_locked();
+        wan_ecm_teardown();
         return err;
     }
 
@@ -331,30 +300,14 @@ static esp_err_t wan_ecm_bring_up_locked(void)
     return ESP_OK;
 }
 
-esp_err_t wan_ecm_bring_up(void)
-{
-    ecm_lock();
-    esp_err_t err = wan_ecm_bring_up_locked();
-    ecm_unlock();
-    return err;
-}
-
 esp_netif_t *wan_ecm_netif(void)
 {
-    esp_netif_t *netif;
-    ecm_lock();
-    netif = s_ecm.netif;
-    ecm_unlock();
-    return netif;
+    return s_ecm.netif;
 }
 
 iot_eth_handle_t wan_ecm_eth_handle(void)
 {
-    iot_eth_handle_t eth;
-    ecm_lock();
-    eth = s_ecm.eth;
-    ecm_unlock();
-    return eth;
+    return s_ecm.eth;
 }
 
 /* Restart the DHCP client on the ECM netif without touching the USB/ECM
@@ -496,16 +449,18 @@ bool wan_usb_device_present(void)
 
 esp_err_t cpe_wan_start(void)
 {
-    if (s_ecm_lock == NULL) {
-        s_ecm_lock = xSemaphoreCreateRecursiveMutex();
-        if (s_ecm_lock == NULL) {
-            return ESP_ERR_NO_MEM;
-        }
-    }
-
     esp_err_t err = wan_boot_reset_module();
     if (err != ESP_OK) {
         return err;
     }
+
+    /* Install the USB host/CDC driver here instead of leaving it to the first
+     * link manager tick: app_main starts the AT telemetry right after this, and
+     * its USB device event registration fails until the driver exists. Not
+     * fatal on error - lm_ensure_ready() retries every 5 s. */
+    if (wan_usb_cdc_install() != ESP_OK) {
+        ESP_LOGW(TAG, "USB CDC driver not installed yet, the link manager will retry");
+    }
+
     return wan_link_manager_start();
 }
