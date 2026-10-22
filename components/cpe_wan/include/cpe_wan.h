@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -61,6 +63,16 @@ esp_err_t cpe_wan_start(void);
  * once at the end of boot.
  */
 void cpe_wan_log_heap(const char *reason);
+
+/**
+ * @brief Reboot the device after the standard pre-restart cleanup.
+ *
+ * Optionally resets the modem (best effort) so it re-enumerates cleanly after
+ * the ESP boots, then deauthenticates every SoftAP station. Never returns.
+ *
+ * @param reset_modem_first  Send AT+CFUN=1,1 before deauthenticating/restarting.
+ */
+void cpe_wan_reboot(bool reset_modem_first);
 
 #ifdef __cplusplus
 }

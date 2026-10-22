@@ -12,10 +12,9 @@
 #include "esp_log.h"
 #include "esp_system.h"
 
-#include "app_wifi.h"
-#include "cpe_at.h"
 #include "cpe_auth.h"
 #include "cpe_config.h"
+#include "cpe_wan.h"
 #include "cpe_web.h"
 #include "http_internal.h"
 
@@ -57,14 +56,7 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 
     /* Give the response a chance to leave the socket before restarting. */
     vTaskDelay(pdMS_TO_TICKS(500));
-    /* Reset the modem first so it re-enumerates cleanly after the ESP boots;
-     * best effort, never blocks the restart beyond the bounded wait. */
-    esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
-    if (modem_err != ESP_OK) {
-        ESP_LOGW(TAG, "Modem reset did not succeed (%s)", esp_err_to_name(modem_err));
-    }
-    app_wifi_deauth_all_stations();
-    esp_restart();
+    cpe_wan_reboot(true);
     return err;
 }
 
@@ -88,13 +80,7 @@ static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
 
     ESP_LOGW(TAG, "Reboot requested from the web console");
     vTaskDelay(pdMS_TO_TICKS(500));
-    /* Reset the modem first so it re-enumerates cleanly after the ESP boots. */
-    esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
-    if (modem_err != ESP_OK) {
-        ESP_LOGW(TAG, "Modem reset did not succeed (%s)", esp_err_to_name(modem_err));
-    }
-    app_wifi_deauth_all_stations();
-    esp_restart();
+    cpe_wan_reboot(true);
     return err;
 }
 

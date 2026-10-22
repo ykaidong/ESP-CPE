@@ -15,9 +15,8 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 
-#include "app_wifi.h"
-#include "cpe_at.h"
 #include "cpe_ota.h"
+#include "cpe_wan.h"
 #include "http_internal.h"
 
 static const char *TAG = "cpe_web";
@@ -289,13 +288,7 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     /* Let the response leave the socket, then boot the new image. */
     ESP_LOGW(TAG, "Firmware update stored, restarting into the new image");
     vTaskDelay(pdMS_TO_TICKS(800));
-    /* Reset the modem first so it re-enumerates cleanly after the ESP boots. */
-    esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
-    if (modem_err != ESP_OK) {
-        ESP_LOGW(TAG, "Modem reset did not succeed (%s)", esp_err_to_name(modem_err));
-    }
-    app_wifi_deauth_all_stations();
-    esp_restart();
+    cpe_wan_reboot(true);
     return err;
 }
 

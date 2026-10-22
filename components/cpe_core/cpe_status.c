@@ -22,20 +22,22 @@ static SemaphoreHandle_t s_lock;
 static int64_t s_boot_us;
 static bool s_inited;
 
-void cpe_status_init(void)
+esp_err_t cpe_status_init(void)
 {
     if (s_inited) {
-        return;
+        return ESP_OK;
     }
     s_lock = xSemaphoreCreateMutex();
+    if (s_lock == NULL) {
+        ESP_LOGE(TAG, "Failed to create status mutex");
+        return ESP_ERR_NO_MEM;
+    }
     memset(&s_status, 0, sizeof(s_status));
     s_status.state = CPE_STATE_BOOT;
     snprintf(s_status.state_text, sizeof(s_status.state_text), "booting");
     s_boot_us = esp_timer_get_time();
-    s_inited = (s_lock != NULL);
-    if (!s_inited) {
-        ESP_LOGE(TAG, "Failed to create status mutex");
-    }
+    s_inited = true;
+    return ESP_OK;
 }
 
 void cpe_status_set_state(cpe_state_t state, const char *fmt, ...)

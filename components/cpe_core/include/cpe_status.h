@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "esp_err.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -56,7 +58,9 @@ typedef struct {
     char last_error[96];
 } cpe_status_t;
 
-void cpe_status_init(void);
+/** Initialize the status snapshot. Returns ESP_ERR_NO_MEM when the mutex
+ *  cannot be created. */
+esp_err_t cpe_status_init(void);
 
 /** Update the state (and its human readable text, printf style). */
 void cpe_status_set_state(cpe_state_t state, const char *fmt, ...);

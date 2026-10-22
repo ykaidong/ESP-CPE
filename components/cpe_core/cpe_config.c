@@ -278,6 +278,22 @@ esp_err_t cpe_config_update(cpe_config_mutator_t mutate, void *ctx)
     return err;
 }
 
+/* Derive the PBKDF2 hash of `password` with `salt` and compare it against
+ * `expected` in constant time. The caller copies salt/expected out of the
+ * configuration under the lock first (PBKDF2 is long running). */
+static bool pbkdf2_matches(const char *password,
+                           const uint8_t salt[CPE_ADMIN_SALT_LEN],
+                           const uint8_t expected[CPE_ADMIN_HASH_LEN])
+{
+    uint8_t hash[CPE_ADMIN_HASH_LEN];
+    bool match = false;
+    if (cpe_config_store_pbkdf2(password, salt, CPE_ADMIN_SALT_LEN, hash) == ESP_OK) {
+        match = cpe_ct_equal(hash, expected, sizeof(hash));
+    }
+    memset(hash, 0, sizeof(hash));
+    return match;
+}
+
 bool cpe_config_check_admin_password(const char *password)
 {
     if (!s_cfg.inited || password == NULL) {
@@ -293,12 +309,7 @@ bool cpe_config_check_admin_password(const char *password)
     memcpy(expected, s_cfg.state.adm_hash, sizeof(expected));
     xSemaphoreGiveRecursive(s_cfg.lock);
 
-    uint8_t hash[CPE_ADMIN_HASH_LEN];
-    bool ok = false;
-    if (cpe_config_store_pbkdf2(password, salt, sizeof(salt), hash) == ESP_OK) {
-        ok = cpe_ct_equal(hash, expected, sizeof(hash));
-    }
-    memset(hash, 0, sizeof(hash));
+    bool ok = pbkdf2_matches(password, salt, expected);
     memset(salt, 0, sizeof(salt));
     memset(expected, 0, sizeof(expected));
     return ok;
@@ -367,12 +378,7 @@ bool cpe_config_admin_password_is_ap_password(void)
     memcpy(expected, s_cfg.state.adm_hash, sizeof(expected));
     xSemaphoreGiveRecursive(s_cfg.lock);
 
-    uint8_t hash[CPE_ADMIN_HASH_LEN];
-    bool match = false;
-    if (cpe_config_store_pbkdf2(ap_password, salt, sizeof(salt), hash) == ESP_OK) {
-        match = cpe_ct_equal(hash, expected, sizeof(hash));
-    }
-    memset(hash, 0, sizeof(hash));
+    bool match = pbkdf2_matches(ap_password, salt, expected);
     memset(ap_password, 0, sizeof(ap_password));
     memset(salt, 0, sizeof(salt));
     memset(expected, 0, sizeof(expected));
@@ -429,11 +435,9 @@ esp_err_t cpe_config_factory_reset(void)
          * when rewriting the defaults failed. */
         s_cfg.state = next;
         s_cfg.reset_pending_reboot = true;
-    }
-    memset(&next, 0, sizeof(next));
-    if (err == ESP_OK) {
         s_cfg.first_boot = true;
     }
+    memset(&next, 0, sizeof(next));
     xSemaphoreGiveRecursive(s_cfg.lock);
     if (err == ESP_OK) {
         /* A factory reset also clears the persistent recovery budget, so the

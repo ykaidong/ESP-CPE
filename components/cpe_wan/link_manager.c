@@ -32,18 +32,13 @@ static const char *TAG = "cpe";
 /* Heap watermark helper: free heap alone is not enough to spot a leak or
  * fragmentation, so also log the historical minimum and the largest internal
  * block. Only called on link transitions and once at boot. */
-void wan_log_heap(const char *reason)
+void cpe_wan_log_heap(const char *reason)
 {
     ESP_LOGI(TAG, "heap (%s): free=%u min=%u largest_internal=%u",
              reason,
              (unsigned)esp_get_free_heap_size(),
              (unsigned)esp_get_minimum_free_heap_size(),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-}
-
-void cpe_wan_log_heap(const char *reason)
-{
-    wan_log_heap(reason);
 }
 
 /* Sleep in 500 ms slices, returning early if the 4G link comes up (e.g. the
@@ -149,7 +144,7 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
             ctx->usb_attempts = 0;
             ctx->ip_attempts = 0;
         }
-        wan_log_heap(st->link_up ? "link up" : "link down");
+        cpe_wan_log_heap(st->link_up ? "link up" : "link down");
     }
     if (st->got_ip != ctx->last_got_ip) {
         ctx->wait_start_us = now;
@@ -161,7 +156,7 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
         } else {
             wan_link_offline();
         }
-        wan_log_heap(st->got_ip ? "got ip" : "lost ip");
+        cpe_wan_log_heap(st->got_ip ? "got ip" : "lost ip");
     }
 }
 
@@ -275,6 +270,22 @@ static lm_tick_result_t lm_wait_for_modem(lm_ctx_t *ctx)
     return LM_TICK_ACTION;
 }
 
+/* Reboot the device after the standard pre-restart cleanup (see cpe_wan.h). */
+void cpe_wan_reboot(bool reset_modem_first)
+{
+    if (reset_modem_first) {
+        /* Reset the modem first so it re-enumerates cleanly after the ESP
+         * boots; best effort, an AT port that is already wedged does not block
+         * the restart. */
+        esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
+        if (modem_err != ESP_OK) {
+            ESP_LOGW(TAG, "Modem reset did not succeed (%s)", esp_err_to_name(modem_err));
+        }
+    }
+    app_wifi_deauth_all_stations();
+    esp_restart();
+}
+
 /* The modem is on the bus but the ECM link never came up: controlled reboot is
  * the last resort, bounded by the persistent boot counter. */
 static void lm_controlled_restart(uint32_t boot_count)
@@ -283,15 +294,7 @@ static void lm_controlled_restart(uint32_t boot_count)
              boot_count, CONFIG_CPE_MAX_REBOOTS);
     cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
     vTaskDelay(pdMS_TO_TICKS(1000));
-    /* Reset the modem first so it re-enumerates cleanly after the ESP boots.
-     * Best effort: an AT port that is already wedged does not block the
-     * restart. */
-    esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
-    if (modem_err != ESP_OK) {
-        ESP_LOGW(TAG, "Modem reset did not succeed (%s)", esp_err_to_name(modem_err));
-    }
-    app_wifi_deauth_all_stations();
-    esp_restart();
+    cpe_wan_reboot(true);
 }
 
 static lm_tick_result_t lm_escalate_usb_fault(lm_ctx_t *ctx)

@@ -35,4 +35,3 @@ void wan_link_offline(void);
 /* --- link_manager.c ------------------------------------------------------ */
 
 esp_err_t wan_link_manager_start(void);
-void wan_log_heap(const char *reason);
