@@ -396,6 +396,22 @@ esp_err_t app_wifi_apply(const cpe_config_t *cfg)
     wifi_bandwidth_t prev_bw = to_bandwidth(prev.ap_bandwidth);
     wifi_bandwidth_t new_bw = to_bandwidth(cfg->ap_bandwidth);
 
+    /* Changing any of these fields makes the driver restart the SoftAP with the
+     * same BSSID. A station that keeps its association (Windows in particular)
+     * then transmits with stale keys while the AP drops every frame, so the
+     * console looks unreachable until the user reconnects manually. Send a
+     * deauth first: it makes the stations really let go and rescan instead of
+     * assuming the link is still alive. Channel/bandwidth changes are excluded
+     * on purpose (the AP follows them without a restart). */
+    bool radio_restart = (strcmp(prev.ap_ssid, cfg->ap_ssid) != 0) ||
+                         (strcmp(prev.ap_password, cfg->ap_password) != 0) ||
+                         (prev.ap_hidden != cfg->ap_hidden) ||
+                         (prev.max_sta != cfg->max_sta);
+    if (radio_restart) {
+        ESP_LOGI(TAG, "SoftAP will restart, deauthenticating the stations first");
+        app_wifi_deauth_all_stations();
+    }
+
     err = esp_wifi_set_config(WIFI_IF_AP, &new_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to apply new AP configuration: %s", esp_err_to_name(err));
