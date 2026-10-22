@@ -68,8 +68,7 @@ idf.py -p COM6 flash monitor
 
 - 固件在 `link up/down`、`got/lost IP` 时**总是**打印：
   `heap (link down): free=... min=... largest_internal=...`
-- 周期性日志由 `CPE Application Configuration → Heap watermark log period (seconds)`
-  控制（默认 0=关闭；本机测试 sdkconfig 已设为 10 秒）。
+- 周期性堆水位日志已移除，只在链路转换时打印，避免长期运行刷屏。
 - 判读方法：
   - `free`：当前空闲堆；每轮插拔后应回到相近值；
   - `min`：开机以来历史最低值；反复插拔后若持续创新低，说明有内存未释放或碎片化；
@@ -260,7 +259,7 @@ I (31301) cpe: USB root port powered off for 1000 ms
   `usb_host_device_addr_list_fill()` 判定设备存在；无设备时按上限重试并保持 FAULT（AP/Web 常驻）；
 - Web：管理面仅绑定 SoftAP 网口、会话 + CSRF、登录锁定与指数退避、请求体/JSON 校验、XSS 白名单；
   安全自动化回归全部 PASS；
-- 诊断：`CPE_HEAP_LOG_PERIOD_S` 堆水位日志、`scripts/serial_log_check.ps1`、`scripts/web_security_test.py`。
+- 诊断：链路转换时的堆水位日志、`scripts/serial_log_check.ps1`、`scripts/web_security_test.py`。
 
 **未完成/受阻（不阻塞 Phase 3 代码工作）**：
 

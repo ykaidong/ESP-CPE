@@ -30,7 +30,7 @@ static const char *TAG = "cpe";
 
 /* Heap watermark helper: free heap alone is not enough to spot a leak or
  * fragmentation, so also log the historical minimum and the largest internal
- * block. Called on link transitions and periodically when enabled. */
+ * block. Only called on link transitions and once at boot. */
 void wan_log_heap(const char *reason)
 {
     ESP_LOGI(TAG, "heap (%s): free=%u min=%u largest_internal=%u",
@@ -86,7 +86,6 @@ typedef struct {
     uint32_t dhcp_restarts;
     int64_t wait_start_us;
     int64_t online_start_us;
-    int64_t next_heap_log_us;
     bool was_online;
     bool last_link_up;
     bool last_got_ip;
@@ -163,15 +162,6 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
         }
         wan_log_heap(st->got_ip ? "got ip" : "lost ip");
     }
-
-#if CONFIG_CPE_HEAP_LOG_PERIOD_S > 0
-    if (ctx->next_heap_log_us == 0) {
-        ctx->next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
-    } else if (now >= ctx->next_heap_log_us) {
-        wan_log_heap("periodic");
-        ctx->next_heap_log_us = now + (int64_t)CONFIG_CPE_HEAP_LOG_PERIOD_S * 1000000LL;
-    }
-#endif
 }
 
 static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
