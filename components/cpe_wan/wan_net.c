@@ -11,7 +11,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "dhcpserver/dhcpserver.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -93,18 +92,24 @@ static void wan_apply_upstream_dns(void)
         return;
     }
 
-    /* The server is NEVER stopped here. dhcps_stop() frees the whole lease
+    /* The server is NEVER stopped here: dhcps_stop() frees the whole lease
      * table and dhcps_start() resets the allocation cursor to the first
      * address, so a station that is already using an address keeps it while the
      * server hands the very same address out to the next client: two stations
      * end up with one IP (and the station registry reports "Duplicate IP").
-     * Both calls below only write fields of the running server, no restart is
-     * needed for them. */
-    dhcps_offer_t offer_dns = OFFER_DNS;
-    esp_err_t err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER,
+     *
+     * That also means OFFER_DNS cannot be enabled here: OP_SET is refused with
+     * ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED while the server runs. app_wifi
+     * enables it once before the server starts; below only the DNS *address* is
+     * refreshed, which does work on a running server. */
+    /* OP_GET reports a boolean (1 = the OFFER_DNS bit is set), not the
+     * dhcps_offer_t mask, so compare against 0. */
+    uint8_t offer_dns = 0;
+    esp_err_t err = esp_netif_dhcps_option(ap, ESP_NETIF_OP_GET, ESP_NETIF_DOMAIN_NAME_SERVER,
                                            &offer_dns, sizeof(offer_dns));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to enable the DHCP DNS option: %s", esp_err_to_name(err));
+    if (err != ESP_OK || offer_dns == 0) {
+        ESP_LOGW(TAG, "AP DHCP server does not offer DNS (option %u, %s)",
+                 (unsigned)offer_dns, esp_err_to_name(err));
     }
 
     /* Nothing to do when the value is already the one the server offers: this

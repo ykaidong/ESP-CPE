@@ -150,7 +150,17 @@ static esp_err_t ap_apply_static_ip(esp_netif_t *ap_netif)
  * be applied after ap_apply_static_ip(): restarting the server keeps the option
  * but not a previous change made on another instance.
  */
-static esp_err_t ap_apply_dhcp_lease(esp_netif_t *ap_netif)
+/* DHCP options that can only be written while the server is stopped:
+ * esp_netif_dhcps_option(ESP_NETIF_OP_SET, ...) refuses every change once the
+ * server runs (ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED). This is called before
+ * esp_wifi_start(), so no station is connected and there is no lease table to
+ * preserve - unlike a runtime stop/start, which frees the lease table and makes
+ * the server hand out addresses that are still in use.
+ *
+ * OFFER_DNS is enabled once here; the WAN side only refreshes the DNS *address*
+ * at runtime with esp_netif_set_dns_info(), which does work on a running
+ * server. */
+static esp_err_t ap_configure_dhcp_server(esp_netif_t *ap_netif)
 {
     dhcps_time_t lease_time = APP_WIFI_DHCP_LEASE_S;
 
@@ -166,6 +176,14 @@ static esp_err_t ap_apply_dhcp_lease(esp_netif_t *ap_netif)
     if (err != ESP_OK) {
         /* Non-fatal: the server keeps the IDF default lease time. */
         ESP_LOGW(TAG, "Failed to set the DHCP lease time: %s", esp_err_to_name(err));
+    }
+
+    dhcps_offer_t offer_dns = OFFER_DNS;
+    esp_err_t dns_err = esp_netif_dhcps_option(ap_netif, ESP_NETIF_OP_SET,
+                                              ESP_NETIF_DOMAIN_NAME_SERVER,
+                                              &offer_dns, sizeof(offer_dns));
+    if (dns_err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to enable the DHCP DNS option: %s", esp_err_to_name(dns_err));
     }
 
     esp_err_t start_err = esp_netif_dhcps_start(ap_netif);
@@ -283,7 +301,7 @@ esp_err_t app_wifi_start(void)
     }
 
     /* Bounded lease + a table big enough for max_sta: see the #error above. */
-    err = ap_apply_dhcp_lease(s_ap_netif);
+    err = ap_configure_dhcp_server(s_ap_netif);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Continuing with the default DHCP lease time");
     }
