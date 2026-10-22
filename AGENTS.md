@@ -21,7 +21,7 @@
 
 ## 2. 其他既有约定
 
-- 设备/模组：ESP32-S3 + 16MB Flash + 通用 USB ECM 模组。AT 仅用于可选只读遥测（`components/cpe_at/`），ECM 数据链路不依赖 AT。
+- 设备/模组：ESP32-S3 + 16MB Flash + 通用 USB ECM 模组。AT 用于可选遥测（`components/cpe_at/`），并在主动重启前以 `AT+CFUN=1,1` 尽力复位模组；ECM 数据链路不依赖 AT。
 - 阶段推进：每阶段 `idf.py build` 通过（默认用户手动，AI 仅在明确指定时执行）后再进入下一阶段；当前进度见 `docs/IMPLEMENTATION_PLAN.md`。
 - 不提交 `sdkconfig`/`sdkconfig.old`；关键配置写入 `sdkconfig.defaults*`。
 - 本地 fork：`components/iot_usbh_cdc`（3.1.5）、`components/iot_usbh_ecm`（0.4.4），修改需更新 CHANGELOG 与版本。

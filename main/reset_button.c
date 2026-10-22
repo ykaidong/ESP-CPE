@@ -30,6 +30,7 @@
 #include "esp_timer.h"
 
 #include "app_wifi.h"
+#include "cpe_at.h"
 #include "cpe_config.h"
 #include "cpe_web.h"
 #include "reset_button.h"
@@ -138,6 +139,13 @@ static void reset_button_task(void *arg)
             ESP_LOGW(TAG, "Rebooting; double-click within %d ms after boot to print "
                      "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
             vTaskDelay(pdMS_TO_TICKS(300));
+            /* Reset the modem first so it re-enumerates cleanly after the ESP
+             * boots; best effort and bounded. */
+            esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
+            if (modem_err != ESP_OK) {
+                ESP_LOGW(TAG, "Modem reset did not succeed (%s)",
+                         esp_err_to_name(modem_err));
+            }
             app_wifi_deauth_all_stations();
             esp_restart();
         }

@@ -3,12 +3,13 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Read-only AT telemetry.
+ * AT telemetry, plus a modem reset on request.
  *
  * The ECM driver owns the network data port; this component opens a second CDC
  * port on the modem AT interface (vendor specific or CDC-ACM) and polls the
- * signal/registration information into cpe_status. Only read-only commands are
- * sent, so this cannot change the state of the data connection.
+ * signal/registration information into cpe_status. Telemetry uses read-only
+ * commands only; the single exception is AT+CFUN=1,1, sent from this task when
+ * a deliberate ESP restart asks for the modem to be reset as well.
  *
  * Enumeration is handled by the CDC device event callback: it only parses the
  * configuration descriptor and wakes the AT task, which then probes the
@@ -49,9 +50,26 @@ typedef struct {
     bool cdc_acm;
 } at_candidate_t;
 
+/* Restart-triggered modem reset: IDLE -> PENDING (caller) -> RUNNING (task),
+ * then back to IDLE once the task has given up or the command was sent. */
+typedef enum {
+    AT_RESET_IDLE = 0,
+    AT_RESET_PENDING,
+    AT_RESET_RUNNING,
+} at_reset_state_t;
+
 static SemaphoreHandle_t s_lock;
+static SemaphoreHandle_t s_reset_done;
 static TaskHandle_t s_task;
 static bool s_started;
+
+/* Written before the semaphore is given, read after it is taken. */
+static bool s_reset_ok;
+/* Read on every AT command, so it is accessed with atomics instead of s_lock. */
+static at_reset_state_t s_reset_state;
+/* Port readiness for callers outside the AT task; guarded by s_lock. s_port
+ * itself stays owned by the AT task. */
+static bool s_port_ready;
 
 /* Guarded by s_lock; written by the device event callback, read by the task. */
 static uint8_t s_dev_addr;
@@ -66,6 +84,23 @@ static int s_failures;
 static char s_model[32];
 static char s_fw[32];
 static char s_imei[16];
+
+static bool at_reset_pending(void)
+{
+    return __atomic_load_n(&s_reset_state, __ATOMIC_ACQUIRE) == AT_RESET_PENDING;
+}
+
+static void at_set_reset_state(at_reset_state_t state)
+{
+    __atomic_store_n(&s_reset_state, state, __ATOMIC_RELEASE);
+}
+
+static void at_set_port_ready(bool ready)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_port_ready = ready;
+    xSemaphoreGive(s_lock);
+}
 
 /*--------------------------------- Descriptor scan ---------------------------------*/
 
@@ -272,6 +307,9 @@ static esp_err_t at_read_response(char *buf, size_t size, uint32_t timeout_ms)
     buf[0] = '\0';
 
     for (;;) {
+        if (at_reset_pending()) {
+            break;  /* Abandon the telemetry command for the modem reset. */
+        }
         size_t avail = 0;
         if (usbh_cdc_get_rx_buffer_size(s_port, &avail) == ESP_OK && avail > 0) {
             if (used + 1 < size) {
@@ -302,7 +340,9 @@ static esp_err_t at_read_response(char *buf, size_t size, uint32_t timeout_ms)
 
 static bool at_command(const char *cmd, char *resp, size_t resp_size, uint32_t timeout_ms)
 {
-    if (s_port == NULL) {
+    /* A pending reset preempts telemetry; the reset command itself runs in the
+     * RUNNING state, so it is not blocked by its own request. */
+    if (s_port == NULL || at_reset_pending()) {
         return false;
     }
     (void)usbh_cdc_flush_rx_buffer(s_port);
@@ -944,6 +984,7 @@ static void at_try_connect(void)
         }
         if (answered) {
             s_port_generation = generation;
+            at_set_port_ready(true);
             ESP_LOGI(TAG, "AT telemetry on interface %u (%s) of device %u",
                      cands[i].intf_num, cands[i].cdc_acm ? "CDC-ACM" : "vendor",
                      dev_addr);
@@ -965,6 +1006,7 @@ static void at_try_connect(void)
 
 static void at_release_port(bool close)
 {
+    at_set_port_ready(false);
     if (s_port != NULL && close) {
         (void)usbh_cdc_port_close(s_port);
     }
@@ -995,6 +1037,44 @@ static void at_register_events(void)
     }
 }
 
+/* Runs on the AT task, which owns the port. The port is deliberately not
+ * closed here: the modem drops its USB device while resetting and the CDC
+ * driver tears the port down; the generation check releases our handle. */
+static void at_reset_service(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool pending = __atomic_load_n(&s_reset_state, __ATOMIC_ACQUIRE) == AT_RESET_PENDING;
+    if (pending) {
+        at_set_reset_state(AT_RESET_RUNNING);
+    }
+    xSemaphoreGive(s_lock);
+    if (!pending) {
+        return;
+    }
+
+    bool ok = false;
+    if (s_port == NULL) {
+        ESP_LOGW(TAG, "AT port is gone, skipping the modem reset");
+    } else {
+        char resp[64];
+        ESP_LOGW(TAG, "Restarting the modem with AT+CFUN=1,1");
+        /* The modem may drop the link before it answers, so a missing OK is
+         * logged but never treated as a failure of the restart path. */
+        ok = at_command("AT+CFUN=1,1", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
+        if (ok) {
+            ESP_LOGW(TAG, "Modem acknowledged the reset");
+        } else {
+            ESP_LOGW(TAG, "No OK to AT+CFUN=1,1, restarting anyway");
+        }
+    }
+
+    s_reset_ok = ok;
+    xSemaphoreGive(s_reset_done);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    at_set_reset_state(AT_RESET_IDLE);
+    xSemaphoreGive(s_lock);
+}
+
 static void at_task(void *arg)
 {
     (void)arg;
@@ -1007,12 +1087,23 @@ static void at_task(void *arg)
             at_release_port(false);
         }
 
+        if (at_reset_pending()) {
+            at_reset_service();
+            continue;
+        }
+
         if (s_port == NULL) {
             at_try_connect();
             continue;
         }
 
-        if (at_poll() == ESP_OK) {
+        esp_err_t poll = at_poll();
+        if (at_reset_pending()) {
+            /* The poll was abandoned for the reset: never count it as an AT
+             * failure, and service the request at the top of the loop. */
+            continue;
+        }
+        if (poll == ESP_OK) {
             s_failures = 0;
         } else if (++s_failures >= AT_MAX_FAILURES) {
             ESP_LOGW(TAG, "AT port stopped responding, reopening it");
@@ -1025,6 +1116,34 @@ static void at_task(void *arg)
     }
 }
 
+esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
+{
+    if (!s_started || s_task == NULL || s_reset_done == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ready = s_port_ready;
+    bool idle = __atomic_load_n(&s_reset_state, __ATOMIC_ACQUIRE) == AT_RESET_IDLE;
+    if (ready && idle) {
+        /* Drop a completion left behind by a caller that timed out earlier. */
+        (void)xSemaphoreTake(s_reset_done, 0);
+        at_set_reset_state(AT_RESET_PENDING);
+    }
+    xSemaphoreGive(s_lock);
+
+    if (!ready || !idle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xTaskNotifyGive(s_task);
+
+    if (xSemaphoreTake(s_reset_done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return s_reset_ok ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t cpe_at_start(void)
 {
     if (s_started) {
@@ -1034,7 +1153,15 @@ esp_err_t cpe_at_start(void)
     if (s_lock == NULL) {
         return ESP_ERR_NO_MEM;
     }
+    s_reset_done = xSemaphoreCreateBinary();
+    if (s_reset_done == NULL) {
+        vSemaphoreDelete(s_lock);
+        s_lock = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     if (xTaskCreate(at_task, "cpe_at", 4096, NULL, 3, &s_task) != pdPASS) {
+        vSemaphoreDelete(s_reset_done);
+        s_reset_done = NULL;
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
         return ESP_ERR_NO_MEM;
@@ -1049,6 +1176,12 @@ esp_err_t cpe_at_start(void)
 esp_err_t cpe_at_start(void)
 {
     return ESP_OK;
+}
+
+esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
+{
+    (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 #endif /* CONFIG_CPE_AT_ENABLE */

@@ -275,14 +275,19 @@ menu "CPE Application Configuration"
             1 Hz blink.
 
     config CPE_AT_ENABLE
-        bool "Enable read-only AT telemetry on the modem AT port"
+        bool "Enable AT telemetry (and modem reset before deliberate restarts)"
         default y
         help
             Open a second CDC port on the modem AT interface (vendor specific
             or CDC-ACM) and poll AT+CSQ / AT+COPS? / AT+CEREG? / AT+CGATT? /
             AT+CGACT? / AT+QCSQ / AT+QTEMP together with ATI / AT+CGSN once.
-            The values are shown on the Web status page. Only read-only
-            commands are sent, so the data connection is not disturbed.
+            The values are shown on the Web status page. Telemetry uses only
+            read-only commands, so the data connection is not disturbed.
+            The single state-changing command is AT+CFUN=1,1: before every
+            deliberate restart (Web reboot, factory reset, OTA, reset button,
+            controlled reboot) the modem is asked to reset so it re-enumerates
+            cleanly after the ESP boots. This is best effort and bounded; a
+            missing AT port never delays the restart.
             QCSQ and QTEMP are Quectel extensions: other modems simply answer
             ERROR and the corresponding rows stay "unknown". Disable this when
             the modem does not expose a usable AT interface next to the ECM

@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 
 #include "app_wifi.h"
+#include "cpe_at.h"
 #include "cpe_core.h"
 
 #include "cpe_wan.h"
@@ -282,6 +283,13 @@ static void lm_controlled_restart(uint32_t boot_count)
              boot_count, CONFIG_CPE_MAX_REBOOTS);
     cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
     vTaskDelay(pdMS_TO_TICKS(1000));
+    /* Reset the modem first so it re-enumerates cleanly after the ESP boots.
+     * Best effort: an AT port that is already wedged does not block the
+     * restart. */
+    esp_err_t modem_err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
+    if (modem_err != ESP_OK) {
+        ESP_LOGW(TAG, "Modem reset did not succeed (%s)", esp_err_to_name(modem_err));
+    }
     app_wifi_deauth_all_stations();
     esp_restart();
 }

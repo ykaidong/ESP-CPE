@@ -330,8 +330,11 @@ lm_tick()
 - `POST /api/system/reboot`：运维用重启接口（会话 + CSRF）。
 
 > `idf.py flash` 直接烧录的镜像不走 OTA 状态机，不受回滚影响。
-> 注意：当前模组在 ESP32 重启后可能 USB 挂死（见 `PHASE2_TEST_PLAN.md` 2.w），升级重启后
-> 4G 若未恢复需人工插拔模组，这是硬件限制，与 OTA 无关。
+> ESP32 重启后模组 USB 可能挂死（见 `PHASE2_TEST_PLAN.md` 2.w）。为此，所有**主动重启**
+> （Web 重启、Web/按键恢复出厂、OTA、L3 受控重启）都会在 `esp_restart()` 前请求 AT 任务
+> 发送 `AT+CFUN=1,1`，让模组先自行软复位并重新枚举：串口可见
+> `cpe_at: Restarting the modem with AT+CFUN=1,1`。AT 端口不可用或模组无响应时立即跳过
+> （最多等待约 3 s），绝不阻塞重启。掉电、看门狗等非主动复位仍可能挂死，需物理插拔。
 
 ## 10. 相关文档
 

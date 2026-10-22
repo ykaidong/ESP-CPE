@@ -5,7 +5,7 @@
 # cJSON comes from the component manager (idf_component.yml) and is added to
 # the requirements automatically, so it is not listed here.
 set(PRIV_REQ esp_wifi esp_event esp_timer nvs_flash spiffs vfs
-             lwip esp_http_server cpe_core app_wifi esp_netif)
+             lwip esp_http_server cpe_core app_wifi esp_netif cpe_at)
 
 idf_component_register(SRC_DIRS "router_web"
                 INCLUDE_DIRS "include"
