@@ -60,8 +60,10 @@ menu "CPE WAN Configuration"
             limit is reached the link manager stops tearing the ECM driver down
             and keeps retrying the DHCP client only, so a SIM (or a PDP context)
             that shows up later is still picked up while the SoftAP/Web console
-            stays available. The counter is reset whenever the link or the IP
-            comes back. 0 keeps the old behaviour (rebuild ECM on every
-            timeout, unbounded).
+            stays available. The counter is reset when an IP is acquired, when
+            the CPE reaches ONLINE and by a scheduled rebuild; it deliberately
+            survives the link drop that a rebuild itself causes, otherwise every
+            rebuild would start with a fresh budget. 0 keeps the old behaviour
+            (rebuild ECM on every timeout, unbounded).
 
 endmenu

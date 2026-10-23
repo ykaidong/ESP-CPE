@@ -157,10 +157,15 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
         ctx->last_link_up = st->link_up;
         if (st->link_up) {
             /* A fresh link starts a fresh recovery budget: the USB fault is
-             * over and the DHCP client gets a clean set of retries. */
+             * over and the DHCP client gets a clean set of retries. The ECM
+             * rebuild budget is deliberately NOT reset here: a rebuild tears
+             * the driver down, which drops this very link, so resetting it on
+             * the next rising edge would hand out a new budget after every
+             * rebuild and the limit would never be reached. It is cleared when
+             * an IP actually arrives (below), on entering ONLINE and by a
+             * scheduled rebuild. */
             ctx->usb_attempts = 0;
             ctx->ip_attempts = 0;
-            ctx->ecm_rebuilds = 0;
         }
         cpe_wan_log_heap(st->link_up ? "link up" : "link down");
     }

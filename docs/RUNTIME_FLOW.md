@@ -204,6 +204,10 @@ AP/Web 全程可用。设置 `CPE_IP_MAX_ECM_REBUILDS=0` 即回到"每次超时�
 > "link up 但无 IP"（无 SIM / PDP 未激活）不会消耗 USB 恢复额度，因此之后
 > 链路掉线时仍从 0 开始尝试 `CPE_USB_ENUM_RESET_ATTEMPTS`，不会被直接判定
 > 为 ECM 卡死而触发整机重启。
+>
+> 唯一的例外是 `CPE_IP_MAX_ECM_REBUILDS` 的计数：拆 ECM 本身会把 link 打掉，
+> 若跟着上升沿一起清零，这个上限就永远到不了，所以它**跨 link 边沿保留**，
+> 只在"拿到 IP""进入 ONLINE""计划内重建"时归零。
 
 ### 5.3 已枚举但 ECM 链路始终起不来
 
