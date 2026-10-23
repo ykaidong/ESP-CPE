@@ -29,7 +29,7 @@
 | 2.2 恢复出厂统一入口 | 完成 | `5d5e5f7` |
 | 2.3 `app_wifi_sta_disconnect()` | 完成 | `6e143a7` |
 | 2.4 Kconfig 归位 | 完成 | `703ade8` |
-| 2.5 会话/路由表收敛 | 未开始 | — |
+| 2.5 会话/路由表收敛 | 完成 | `bc87830` |
 | 2.6 统一 NVS helper | 完成 | `e3a8bd4` |
 | 批次 3（3.1–3.8） | 未开始 | — |
 | 批次 4（清理 10 项） | 未开始 | — |
@@ -72,6 +72,14 @@
   （`CPE_MAX_REBOOTS` 仍由 `link_manager` 读取，仅菜单归属移动，与健康计数归为一组）；
   `CPE_AT_*` → `components/cpe_at/`。板级 GPIO、USB 枚举、OTA 与恢复重试等应用级选项
   暂留 `main/Kconfig.projbuild`。
+- **2.5**：路由表落在 `web_console/router_web/web_routes.c`（17 条 API + `"/*"` 静态），
+  表项数对 `CPE_WEB_HTTPD_MAX_URI_HANDLERS`（新具名常量，替代 `modem_http_config.c` 的
+  `20`）与 `CPE_WEB_ROUTE_LOG_MAX` 做 `_Static_assert`。鉴权分工：GET 全部由分发器完成
+  （handler 内的 `reject_body + require_session` 样板已删除），POST 在分发器先过一次会话闸门，
+  但 CSRF 与请求体仍留在 handler 的 `cpe_web_post_begin()`（它要把会话令牌交给 handler）。
+  由此带来一处**请求拒绝顺序**变化：未鉴权的 POST 现在先返回 401，而不是先返回
+  415/跨域 403。静态白名单实测需覆盖登录页图标目录：`/`、根目录 `*.html`、`/css/`、
+  `/js/`、`/img/`（计划的 `/css|js|png` 会漏掉 `img/*.svg` 与 `img/favicon.ico`）。
 
 ---
 
@@ -112,7 +120,8 @@
 | 2.5 | A6/D2/B6 | `cpe_web_get_begin()`（与 `cpe_web_post_begin` 对称）；路由表集中为静态表 `{uri, method, handler, auth}`；`/*` 只对白名单免鉴权 | `http_session.c`、`http_internal.h`、各 `api_*.c`、`static_files.c:84-120,162-167` |
 | 2.6 | A5/C6 | 统一 NVS helper `cpe_kv_load_u32/save/erase`，收敛命名空间 | `cpe_maintenance.c`、`station_names.c`、`cpe_config_store.c` |
 
-**行为变更（需确认）**：2.5 收紧静态资源访问——仅 `/`、`/index.html`、`/css|js|png` 匿名可访问，SPIFFS 内其它文件不再公开。
+**行为变更（需确认）**：2.5 收紧静态资源访问——仅 `/`、根目录 `*.html`、`/css/`、`/js/`、`/img/`
+匿名可访问，SPIFFS 内其它文件不再公开（`static_files.c` 的 `path_is_public()`）。
 
 ---
 
