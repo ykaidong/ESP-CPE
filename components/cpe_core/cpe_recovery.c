@@ -89,23 +89,9 @@ esp_err_t cpe_boot_count_increment(uint32_t *count)
         return err;
     }
     value++;
-
-    nvs_handle_t h;
-    err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READWRITE, &h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open %s for writing: %s",
-                 CPE_KV_NS_SYSTEM, esp_err_to_name(err));
-        *count = value;
-        return err;
-    }
-    err = nvs_set_u32(h, NVS_KEY_BOOT_COUNT, value);
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to persist the boot count: %s", esp_err_to_name(err));
-    }
+    /* Same helper as the maintenance counter: open, set, commit and close in
+     * one place, so both counters fail the same way (audit C5). */
+    err = write_u32(NVS_KEY_BOOT_COUNT, value);
     ESP_LOGW(TAG, "Boot/recovery count: %u", value);
     *count = value;
     return err;
@@ -113,17 +99,7 @@ esp_err_t cpe_boot_count_increment(uint32_t *count)
 
 esp_err_t cpe_boot_count_clear(void)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READWRITE, &h);
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = nvs_set_u32(h, NVS_KEY_BOOT_COUNT, 0);
-    if (err == ESP_OK) {
-        err = nvs_commit(h);
-    }
-    nvs_close(h);
-    return err;
+    return write_u32(NVS_KEY_BOOT_COUNT, 0);
 }
 
 esp_err_t cpe_maint_reboot_count_get(uint32_t *count)
