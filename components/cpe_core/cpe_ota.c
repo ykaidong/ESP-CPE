@@ -91,6 +91,19 @@ esp_err_t cpe_ota_get_info(cpe_ota_info_t *info)
     return ESP_OK;
 }
 
+/* Clears the whole OTA bookkeeping in one critical section. The four fields are
+ * only ever meaningful together, so every exit path goes through here: leaving
+ * one behind would make the module look idle while it is not (audit C3). */
+static void ota_reset_state(void)
+{
+    portENTER_CRITICAL(&s_state_lock);
+    s_update_handle = 0;
+    s_update_partition = NULL;
+    s_upload_in_progress = false;
+    s_written = 0;
+    portEXIT_CRITICAL(&s_state_lock);
+}
+
 esp_err_t cpe_ota_begin(size_t expected_size)
 {
     /* Test and set in one critical section: the slot is reserved before the
@@ -149,9 +162,7 @@ esp_err_t cpe_ota_begin(size_t expected_size)
 
 fail:
     /* Give the slot back: nothing was started, so a retry must be allowed. */
-    portENTER_CRITICAL(&s_state_lock);
-    s_upload_in_progress = false;
-    portEXIT_CRITICAL(&s_state_lock);
+    ota_reset_state();
     return err;
 }
 
@@ -185,39 +196,27 @@ esp_err_t cpe_ota_end(void)
     bool active = s_upload_in_progress;
     esp_ota_handle_t handle = s_update_handle;
     const esp_partition_t *partition = s_update_partition;
+    /* Read it now: the size is logged below, after the state is already gone.
+     * Nothing writes to it in between, the upload is finished. */
+    size_t written = s_written;
     portEXIT_CRITICAL(&s_state_lock);
     if (!active || partition == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
 
     esp_err_t err = esp_ota_end(handle);
-    portENTER_CRITICAL(&s_state_lock);
-    s_update_handle = 0;
-    portEXIT_CRITICAL(&s_state_lock);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_end failed: %s (image rejected)", esp_err_to_name(err));
-        portENTER_CRITICAL(&s_state_lock);
-        s_upload_in_progress = false;
-        s_update_partition = NULL;
-        s_written = 0;
-        portEXIT_CRITICAL(&s_state_lock);
+        ota_reset_state();
         return CPE_OTA_ERR_INVALID_IMAGE;
     }
 
     err = esp_ota_set_boot_partition(partition);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
-        portENTER_CRITICAL(&s_state_lock);
-        s_upload_in_progress = false;
-        s_update_partition = NULL;
-        s_written = 0;
-        portEXIT_CRITICAL(&s_state_lock);
+        ota_reset_state();
         return err;
     }
-
-    portENTER_CRITICAL(&s_state_lock);
-    size_t written = s_written;
-    portEXIT_CRITICAL(&s_state_lock);
 
     esp_app_desc_t new_desc;
     if (esp_ota_get_partition_description(partition, &new_desc) == ESP_OK) {
@@ -228,11 +227,7 @@ esp_err_t cpe_ota_end(void)
                  partition->label, (unsigned)written);
     }
 
-    portENTER_CRITICAL(&s_state_lock);
-    s_upload_in_progress = false;
-    s_update_partition = NULL;
-    s_written = 0;
-    portEXIT_CRITICAL(&s_state_lock);
+    ota_reset_state();
     return ESP_OK;
 }
 
@@ -250,12 +245,7 @@ void cpe_ota_abort(void)
         ESP_LOGW(TAG, "esp_ota_abort failed: %s", esp_err_to_name(err));
     }
     ESP_LOGW(TAG, "OTA aborted, current image unchanged");
-    portENTER_CRITICAL(&s_state_lock);
-    s_update_handle = 0;
-    s_update_partition = NULL;
-    s_upload_in_progress = false;
-    s_written = 0;
-    portEXIT_CRITICAL(&s_state_lock);
+    ota_reset_state();
 }
 
 bool cpe_ota_running_pending_verify(void)
