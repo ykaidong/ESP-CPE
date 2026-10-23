@@ -44,6 +44,11 @@ static const char *TAG = "cpe_at";
 #define AT_MAX_FAILURES        3
 #define AT_RINGBUF_SIZE        1024
 #define AT_TRANSFER_SIZE       512
+/* USB device event registration: the CDC driver is installed by the WAN link
+ * manager, which may still be starting. Retry once per second at first, then
+ * report the degradation and slow down instead of spinning forever. */
+#define AT_EVENT_REGISTER_FAST_TRIES    10
+#define AT_EVENT_REGISTER_SLOW_MS       5000
 
 typedef struct {
     uint8_t intf_num;
@@ -65,6 +70,10 @@ static bool s_started;
 
 /* Written before the semaphore is given, read after it is taken. */
 static bool s_reset_ok;
+/* Completion counter of the modem reset, guarded by s_lock: a waiter only
+ * accepts a completion whose sequence differs from the one it saw before
+ * requesting, so a give left behind by an earlier timeout is ignored. */
+static uint32_t s_reset_seq;
 /* Read on every AT command, so it is accessed with atomics instead of s_lock. */
 static at_reset_state_t s_reset_state;
 /* Port readiness for callers outside the AT task; guarded by s_lock. s_port
@@ -939,6 +948,12 @@ static esp_err_t at_poll(void)
     return ESP_OK;
 }
 
+/* The only place that forgets the port handle: everything else goes through it,
+ * so readiness, failure count and telemetry status cannot drift apart from
+ * s_port (audit D8). `close` must be false when the device is gone, because the
+ * CDC driver closes the ports of a removed device itself. */
+static void at_release_port(bool close);
+
 static void at_try_connect(void)
 {
     at_candidate_t cands[AT_MAX_CANDIDATES];
@@ -966,11 +981,11 @@ static void at_try_connect(void)
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Cannot open AT interface %u: %s",
                      cands[i].intf_num, esp_err_to_name(err));
-            s_port = NULL;
+            at_release_port(false);
             continue;
         }
         if (at_generation() != generation) {
-            s_port = NULL;
+            at_release_port(false);
             return;
         }
 
@@ -979,7 +994,7 @@ static void at_try_connect(void)
         if (at_generation() != generation) {
             /* The device is gone: the CDC driver closes its ports itself, so
              * just forget the handle instead of closing it again. */
-            s_port = NULL;
+            at_release_port(false);
             return;
         }
         if (answered) {
@@ -995,8 +1010,8 @@ static void at_try_connect(void)
             at_read_identity();
             return;
         }
-        (void)usbh_cdc_port_close(s_port);
-        s_port = NULL;
+        /* The device is still there and the port is ours: close it here. */
+        at_release_port(true);
         ESP_LOGD(TAG, "Interface %u did not answer AT", cands[i].intf_num);
     }
 
@@ -1018,22 +1033,33 @@ static void at_release_port(bool close)
 
 static void at_register_events(void)
 {
-    bool warned = false;
-    for (;;) {
+    for (int attempt = 1;; attempt++) {
         esp_err_t err = usbh_cdc_register_dev_event_cb(ESP_USB_DEVICE_MATCH_ID_ANY,
                                                        at_dev_event_cb, NULL);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Registered for USB device events");
+            if (attempt > 1) {
+                cpe_status_set_error(NULL);
+                ESP_LOGI(TAG, "Registered for USB device events (attempt %d)", attempt);
+            } else {
+                ESP_LOGI(TAG, "Registered for USB device events");
+            }
             return;
         }
         /* The CDC driver is installed by the WAN link manager task, which may
-         * still be starting. Retry until it is available. */
-        if (!warned) {
+         * still be starting. Retry until it is available, but stop hiding it:
+         * after AT_EVENT_REGISTER_FAST_TRIES the console shows why there is no
+         * AT telemetry, and the cadence drops to save CPU (audit D8). */
+        if (attempt == 1) {
             ESP_LOGW(TAG, "Cannot register for USB device events yet (%s), retrying",
                      esp_err_to_name(err));
-            warned = true;
+        } else if (attempt == AT_EVENT_REGISTER_FAST_TRIES) {
+            cpe_status_set_error("AT telemetry unavailable (no USB device events: %s)",
+                                 esp_err_to_name(err));
+            ESP_LOGE(TAG, "Still no USB device events after %d attempts (%s), "
+                     "slowing down", attempt, esp_err_to_name(err));
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(attempt >= AT_EVENT_REGISTER_FAST_TRIES ?
+                                 (uint32_t)AT_EVENT_REGISTER_SLOW_MS : 1000U));
     }
 }
 
@@ -1068,11 +1094,14 @@ static void at_reset_service(void)
         }
     }
 
-    s_reset_ok = ok;
-    xSemaphoreGive(s_reset_done);
+    /* Publish the result and the new sequence together, so a waiter can tell
+     * this completion apart from one left behind by an earlier timeout. */
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_reset_ok = ok;
+    s_reset_seq++;
     at_set_reset_state(AT_RESET_IDLE);
     xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_reset_done);
 }
 
 static void at_task(void *arg)
@@ -1125,9 +1154,8 @@ esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool ready = s_port_ready;
     bool idle = __atomic_load_n(&s_reset_state, __ATOMIC_ACQUIRE) == AT_RESET_IDLE;
+    uint32_t seq = s_reset_seq;
     if (ready && idle) {
-        /* Drop a completion left behind by a caller that timed out earlier. */
-        (void)xSemaphoreTake(s_reset_done, 0);
         at_set_reset_state(AT_RESET_PENDING);
     }
     xSemaphoreGive(s_lock);
@@ -1138,10 +1166,26 @@ esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
 
     xTaskNotifyGive(s_task);
 
-    if (xSemaphoreTake(s_reset_done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
+    /* Wait for the completion of *this* request: a semaphore given for a reset
+     * whose caller timed out earlier must not satisfy this one (audit D8). */
+    const TickType_t limit = pdMS_TO_TICKS(timeout_ms);
+    TickType_t start = xTaskGetTickCount();
+    for (;;) {
+        TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= limit) {
+            return ESP_ERR_TIMEOUT;
+        }
+        if (xSemaphoreTake(s_reset_done, limit - elapsed) != pdTRUE) {
+            return ESP_ERR_TIMEOUT;
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        uint32_t now = s_reset_seq;
+        bool ok = s_reset_ok;
+        xSemaphoreGive(s_lock);
+        if (now != seq) {
+            return ok ? ESP_OK : ESP_FAIL;
+        }
     }
-    return s_reset_ok ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t cpe_at_start(void)
