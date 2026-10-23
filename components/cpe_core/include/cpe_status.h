@@ -70,6 +70,10 @@ typedef struct {
  *  cannot be created. */
 esp_err_t cpe_status_init(void);
 
+/** Release the status mutex and clear the snapshot. Every setter is a no-op
+ *  again afterwards, until cpe_status_init() is called again. */
+void cpe_status_deinit(void);
+
 /** Update the state (and its human readable text, printf style). */
 void cpe_status_set_state(cpe_state_t state, const char *fmt, ...);
 

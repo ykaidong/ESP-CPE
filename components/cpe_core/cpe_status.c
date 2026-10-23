@@ -40,12 +40,97 @@ esp_err_t cpe_status_init(void)
     return ESP_OK;
 }
 
-void cpe_status_set_state(cpe_state_t state, const char *fmt, ...)
+void cpe_status_deinit(void)
 {
     if (!s_inited) {
         return;
     }
+    /* Take the lock one last time so no setter is half way through, then leave
+     * the module in its pre-init state (a setter afterwards is a no-op again). */
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    memset(&s_status, 0, sizeof(s_status));
+    s_inited = false;
+    xSemaphoreGive(s_lock);
+    vSemaphoreDelete(s_lock);
+    s_lock = NULL;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Setter helpers                                                            */
+/* ------------------------------------------------------------------------- */
+
+/* Every setter is the same three steps: check that the module is up, take the
+ * lock, write the field. Keeping that boilerplate in these typed helpers (no
+ * void *, so passing the wrong field is still a compile error) means a new
+ * field cannot forget one of the steps (audit C2). */
+static bool status_enter(void)
+{
+    if (!s_inited) {
+        return false;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    return true;
+}
+
+static void status_leave(void)
+{
+    xSemaphoreGive(s_lock);
+}
+
+static void status_set_bool(bool *slot, bool value)
+{
+    if (!status_enter()) {
+        return;
+    }
+    *slot = value;
+    status_leave();
+}
+
+static void status_set_bool_pair(bool *slot, bool *valid_slot, bool value,
+                                 bool valid)
+{
+    if (!status_enter()) {
+        return;
+    }
+    *slot = value;
+    *valid_slot = valid;
+    status_leave();
+}
+
+static void status_set_i8_pair(int8_t *slot, bool *valid_slot, int value,
+                               bool valid)
+{
+    if (!status_enter()) {
+        return;
+    }
+    *slot = (int8_t)value;
+    *valid_slot = valid;
+    status_leave();
+}
+
+static void status_set_u32(uint32_t *slot, uint32_t value)
+{
+    if (!status_enter()) {
+        return;
+    }
+    *slot = value;
+    status_leave();
+}
+
+static void status_set_str(char *dst, size_t size, const char *src)
+{
+    if (!status_enter()) {
+        return;
+    }
+    snprintf(dst, size, "%s", src != NULL ? src : "");
+    status_leave();
+}
+
+void cpe_status_set_state(cpe_state_t state, const char *fmt, ...)
+{
+    if (!status_enter()) {
+        return;
+    }
     s_status.state = state;
     if (fmt != NULL) {
         va_list args;
@@ -53,35 +138,26 @@ void cpe_status_set_state(cpe_state_t state, const char *fmt, ...)
         vsnprintf(s_status.state_text, sizeof(s_status.state_text), fmt, args);
         va_end(args);
     }
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_set_usb_connected(bool connected)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.usb_connected = connected;
-    xSemaphoreGive(s_lock);
+    status_set_bool(&s_status.usb_connected, connected);
 }
 
 void cpe_status_set_link(bool up)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.link_up = up;
-    xSemaphoreGive(s_lock);
+    status_set_bool(&s_status.link_up, up);
 }
 
 void cpe_status_set_ip(const char *ip)
 {
-    if (!s_inited) {
+    if (!status_enter()) {
         return;
     }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    /* Address and flag belong together: an empty address means the WAN is down,
+     * so a reader can never see an IP without got_ip (or the other way round). */
     if (ip != NULL && ip[0] != '\0') {
         snprintf(s_status.ip, sizeof(s_status.ip), "%s", ip);
         s_status.got_ip = true;
@@ -89,15 +165,14 @@ void cpe_status_set_ip(const char *ip)
         s_status.ip[0] = '\0';
         s_status.got_ip = false;
     }
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_set_public_ip(const char *ip)
 {
-    if (!s_inited) {
+    if (!status_enter()) {
         return;
     }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
     if (ip != NULL && ip[0] != '\0') {
         snprintf(s_status.public_ip, sizeof(s_status.public_ip), "%s", ip);
         s_status.has_public_ip = true;
@@ -105,156 +180,98 @@ void cpe_status_set_public_ip(const char *ip)
         s_status.public_ip[0] = '\0';
         s_status.has_public_ip = false;
     }
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_set_rssi(int rssi, bool valid)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.rssi = (int8_t)rssi;
-    s_status.rssi_valid = valid;
-    xSemaphoreGive(s_lock);
+    status_set_i8_pair(&s_status.rssi, &s_status.rssi_valid, rssi, valid);
 }
 
 void cpe_status_set_modem_info(const char *model, const char *fw, const char *imei)
 {
-    if (!s_inited) {
+    if (!status_enter()) {
         return;
     }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    /* One lock for all three: the console must never read a model from one
+     * modem and an IMEI from another. */
     snprintf(s_status.modem_model, sizeof(s_status.modem_model), "%s", model != NULL ? model : "");
     snprintf(s_status.modem_fw, sizeof(s_status.modem_fw), "%s", fw != NULL ? fw : "");
     snprintf(s_status.imei, sizeof(s_status.imei), "%s", imei != NULL ? imei : "");
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_set_carrier(const char *carrier)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    snprintf(s_status.carrier, sizeof(s_status.carrier), "%s", carrier != NULL ? carrier : "");
-    xSemaphoreGive(s_lock);
+    status_set_str(s_status.carrier, sizeof(s_status.carrier), carrier);
 }
 
 void cpe_status_set_modem_registered(bool registered)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.modem_registered = registered;
-    xSemaphoreGive(s_lock);
+    status_set_bool(&s_status.modem_registered, registered);
 }
 
 void cpe_status_set_sim(bool inserted, bool valid)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.sim_inserted = inserted;
-    s_status.sim_valid = valid;
-    xSemaphoreGive(s_lock);
+    status_set_bool_pair(&s_status.sim_inserted, &s_status.sim_valid, inserted, valid);
 }
 
 void cpe_status_set_phone_number(const char *number)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    snprintf(s_status.phone_number, sizeof(s_status.phone_number), "%s",
-             number != NULL ? number : "");
-    xSemaphoreGive(s_lock);
+    status_set_str(s_status.phone_number, sizeof(s_status.phone_number), number);
 }
 
 void cpe_status_set_ps(bool attached, bool valid)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.ps_attached = attached;
-    s_status.ps_valid = valid;
-    xSemaphoreGive(s_lock);
+    status_set_bool_pair(&s_status.ps_attached, &s_status.ps_valid, attached, valid);
 }
 
 void cpe_status_set_pdp(bool active, bool valid)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.pdp_active = active;
-    s_status.pdp_valid = valid;
-    xSemaphoreGive(s_lock);
+    status_set_bool_pair(&s_status.pdp_active, &s_status.pdp_valid, active, valid);
 }
 
 void cpe_status_set_signal_quality(int rsrp, int rsrq, int sinr, bool valid)
 {
-    if (!s_inited) {
+    if (!status_enter()) {
         return;
     }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.rsrp = (int16_t)rsrp;
     s_status.rsrq = (int8_t)rsrq;
     s_status.sinr = (int8_t)sinr;
     s_status.qcsq_valid = valid;
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_set_modem_temp(int temp_c, bool valid)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.modem_temp = (int8_t)temp_c;
-    s_status.modem_temp_valid = valid;
-    xSemaphoreGive(s_lock);
+    status_set_i8_pair(&s_status.modem_temp, &s_status.modem_temp_valid, temp_c, valid);
 }
 
 void cpe_status_set_recovery_attempts(uint32_t attempts)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.recovery_attempts = attempts;
-    xSemaphoreGive(s_lock);
+    status_set_u32(&s_status.recovery_attempts, attempts);
 }
 
 void cpe_status_set_recovery_stage(cpe_recovery_stage_t stage)
 {
-    if (!s_inited) {
+    if (!status_enter()) {
         return;
     }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.recovery_stage = stage;
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_set_boot_count(uint32_t boot_count)
 {
-    if (!s_inited) {
-        return;
-    }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status.boot_count = boot_count;
-    xSemaphoreGive(s_lock);
+    status_set_u32(&s_status.boot_count, boot_count);
 }
 
 void cpe_status_set_error(const char *fmt, ...)
 {
-    if (!s_inited) {
+    if (!status_enter()) {
         return;
     }
-    xSemaphoreTake(s_lock, portMAX_DELAY);
     if (fmt != NULL) {
         va_list args;
         va_start(args, fmt);
@@ -263,7 +280,7 @@ void cpe_status_set_error(const char *fmt, ...)
     } else {
         s_status.last_error[0] = '\0';
     }
-    xSemaphoreGive(s_lock);
+    status_leave();
 }
 
 void cpe_status_get(cpe_status_t *out)
