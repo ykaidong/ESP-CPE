@@ -93,48 +93,66 @@ esp_err_t cpe_ota_get_info(cpe_ota_info_t *info)
 
 esp_err_t cpe_ota_begin(size_t expected_size)
 {
+    /* Test and set in one critical section: the slot is reserved before the
+     * (slow) partition work starts. esp_ota_begin() also refuses a second
+     * session, but only once it gets there, so two callers could previously
+     * both pass the busy check and race into it (audit D10). */
     portENTER_CRITICAL(&s_state_lock);
     bool busy = s_upload_in_progress;
+    if (!busy) {
+        s_upload_in_progress = true;
+        /* No write may use the handle of a previous session while this one is
+         * still being set up. */
+        s_update_handle = 0;
+    }
     portEXIT_CRITICAL(&s_state_lock);
     if (busy) {
         return CPE_OTA_ERR_BUSY;
     }
 
+    esp_err_t err;
+    esp_ota_handle_t handle = 0;
     const esp_partition_t *partition = esp_ota_get_next_update_partition(NULL);
     if (partition == NULL) {
         ESP_LOGE(TAG, "No inactive OTA partition found");
-        return ESP_ERR_NOT_FOUND;
+        err = ESP_ERR_NOT_FOUND;
+        goto fail;
     }
     if (expected_size > 0 && expected_size > (size_t)partition->size) {
         ESP_LOGE(TAG, "Image too large: %u bytes > partition %s (%u bytes)",
                  (unsigned)expected_size, partition->label, (unsigned)partition->size);
-        return ESP_ERR_INVALID_SIZE;
+        err = ESP_ERR_INVALID_SIZE;
+        goto fail;
     }
 
-    esp_ota_handle_t handle = 0;
-    esp_err_t err = esp_ota_begin(partition, expected_size > 0 ? expected_size : OTA_SIZE_UNKNOWN, &handle);
+    err = esp_ota_begin(partition, expected_size > 0 ? expected_size : OTA_SIZE_UNKNOWN, &handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
         if (err == ESP_ERR_OTA_ROLLBACK_INVALID_STATE) {
             /* The running image is still PENDING_VERIFY and must be validated
              * first (see cpe_ota_mark_running_valid()). */
-            return CPE_OTA_ERR_PENDING_VERIFY;
+            err = CPE_OTA_ERR_PENDING_VERIFY;
+        } else if (err == ESP_ERR_OTA_ALREADY_IN_PROGRESS) {
+            err = CPE_OTA_ERR_BUSY;
         }
-        if (err == ESP_ERR_OTA_ALREADY_IN_PROGRESS) {
-            return CPE_OTA_ERR_BUSY;
-        }
-        return err;
+        goto fail;
     }
 
     portENTER_CRITICAL(&s_state_lock);
     s_update_handle = handle;
     s_update_partition = partition;
     s_written = 0;
-    s_upload_in_progress = true;
     portEXIT_CRITICAL(&s_state_lock);
     ESP_LOGI(TAG, "OTA started: target partition %s (%u bytes)", partition->label,
              (unsigned)partition->size);
     return ESP_OK;
+
+fail:
+    /* Give the slot back: nothing was started, so a retry must be allowed. */
+    portENTER_CRITICAL(&s_state_lock);
+    s_upload_in_progress = false;
+    portEXIT_CRITICAL(&s_state_lock);
+    return err;
 }
 
 esp_err_t cpe_ota_write(const void *data, size_t len)
