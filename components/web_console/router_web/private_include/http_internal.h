@@ -147,7 +147,7 @@ typedef struct {
     cpe_web_auth_t auth;
 } cpe_web_route_t;
 
-/* httpd handler slots: one per table entry plus the "/*" static handler. */
+/* httpd handler slots: one per table entry plus the catch-all static handler. */
 #define CPE_WEB_HTTPD_MAX_URI_HANDLERS  20
 
 /* One slot per registered URI (registration repeats after every listener
@@ -262,7 +262,7 @@ void cpe_web_listener_ensure_up(void);
 
 /* --- routes (web_routes.c) ----------------------------------------------- */
 
-/* Register every API route of the table below plus the "/*" static handler.
+/* Register every API route of the table below plus the catch-all static handler.
  * Must be called again after the listener is re-created. */
 esp_err_t cpe_web_routes_register(httpd_handle_t server,
                                   cpe_web_rest_context_t *context);

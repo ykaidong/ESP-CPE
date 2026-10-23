@@ -71,7 +71,7 @@ static const cpe_web_route_t s_routes[] = {
 
 #define CPE_WEB_ROUTE_COUNT (sizeof(s_routes) / sizeof(s_routes[0]))
 
-/* The "/*" static handler takes one more slot in the httpd table. */
+/* The catch-all static handler takes one more slot in the httpd table. */
 _Static_assert(CPE_WEB_ROUTE_COUNT + 1 <= CPE_WEB_HTTPD_MAX_URI_HANDLERS,
                "Route table does not fit into CPE_WEB_HTTPD_MAX_URI_HANDLERS");
 _Static_assert(CPE_WEB_ROUTE_COUNT + 1 <= CPE_WEB_ROUTE_LOG_MAX,
