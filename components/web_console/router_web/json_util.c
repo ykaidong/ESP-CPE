@@ -35,6 +35,44 @@ void cpe_web_sbuf_free(cpe_web_sbuf_t *sb)
     sb->failed = true;
 }
 
+/* Make room for `extra` bytes plus the terminating NUL. Returns false when the
+ * buffer cannot be grown; sb->failed is then set, so every later append is a
+ * no-op and the caller answers 500. */
+static bool sbuf_reserve(cpe_web_sbuf_t *sb, size_t extra)
+{
+    size_t required = sb->len + extra + 1;
+    if (required <= sb->cap) {
+        return true;
+    }
+    size_t new_cap = sb->cap ? sb->cap : 128;
+    while (new_cap < required) {
+        new_cap *= 2;
+    }
+    char *grown = realloc(sb->data, new_cap);
+    if (grown == NULL) {
+        sb->failed = true;
+        return false;
+    }
+    sb->data = grown;
+    sb->cap = new_cap;
+    return true;
+}
+
+/* Copy bytes verbatim. Formatting one character at a time cost two vsnprintf()
+ * calls per character, which a 1 KB status response does a few thousand times. */
+static void sbuf_append_raw(cpe_web_sbuf_t *sb, const char *data, size_t len)
+{
+    if (sb->failed || len == 0) {
+        return;
+    }
+    if (!sbuf_reserve(sb, len)) {
+        return;
+    }
+    memcpy(sb->data + sb->len, data, len);
+    sb->len += len;
+    sb->data[sb->len] = '\0';
+}
+
 void cpe_web_sbuf_appendf(cpe_web_sbuf_t *sb, const char *fmt, ...)
 {
     if (sb->failed) {
@@ -51,20 +89,9 @@ void cpe_web_sbuf_appendf(cpe_web_sbuf_t *sb, const char *fmt, ...)
         sb->failed = true;
         return;
     }
-    size_t required = sb->len + (size_t)need + 1;
-    if (required > sb->cap) {
-        size_t new_cap = sb->cap ? sb->cap : 128;
-        while (new_cap < required) {
-            new_cap *= 2;
-        }
-        char *grown = realloc(sb->data, new_cap);
-        if (grown == NULL) {
-            va_end(ap2);
-            sb->failed = true;
-            return;
-        }
-        sb->data = grown;
-        sb->cap = new_cap;
+    if (!sbuf_reserve(sb, (size_t)need)) {
+        va_end(ap2);
+        return;
     }
     vsnprintf(sb->data + sb->len, sb->cap - sb->len, fmt, ap2);
     va_end(ap2);
@@ -73,51 +100,58 @@ void cpe_web_sbuf_appendf(cpe_web_sbuf_t *sb, const char *fmt, ...)
 
 void cpe_web_sbuf_append(cpe_web_sbuf_t *sb, const char *str)
 {
-    cpe_web_sbuf_appendf(sb, "%s", str);
+    if (str == NULL) {
+        return;
+    }
+    sbuf_append_raw(sb, str, strlen(str));
 }
 
-/* Append a JSON string literal with all mandatory escapes (P1-16 / 6.4). */
+/* One entry per byte that has a short escape; NULL means "copy the byte as it
+ * is". Bytes >= 0x80 are UTF-8 and are always copied verbatim. */
+static const char *const JSON_ESCAPES[0x80] = {
+    ['"']  = "\\\"",
+    ['\\'] = "\\\\",
+    ['\b'] = "\\b",
+    ['\f'] = "\\f",
+    ['\n'] = "\\n",
+    ['\r'] = "\\r",
+    ['\t'] = "\\t",
+};
+
+/* Append a JSON string literal with every escape JSON requires. The values come
+ * from modem strings and station names, none of which is trusted. */
 void cpe_web_sbuf_append_json_string(cpe_web_sbuf_t *sb, const char *src)
 {
     if (sb->failed) {
         return;
     }
-    cpe_web_sbuf_append(sb, "\"");
+    sbuf_append_raw(sb, "\"", 1);
     if (src != NULL) {
-        for (const unsigned char *p = (const unsigned char *)src; *p != '\0'; p++) {
-            switch (*p) {
-            case '"':
-                cpe_web_sbuf_append(sb, "\\\"");
+        const unsigned char *p = (const unsigned char *)src;
+        while (*p != '\0') {
+            /* Copy the whole run of characters that need no escape in one go. */
+            const unsigned char *run = p;
+            while (*p >= 0x80 ||
+                   (*p >= 0x20 && *p != 0x7f && JSON_ESCAPES[*p] == NULL)) {
+                p++;
+            }
+            sbuf_append_raw(sb, (const char *)run, (size_t)(p - run));
+
+            if (*p == '\0') {
                 break;
-            case '\\':
-                cpe_web_sbuf_append(sb, "\\\\");
-                break;
-            case '\b':
-                cpe_web_sbuf_append(sb, "\\b");
-                break;
-            case '\f':
-                cpe_web_sbuf_append(sb, "\\f");
-                break;
-            case '\n':
-                cpe_web_sbuf_append(sb, "\\n");
-                break;
-            case '\r':
-                cpe_web_sbuf_append(sb, "\\r");
-                break;
-            case '\t':
-                cpe_web_sbuf_append(sb, "\\t");
-                break;
-            default:
-                if (*p < 0x20 || *p == 0x7f) {
-                    cpe_web_sbuf_appendf(sb, "\\u%04x", (unsigned)*p);
-                } else {
-                    cpe_web_sbuf_appendf(sb, "%c", (char)*p);
-                }
-                break;
+            }
+            unsigned char c = *p++;
+            if (c < 0x80 && JSON_ESCAPES[c] != NULL) {
+                sbuf_append_raw(sb, JSON_ESCAPES[c], strlen(JSON_ESCAPES[c]));
+            } else {
+                /* Remaining control characters and DEL: they never appear in a
+                 * station name or a modem string, so the formatting cost of the
+                 * \u00xx form is irrelevant here. */
+                cpe_web_sbuf_appendf(sb, "\\u%04x", (unsigned)c);
             }
         }
     }
-    cpe_web_sbuf_append(sb, "\"");
+    sbuf_append_raw(sb, "\"", 1);
 }
 
 esp_err_t cpe_web_send_sbuf_json(httpd_req_t *req, const char *status_line,
