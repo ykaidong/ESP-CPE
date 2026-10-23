@@ -37,6 +37,11 @@
 
 static const char *TAG = "cpe";
 
+/* Back-off after a USB host or ECM driver install failure, and the pause after
+ * a scheduled rebuild before the driver is created again. */
+#define LM_INIT_RETRY_MS        5000
+#define LM_REBUILD_SETTLE_MS    500
+
 /* Set by cpe_wan_request_ecm_rebuild() (any task) and consumed by the link
  * manager on its next tick. The ECM handles are not locked, so a scheduled
  * rebuild must never run in the caller's context. */
@@ -129,22 +134,36 @@ static void lm_enter_phase(lm_ctx_t *ctx, lm_phase_t phase)
     }
 }
 
+/* Every ECM teardown drops the link, so the wait window measured on it is stale
+ * from that moment on: the two always go together. */
+static void lm_teardown_ecm(lm_ctx_t *ctx)
+{
+    wan_ecm_teardown();
+    ctx->wait_start_us = 0;
+}
+
+/* Back to the BOOT phase and give the modem / CDC stack a moment before the
+ * next tick creates the driver again. */
+static void lm_backoff_to_boot(lm_ctx_t *ctx, uint32_t ms)
+{
+    lm_enter_phase(ctx, LM_PHASE_BOOT);
+    vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
 /* USB host + CDC driver (installed once), then the ECM driver and netif. */
 static bool lm_ensure_ready(lm_ctx_t *ctx)
 {
     if (wan_usb_cdc_install() != ESP_OK) {
         cpe_status_set_state(CPE_STATE_FAULT, "usb host init failed, retrying");
         cpe_status_set_error("usb host init failed");
-        lm_enter_phase(ctx, LM_PHASE_BOOT);
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        lm_backoff_to_boot(ctx, LM_INIT_RETRY_MS);
         return false;
     }
 
     if (wan_ecm_bring_up() != ESP_OK) {
         cpe_status_set_state(CPE_STATE_FAULT, "ecm driver init failed, retrying");
         cpe_status_set_error("ecm driver init failed");
-        lm_enter_phase(ctx, LM_PHASE_BOOT);
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        lm_backoff_to_boot(ctx, LM_INIT_RETRY_MS);
         return false;
     }
     return true;
@@ -237,10 +256,8 @@ static lm_tick_result_t lm_rebuild_ecm(lm_ctx_t *ctx)
     cpe_status_set_state(CPE_STATE_FAULT, "no IP from modem (SIM/PDP?), retrying");
     ESP_LOGW(TAG, "DHCP client retries exhausted, rebuilding the ECM driver "
              "(rebuild %"PRIu32")", ctx->ecm_rebuilds);
-    wan_ecm_teardown();
-    ctx->wait_start_us = 0;
-    lm_enter_phase(ctx, LM_PHASE_BOOT);
-    vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_RECOVERY_RETRY_MS));
+    lm_teardown_ecm(ctx);
+    lm_backoff_to_boot(ctx, CONFIG_CPE_RECOVERY_RETRY_MS);
     return LM_TICK_ACTION;
 }
 
@@ -437,8 +454,7 @@ static lm_tick_result_t lm_wait_usb(lm_ctx_t *ctx, int64_t now)
     ESP_LOGW(TAG, "No USB link after %d ms (attempt %"PRIu32")",
              CONFIG_CPE_LINK_TIMEOUT_MS, ctx->usb_attempts);
     cpe_status_set_state(CPE_STATE_FAULT, "waiting for USB modem");
-    wan_ecm_teardown();
-    ctx->wait_start_us = 0;
+    lm_teardown_ecm(ctx);
 
     if (!wan_usb_device_present()) {
         if (lm_try_reenumerate(ctx)) {
@@ -463,19 +479,17 @@ static lm_tick_result_t lm_scheduled_rebuild(lm_ctx_t *ctx)
     ctx->enum_reset_attempts = 0;
     ctx->dhcp_restarts = 0;
     ctx->ecm_rebuilds = 0;
-    ctx->wait_start_us = 0;
     ctx->was_online = false;
     cpe_status_set_recovery_attempts(0);
     cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
 
-    wan_ecm_teardown();
+    lm_teardown_ecm(ctx);
     /* Set the state after the teardown cleared the link flags, so the web
      * console does not briefly show "online" with a dead interface. */
     cpe_status_set_state(CPE_STATE_BOOT, "scheduled ECM rebuild");
-    lm_enter_phase(ctx, LM_PHASE_BOOT);
     /* Leave the modem/CDC state alone for a moment before the next tick
      * creates the driver again. */
-    vTaskDelay(pdMS_TO_TICKS(500));
+    lm_backoff_to_boot(ctx, LM_REBUILD_SETTLE_MS);
     return LM_TICK_ACTION;
 }
 
