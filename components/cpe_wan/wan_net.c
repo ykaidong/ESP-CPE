@@ -59,7 +59,7 @@ static void wan_event_handler(void *arg, esp_event_base_t base, int32_t id, void
                 return;
             }
             /* An IPv4 string is 15 characters plus the terminator: the field
-             * has slack, and a truncated address is never published (D9). */
+             * has slack, and a truncated address is never published. */
             char ip[20];
             int n = snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
             if (n < 0 || (size_t)n >= sizeof(ip)) {

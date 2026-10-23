@@ -91,7 +91,7 @@ static usbh_cdc_port_handle_t s_port;
 static uint32_t s_port_generation;
 static int s_failures;
 /* Slack for the longest strings a modem answers with: model/firmware revisions
- * grow with build suffixes and the IMEI may come as a 16 digit IMEISV (D9). */
+ * grow with build suffixes and the IMEI may come as a 16 digit IMEISV. */
 static char s_model[40];
 static char s_fw[40];
 static char s_imei[20];
