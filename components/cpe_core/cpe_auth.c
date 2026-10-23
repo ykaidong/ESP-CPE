@@ -110,21 +110,32 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
 
     int64_t now = esp_timer_get_time();
     xSemaphoreTake(s_lock, portMAX_DELAY);
-
     if (s_lock_until_us > now) {
         xSemaphoreGive(s_lock);
         return CPE_AUTH_ERR_LOCKED;
     }
+    xSemaphoreGive(s_lock);
 
+    /* Verifying the password runs PBKDF2, which is far too slow to do under
+     * the auth lock: every session lookup of the other httpd tasks would wait
+     * for it (audit D6). Only the shared state below needs the lock, and the
+     * lockout is checked again once it is held. */
     cpe_config_t cfg;
     if (cpe_config_get(&cfg) != ESP_OK) {
-        xSemaphoreGive(s_lock);
         return CPE_AUTH_ERR_CREDENTIALS;
     }
 
     bool ok = (username != NULL) && cpe_ct_equal_str(username, cfg.admin_user);
     if (ok) {
         ok = cpe_config_check_admin_password(password);
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    now = esp_timer_get_time();
+    if (s_lock_until_us > now) {
+        /* Another attempt locked the account while this one was verifying. */
+        xSemaphoreGive(s_lock);
+        return CPE_AUTH_ERR_LOCKED;
     }
 
     if (!ok) {

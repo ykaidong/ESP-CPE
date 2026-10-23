@@ -388,16 +388,32 @@ esp_err_t cpe_config_factory_reset(void)
     if (!s_cfg.inited) {
         return ESP_ERR_INVALID_STATE;
     }
-    xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
-
     /* A reset performed from the web UI must not lock the user out of the
      * SoftAP (the new random password would only be visible on the UART).
      * Keep the device-unique AP SSID/password, reset everything else and set
      * the admin password back to the AP password (forced change on login). */
     char keep_ssid[sizeof(s_cfg.state.cfg.ap_ssid)];
     char keep_password[sizeof(s_cfg.state.cfg.ap_password)];
+    xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
     memcpy(keep_ssid, s_cfg.state.cfg.ap_ssid, sizeof(keep_ssid));
     memcpy(keep_password, s_cfg.state.cfg.ap_password, sizeof(keep_password));
+    xSemaphoreGiveRecursive(s_cfg.lock);
+
+    /* PBKDF2 is long running: derive the new admin hash before taking the
+     * lock, so a factory reset cannot stall configuration readers for the
+     * whole derivation (audit D6). The salt is random and does not depend on
+     * the state, and the hash is derived from the copied AP password which is
+     * also the one written back below, so the two always agree. */
+    uint8_t salt[CPE_ADMIN_SALT_LEN];
+    uint8_t hash[CPE_ADMIN_HASH_LEN];
+    esp_fill_random(salt, sizeof(salt));
+    esp_err_t derive_err = cpe_config_store_pbkdf2(keep_password, salt,
+                                                   sizeof(salt), hash);
+    if (derive_err != ESP_OK) {
+        memset(hash, 0, sizeof(hash));
+    }
+
+    xSemaphoreTakeRecursive(s_cfg.lock, portMAX_DELAY);
 
     cpe_config_state_t next;
     memset(&next, 0, sizeof(next));
@@ -407,18 +423,19 @@ esp_err_t cpe_config_factory_reset(void)
     }
     bool erased = (err == ESP_OK);
     if (erased) {
-        esp_fill_random(next.adm_salt, CPE_ADMIN_SALT_LEN);
         err = cpe_config_store_apply_defaults(&next, false);
     }
     if (erased && err == ESP_OK) {
         memcpy(next.cfg.ap_ssid, keep_ssid, sizeof(keep_ssid));
         memcpy(next.cfg.ap_password, keep_password, sizeof(keep_password));
         /* The admin credential must match the (kept) AP password again. */
-        err = cpe_config_store_pbkdf2(next.cfg.ap_password, next.adm_salt,
-                                      CPE_ADMIN_SALT_LEN, next.adm_hash);
-        if (err != ESP_OK) {
+        memcpy(next.adm_salt, salt, sizeof(salt));
+        if (derive_err == ESP_OK) {
+            memcpy(next.adm_hash, hash, sizeof(hash));
+        } else {
             /* Fail closed: do not persist an all-zero hash. */
             memset(next.adm_hash, 0, sizeof(next.adm_hash));
+            err = derive_err;
         }
         next.adm_must_change = true;
     }
@@ -437,6 +454,9 @@ esp_err_t cpe_config_factory_reset(void)
     }
     memset(&next, 0, sizeof(next));
     xSemaphoreGiveRecursive(s_cfg.lock);
+    memset(keep_password, 0, sizeof(keep_password));
+    memset(salt, 0, sizeof(salt));
+    memset(hash, 0, sizeof(hash));
     if (err == ESP_OK) {
         /* The persistent recovery budget is cleared by
          * cpe_system_factory_reset(): keeping it out of the configuration layer
