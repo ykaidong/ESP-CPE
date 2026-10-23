@@ -35,14 +35,15 @@ typedef struct {
     bool usb_connected;
     bool link_up;
     bool got_ip;
-    char ip[16];
+    char ip[20];                /*!< IPv4 needs 16 bytes; the slack keeps a
+                                 *   longer string from being cut silently */
     bool has_public_ip;
-    char public_ip[16];
+    char public_ip[20];
     int8_t rssi;                /*!< 0 when unknown, negative dBm otherwise */
     bool rssi_valid;
-    char modem_model[32];
-    char modem_fw[32];
-    char imei[16];
+    char modem_model[40];
+    char modem_fw[40];
+    char imei[20];              /*!< 15 digit IMEI, slack for IMEISV */
     char carrier[32];
     bool modem_registered;      /*!< Modem registered on the network (CEREG) */
     bool sim_valid;             /*!< SIM state was read over AT */

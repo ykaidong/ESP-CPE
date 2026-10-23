@@ -58,10 +58,16 @@ static void wan_event_handler(void *arg, esp_event_base_t base, int32_t id, void
             if (event->esp_netif != wan_ecm_netif()) {
                 return;
             }
-            char ip[16];
-            snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
-            ESP_LOGI(TAG, "4G WAN IP: %s", ip);
-            cpe_status_set_ip(ip);
+            /* An IPv4 string is 15 characters plus the terminator: the field
+             * has slack, and a truncated address is never published (D9). */
+            char ip[20];
+            int n = snprintf(ip, sizeof(ip), IPSTR, IP2STR(&event->ip_info.ip));
+            if (n < 0 || (size_t)n >= sizeof(ip)) {
+                ESP_LOGW(TAG, "WAN IP string does not fit, not publishing it");
+            } else {
+                ESP_LOGI(TAG, "4G WAN IP: %s", ip);
+                cpe_status_set_ip(ip);
+            }
             cpe_status_set_error(NULL);
         } else if (id == IP_EVENT_ETH_LOST_IP) {
             ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;

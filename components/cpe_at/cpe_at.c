@@ -90,9 +90,11 @@ static uint32_t s_generation;
 static usbh_cdc_port_handle_t s_port;
 static uint32_t s_port_generation;
 static int s_failures;
-static char s_model[32];
-static char s_fw[32];
-static char s_imei[16];
+/* Slack for the longest strings a modem answers with: model/firmware revisions
+ * grow with build suffixes and the IMEI may come as a 16 digit IMEISV (D9). */
+static char s_model[40];
+static char s_fw[40];
+static char s_imei[20];
 
 static bool at_reset_pending(void)
 {
@@ -672,6 +674,38 @@ static void at_copy_line(char *dst, size_t dst_size, const char *src, size_t len
     dst[len] = '\0';
 }
 
+/* Copies into a fixed field and reports a truncation instead of hiding it: a
+ * silently cut model or IMEI looks like a modem reporting garbage (audit D9). */
+static void at_store_str(char *dst, size_t dst_size, const char *src,
+                         const char *what)
+{
+    int n = snprintf(dst, dst_size, "%s", src);
+    if (n < 0 || (size_t)n >= dst_size) {
+        ESP_LOGW(TAG, "%s does not fit in %u bytes, truncated",
+                 what, (unsigned)(dst_size - 1));
+    }
+}
+
+/* True when the answer carries the given +CME ERROR code. The number is parsed
+ * instead of matching a fixed substring, so "10" is not confused with the 10x
+ * codes and any spacing after the colon is tolerated (audit D9). */
+static bool at_cme_error_is(const char *resp, long code)
+{
+    const char *cme = strstr(resp, "+CME ERROR:");
+    if (cme == NULL) {
+        return false;
+    }
+    const char *p = at_skip_ws(cme + strlen("+CME ERROR:"));
+    char *end = NULL;
+    long value = strtol(p, &end, 10);
+    if (end == p) {
+        return false;
+    }
+    /* The code must stand alone: "10" must not match "100" or "10abc". */
+    return value == code && (*end == '\0' || *end == '\r' || *end == '\n' ||
+                             *end == ' ');
+}
+
 /* Returns -1 when the answer is not understood, 0 when no card is present,
  * 1 when a card is present (READY, PIN/PUK locked or still initialising). */
 static int at_parse_cpin(const char *resp)
@@ -680,10 +714,8 @@ static int at_parse_cpin(const char *resp)
         return -1;
     }
     /* 10 is "SIM not inserted"; other 10x codes must not be mistaken for it. */
-    const char *cme = strstr(resp, "+CME ERROR: 10");
     bool sim_missing = strstr(resp, "NOT INSERTED") != NULL ||
-                       (cme != NULL && (cme[14] == '\0' || cme[14] == '\r' ||
-                                        cme[14] == '\n' || cme[14] == ' '));
+                       at_cme_error_is(resp, 10);
     if (sim_missing) {
         return 0;
     }
@@ -785,10 +817,10 @@ static void at_parse_ati(const char *resp)
     }
 
     if (model[0] != '\0') {
-        snprintf(s_model, sizeof(s_model), "%s", model);
+        at_store_str(s_model, sizeof(s_model), model, "Modem model");
     }
     if (fw[0] != '\0') {
-        snprintf(s_fw, sizeof(s_fw), "%s", fw);
+        at_store_str(s_fw, sizeof(s_fw), fw, "Firmware revision");
     }
 }
 
@@ -821,7 +853,7 @@ static void at_parse_cgsn(const char *resp)
     }
 
     if (imei[0] != '\0') {
-        snprintf(s_imei, sizeof(s_imei), "%s", imei);
+        at_store_str(s_imei, sizeof(s_imei), imei, "IMEI");
     }
 }
 
