@@ -53,17 +53,8 @@ static esp_err_t precheck_ota_post(httpd_req_t *req)
     return ESP_OK;
 }
 
-static esp_err_t api_ota_status_get_handler(httpd_req_t *req)
+esp_err_t api_ota_status_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    if (cpe_web_require_session(req, session, false) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
     cpe_ota_info_t info;
     if (cpe_ota_get_info(&info) != ESP_OK) {
         return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
@@ -300,7 +291,7 @@ static void ota_upload_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
+esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
 {
     esp_err_t pre = precheck_ota_post(req);
     if (pre != ESP_OK) {
@@ -351,13 +342,4 @@ static esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-esp_err_t cpe_web_api_ota_register(httpd_handle_t server)
-{
-    static const httpd_uri_t uris[] = {
-        { .uri = "/api/ota/status", .method = HTTP_GET,
-          .handler = api_ota_status_get_handler },
-        { .uri = "/api/ota/upload", .method = HTTP_POST,
-          .handler = api_ota_upload_post_handler },
-    };
-    return cpe_web_register_uris(server, uris, sizeof(uris) / sizeof(uris[0]));
-}
+

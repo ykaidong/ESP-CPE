@@ -12,17 +12,8 @@
 #include "cpe_status.h"
 #include "http_internal.h"
 
-static esp_err_t api_status_get_handler(httpd_req_t *req)
+esp_err_t api_status_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    if (cpe_web_require_session(req, session, false) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
     cpe_status_t status = { 0 };
     cpe_status_get(&status);
 
@@ -86,12 +77,4 @@ static esp_err_t api_status_get_handler(httpd_req_t *req)
                          (cfg_ok && cfg.ap_hidden) ? "true" : "false",
                          (unsigned)(cfg_ok ? cfg.max_sta : 0));
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
-}
-
-esp_err_t cpe_web_api_status_register(httpd_handle_t server)
-{
-    static const httpd_uri_t uris[] = {
-        { .uri = "/api/status", .method = HTTP_GET, .handler = api_status_get_handler },
-    };
-    return cpe_web_register_uris(server, uris, sizeof(uris) / sizeof(uris[0]));
 }

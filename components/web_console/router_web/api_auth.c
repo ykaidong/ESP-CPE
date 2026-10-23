@@ -17,7 +17,7 @@
 
 static const char *TAG = "cpe_web";
 
-static esp_err_t api_login_post_handler(httpd_req_t *req)
+esp_err_t api_login_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_NONE,
@@ -87,7 +87,7 @@ static esp_err_t api_login_post_handler(httpd_req_t *req)
     }
 }
 
-static esp_err_t api_logout_post_handler(httpd_req_t *req)
+esp_err_t api_logout_post_handler(httpd_req_t *req)
 {
     /* Logout is idempotent and only logs the user out; accepting a valid
      * session without a CSRF token makes "logout" always work even if the
@@ -113,7 +113,7 @@ static esp_err_t api_logout_post_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-static esp_err_t api_password_post_handler(httpd_req_t *req)
+esp_err_t api_password_post_handler(httpd_req_t *req)
 {
     /* REQUIRED, not MUTABLE: this is the endpoint that clears the forced
      * password change, so it must stay usable while must_change is set. The
@@ -173,12 +173,4 @@ static esp_err_t api_password_post_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-esp_err_t cpe_web_api_auth_register(httpd_handle_t server)
-{
-    static const httpd_uri_t uris[] = {
-        { .uri = "/api/login",    .method = HTTP_POST, .handler = api_login_post_handler },
-        { .uri = "/api/logout",   .method = HTTP_POST, .handler = api_logout_post_handler },
-        { .uri = "/api/password", .method = HTTP_POST, .handler = api_password_post_handler },
-    };
-    return cpe_web_register_uris(server, uris, sizeof(uris) / sizeof(uris[0]));
-}
+

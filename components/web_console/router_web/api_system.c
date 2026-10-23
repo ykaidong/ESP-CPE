@@ -64,7 +64,7 @@ static void append_maintenance_status(cpe_web_sbuf_t *sb)
                          st.reboot_frozen ? "true" : "false");
 }
 
-static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
+esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
 {
     /* Factory reset is allowed even while a forced password change is pending
      * (it is the recovery path), but it still requires a session + CSRF. */
@@ -105,7 +105,7 @@ static esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
     return err;
 }
 
-static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
+esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_MUTABLE,
@@ -128,17 +128,8 @@ static esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
     return err;
 }
 
-static esp_err_t api_maintenance_get_handler(httpd_req_t *req)
+esp_err_t api_maintenance_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    if (cpe_web_require_session(req, session, false) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 256);
     cpe_web_sbuf_append(&sb, "{\"status\":\"ok\"");
@@ -147,7 +138,7 @@ static esp_err_t api_maintenance_get_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-static esp_err_t api_maintenance_post_handler(httpd_req_t *req)
+esp_err_t api_maintenance_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_MUTABLE,
@@ -214,19 +205,4 @@ static esp_err_t api_maintenance_post_handler(httpd_req_t *req)
     append_maintenance_status(&sb);
     cpe_web_sbuf_append(&sb, "}");
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
-}
-
-esp_err_t cpe_web_api_system_register(httpd_handle_t server)
-{
-    static const httpd_uri_t uris[] = {
-        { .uri = "/api/factory_reset", .method = HTTP_POST,
-          .handler = api_factory_reset_post_handler },
-        { .uri = "/api/system/reboot", .method = HTTP_POST,
-          .handler = api_system_reboot_post_handler },
-        { .uri = "/api/system/maintenance", .method = HTTP_GET,
-          .handler = api_maintenance_get_handler },
-        { .uri = "/api/system/maintenance", .method = HTTP_POST,
-          .handler = api_maintenance_post_handler },
-    };
-    return cpe_web_register_uris(server, uris, sizeof(uris) / sizeof(uris[0]));
 }

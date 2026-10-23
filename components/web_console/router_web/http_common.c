@@ -31,11 +31,11 @@ void cpe_web_secure_wipe(void *ptr, size_t len)
 
 #if CONFIG_CPE_WEB_HTTP_LOG
 
-/* One slot per registered URI. Registration runs once per httpd instance and
- * again when the listener is re-created after a SoftAP restart, so the table is
- * reset by cpe_web_route_log_reset() before each registration round. */
-#define CPE_WEB_ROUTE_LOG_MAX 24
-
+/* One slot per registered URI (CPE_WEB_ROUTE_LOG_MAX lives in http_internal.h
+ * so web_routes.c can assert the route table against it). Registration runs
+ * once per httpd instance and again when the listener is re-created after a
+ * SoftAP restart, so the table is reset by cpe_web_route_log_reset() before
+ * each registration round. */
 typedef struct {
     httpd_uri_t uri;                 /* copy actually registered (handler wrapped) */
     esp_err_t (*handler)(httpd_req_t *);

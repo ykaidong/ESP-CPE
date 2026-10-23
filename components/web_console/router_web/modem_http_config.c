@@ -100,28 +100,11 @@ static void free_rest_context(void)
     s_rest_context = NULL;
 }
 
+/* Single registration entry point: the route table in web_routes.c owns the
+ * URI list and the authentication of every entry (audit A6). */
 static esp_err_t register_api_handlers(httpd_handle_t server)
 {
-    esp_err_t err = cpe_web_api_auth_register(server);
-    if (err == ESP_OK) {
-        err = cpe_web_api_status_register(server);
-    }
-    if (err == ESP_OK) {
-        err = cpe_web_api_system_register(server);
-    }
-    if (err == ESP_OK) {
-        err = cpe_web_api_ota_register(server);
-    }
-    if (err == ESP_OK) {
-        err = cpe_web_api_wlan_register(server);
-    }
-    if (err == ESP_OK) {
-        err = cpe_web_api_station_register(server);
-    }
-    if (err == ESP_OK) {
-        err = cpe_web_static_files_register(server, s_rest_context);
-    }
-    return err;
+    return cpe_web_routes_register(server, s_rest_context);
 }
 
 /* Create the HTTP server and bind its listening socket to the SoftAP netif.
@@ -129,7 +112,7 @@ static esp_err_t register_api_handlers(httpd_handle_t server)
 static esp_err_t start_http_server(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 20;
+    config.max_uri_handlers = CPE_WEB_HTTPD_MAX_URI_HANDLERS;
     config.max_resp_headers = 12;
     config.max_open_sockets = 7; /* matches the browser per-origin connection limit */
     config.recv_wait_timeout = 2;

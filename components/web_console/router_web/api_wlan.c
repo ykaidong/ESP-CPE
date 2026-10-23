@@ -113,17 +113,8 @@ static void wlan_apply_task(void *arg)
     vTaskDelete(NULL);
 }
 
-static esp_err_t wlan_general_get_handler(httpd_req_t *req)
+esp_err_t wlan_general_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    if (cpe_web_require_session(req, session, false) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
     cpe_config_t cfg;
     esp_err_t err = cpe_config_get(&cfg);
     if (err != ESP_OK) {
@@ -146,7 +137,7 @@ static esp_err_t wlan_general_get_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-static esp_err_t wlan_general_post_handler(httpd_req_t *req)
+esp_err_t wlan_general_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_MUTABLE,
@@ -335,16 +326,8 @@ static esp_err_t wlan_general_post_handler(httpd_req_t *req)
     return reply_err;
 }
 
-static esp_err_t wlan_advance_get_handler(httpd_req_t *req)
+esp_err_t wlan_advance_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    if (cpe_web_require_session(req, session, false) != ESP_OK) {
-        return ESP_FAIL;
-    }
     cpe_config_t cfg;
     esp_err_t err = cpe_config_get(&cfg);
     if (err != ESP_OK) {
@@ -358,7 +341,7 @@ static esp_err_t wlan_advance_get_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
+esp_err_t wlan_advance_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_MUTABLE,
@@ -452,17 +435,4 @@ static esp_err_t wlan_advance_post_handler(httpd_req_t *req)
     return reply_err;
 }
 
-esp_err_t cpe_web_api_wlan_register(httpd_handle_t server)
-{
-    static const httpd_uri_t uris[] = {
-        { .uri = "/wlan_general", .method = HTTP_GET,
-          .handler = wlan_general_get_handler },
-        { .uri = "/wlan_general", .method = HTTP_POST,
-          .handler = wlan_general_post_handler },
-        { .uri = "/wlan_advance", .method = HTTP_GET,
-          .handler = wlan_advance_get_handler },
-        { .uri = "/wlan_advance", .method = HTTP_POST,
-          .handler = wlan_advance_post_handler },
-    };
-    return cpe_web_register_uris(server, uris, sizeof(uris) / sizeof(uris[0]));
-}
+

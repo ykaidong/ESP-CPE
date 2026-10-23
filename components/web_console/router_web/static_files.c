@@ -81,11 +81,49 @@ static bool uri_is_safe(const char *uri)
     return true;
 }
 
+/* Anonymous access is limited to the page shells and their assets (audit D2).
+ * Everything else in the SPIFFS partition needs a session, so a file dropped
+ * into the image later does not silently become world-readable. The data behind
+ * the pages always comes from the authenticated /api endpoints, so serving the
+ * HTML/JS/CSS anonymously leaks nothing. */
+static bool path_is_public(const char *uri)
+{
+    if (uri == NULL || uri[0] != '/') {
+        return false;
+    }
+    if (strcmp(uri, "/") == 0) {
+        return true;
+    }
+
+    static const char *const dirs[] = { "/css/", "/js/", "/img/" };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        if (strncmp(uri, dirs[i], strlen(dirs[i])) == 0) {
+            return true;
+        }
+    }
+
+    /* Root-level pages: login.html, index.html, wlan.html, upgrade.html. */
+    if (strchr(uri + 1, '/') == NULL) {
+        const char *dot = strrchr(uri, '.');
+        return dot != NULL && strcasecmp(dot, ".html") == 0;
+    }
+    return false;
+}
+
 static esp_err_t rest_common_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
+    static const cpe_web_get_opts_t session_opts = {
+        .session = CPE_WEB_GET_SESSION_REQUIRED,
+        .csrf = false,
+    };
+    static const cpe_web_get_opts_t public_opts = {
+        .session = CPE_WEB_GET_SESSION_NONE,
+        .csrf = false,
+    };
+    esp_err_t gate_err = cpe_web_get_begin(req, path_is_public(req->uri) ? &public_opts
+                                                                       : &session_opts, NULL);
+    if (gate_err != ESP_OK) {
+        return gate_err;
     }
     if (!uri_is_safe(req->uri)) {
         return cpe_web_send_error_response(req, HTTPD_400, "invalid_path", false);

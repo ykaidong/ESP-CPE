@@ -277,6 +277,13 @@ lm_tick()
 - 认证：会话 Cookie（`CPE_SID`）+ CSRF 双提交；首次登录强制修改管理员口令；
   连续 5 次失败锁定 60s，之后按 120s/240s/480s/600s 指数退避；会话空闲 30 分钟失效；
   登出/改密会使会话失效；恢复出厂保留本机 AP 凭据，管理员口令重置为 AP 口令。
+- 路由与鉴权集中在 `components/web_console/router_web/web_routes.c` 的一张
+  `{uri, method, handler, auth}` 表：GET 由分发器统一前置校验（`cpe_web_get_begin()`），
+  非公开 POST 在进入 handler 前先过一次会话闸门；CSRF、请求体与强制改密仍由 handler 内的
+  `cpe_web_post_begin()` 校验（它负责把会话令牌交给 handler）。表项数对
+  `CPE_WEB_HTTPD_MAX_URI_HANDLERS`（20）与 `CPE_WEB_ROUTE_LOG_MAX`（24）有编译期断言。
+- 静态资源 `"/*"` 只对白名单匿名开放：`/`、根目录 `*.html`、`/css/`、`/js/`、`/img/`；
+  SPIFFS 内其它文件需要有效会话。页面本身不含数据，数据全部来自需鉴权的 `/api/*`。
 
 ## 8. 复位/恢复出厂按键（默认 GPIO0）
 

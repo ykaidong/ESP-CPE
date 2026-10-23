@@ -84,6 +84,30 @@ esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
 }
 
 /*
+ * Run the shared GET preamble. GET handlers accept no body and (except for the
+ * public ones) need a valid session; on failure the error response has already
+ * been sent, so the caller returns the result directly.
+ */
+esp_err_t cpe_web_get_begin(httpd_req_t *req, const cpe_web_get_opts_t *opts,
+                            char session[CPE_WEB_SESSION_BUF_LEN])
+{
+    if (req == NULL || opts == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = cpe_web_reject_unexpected_body(req);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (opts->session == CPE_WEB_GET_SESSION_NONE) {
+        return ESP_OK;
+    }
+
+    char scratch[CPE_WEB_SESSION_BUF_LEN] = { 0 };
+    return cpe_web_require_session(req, session != NULL ? session : scratch, opts->csrf);
+}
+
+/*
  * Run the shared POST preamble described by opts. On failure the corresponding
  * error response has already been sent, so the caller returns the result
  * directly. cpe_web_post_end() must be called on every success path; it ends the

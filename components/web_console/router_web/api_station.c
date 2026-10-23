@@ -18,17 +18,8 @@
 
 static const char *TAG = "cpe_web";
 
-static esp_err_t system_station_get_handler(httpd_req_t *req)
+esp_err_t system_station_get_handler(httpd_req_t *req)
 {
-    esp_err_t body_check = cpe_web_reject_unexpected_body(req);
-    if (body_check != ESP_OK) {
-        return body_check;
-    }
-    char session[CPE_WEB_SESSION_BUF_LEN] = { 0 };
-    if (cpe_web_require_session(req, session, false) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
     cpe_web_sta_snapshot_t snapshot[CPE_WEB_STA_SNAPSHOT_MAX];
     size_t count = cpe_web_sta_snapshot(snapshot, CPE_WEB_STA_SNAPSHOT_MAX);
 
@@ -59,7 +50,7 @@ static esp_err_t system_station_get_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
+esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_MUTABLE,
@@ -105,7 +96,7 @@ static esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 
-static esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
+esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
 {
     static const cpe_web_post_opts_t opts = {
         .session = CPE_WEB_POST_SESSION_MUTABLE,
@@ -155,17 +146,4 @@ static esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
     cpe_web_sbuf_init(&sb, 64);
     cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"station_renamed\"}");
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
-}
-
-esp_err_t cpe_web_api_station_register(httpd_handle_t server)
-{
-    static const httpd_uri_t uris[] = {
-        { .uri = "/system/station_state", .method = HTTP_GET,
-          .handler = system_station_get_handler },
-        { .uri = "/system/station_state/delete_device", .method = HTTP_POST,
-          .handler = system_station_delete_device_post_handler },
-        { .uri = "/system/station_state/change_name", .method = HTTP_POST,
-          .handler = system_station_change_name_post_handler },
-    };
-    return cpe_web_register_uris(server, uris, sizeof(uris) / sizeof(uris[0]));
 }

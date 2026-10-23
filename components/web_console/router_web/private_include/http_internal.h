@@ -112,6 +112,48 @@ typedef struct {
     cJSON *parser;                  /* NULL unless parse_json succeeded */
 } cpe_web_post_ctx_t;
 
+/* GET counterpart of the POST preamble (audit B6): body rejection plus session
+ * validation in one call. Used by the route dispatcher, so a GET endpoint can
+ * no longer be added without its authentication being declared. */
+typedef enum {
+    CPE_WEB_GET_SESSION_NONE = 0,   /* public endpoint (static assets, login) */
+    CPE_WEB_GET_SESSION_REQUIRED,   /* valid session */
+} cpe_web_get_session_t;
+
+typedef struct {
+    cpe_web_get_session_t session;
+    bool csrf;                      /* honoured for SESSION_REQUIRED only */
+} cpe_web_get_opts_t;
+
+/* --- route table (audit A6) ---------------------------------------------- */
+
+/* Authentication required by one route. GET routes are enforced by the
+ * dispatcher; POST routes get a uniform session gate there as well, while the
+ * CSRF token, the body and the forced password change stay in the handler's
+ * cpe_web_post_begin() call (it hands the session token to the handler). The
+ * value below is the single place where the requirement is declared, so it
+ * must always match the handler's own opts. */
+typedef enum {
+    CPE_WEB_AUTH_PUBLIC = 0,        /* no session at all */
+    CPE_WEB_AUTH_SESSION,           /* valid session */
+    CPE_WEB_AUTH_SESSION_CSRF,      /* session + CSRF token */
+    CPE_WEB_AUTH_MUTABLE,           /* session + CSRF + password already changed */
+} cpe_web_auth_t;
+
+typedef struct {
+    const char *uri;
+    httpd_method_t method;
+    esp_err_t (*handler)(httpd_req_t *req);
+    cpe_web_auth_t auth;
+} cpe_web_route_t;
+
+/* httpd handler slots: one per table entry plus the "/*" static handler. */
+#define CPE_WEB_HTTPD_MAX_URI_HANDLERS  20
+
+/* One slot per registered URI (registration repeats after every listener
+ * re-creation, the table is reset beforehand). */
+#define CPE_WEB_ROUTE_LOG_MAX           24
+
 /* --- http_common.c ------------------------------------------------------- */
 
 void cpe_web_secure_wipe(void *ptr, size_t len);
@@ -156,6 +198,9 @@ esp_err_t cpe_web_require_session(httpd_req_t *req,
                                   char session[CPE_WEB_SESSION_BUF_LEN], bool need_csrf);
 esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
                                           char session[CPE_WEB_SESSION_BUF_LEN]);
+
+esp_err_t cpe_web_get_begin(httpd_req_t *req, const cpe_web_get_opts_t *opts,
+                            char session[CPE_WEB_SESSION_BUF_LEN]);
 
 esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
                              cpe_web_post_ctx_t *ctx);
@@ -215,13 +260,37 @@ void cpe_web_listener_suspend_for_ap_restart(void);
  * down or a re-creation is already queued. */
 void cpe_web_listener_ensure_up(void);
 
-/* --- API modules --------------------------------------------------------- */
+/* --- routes (web_routes.c) ----------------------------------------------- */
 
-esp_err_t cpe_web_api_auth_register(httpd_handle_t server);
-esp_err_t cpe_web_api_status_register(httpd_handle_t server);
-esp_err_t cpe_web_api_wlan_register(httpd_handle_t server);
-esp_err_t cpe_web_api_station_register(httpd_handle_t server);
-esp_err_t cpe_web_api_system_register(httpd_handle_t server);
-esp_err_t cpe_web_api_ota_register(httpd_handle_t server);
+/* Register every API route of the table below plus the "/*" static handler.
+ * Must be called again after the listener is re-created. */
+esp_err_t cpe_web_routes_register(httpd_handle_t server,
+                                  cpe_web_rest_context_t *context);
+
+/* --- route handlers ------------------------------------------------------ */
+
+/* Handlers are non-static only so that web_routes.c can hold the single route
+ * table; nothing outside this component sees them. Authentication is enforced
+ * by the dispatcher and must not be repeated inside the GET handlers. */
+esp_err_t api_login_post_handler(httpd_req_t *req);
+esp_err_t api_logout_post_handler(httpd_req_t *req);
+esp_err_t api_password_post_handler(httpd_req_t *req);
+esp_err_t api_status_get_handler(httpd_req_t *req);
+esp_err_t api_maintenance_get_handler(httpd_req_t *req);
+esp_err_t api_maintenance_post_handler(httpd_req_t *req);
+esp_err_t api_factory_reset_post_handler(httpd_req_t *req);
+esp_err_t api_system_reboot_post_handler(httpd_req_t *req);
+esp_err_t api_ota_status_get_handler(httpd_req_t *req);
+esp_err_t api_ota_upload_post_handler(httpd_req_t *req);
+esp_err_t wlan_general_get_handler(httpd_req_t *req);
+esp_err_t wlan_general_post_handler(httpd_req_t *req);
+esp_err_t wlan_advance_get_handler(httpd_req_t *req);
+esp_err_t wlan_advance_post_handler(httpd_req_t *req);
+esp_err_t system_station_get_handler(httpd_req_t *req);
+esp_err_t system_station_delete_device_post_handler(httpd_req_t *req);
+esp_err_t system_station_change_name_post_handler(httpd_req_t *req);
+
+/* --- static assets (static_files.c) --------------------------------------- */
+
 esp_err_t cpe_web_static_files_register(httpd_handle_t server,
                                         cpe_web_rest_context_t *context);
