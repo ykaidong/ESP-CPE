@@ -1,16 +1,21 @@
 menu "CPE Application Configuration"
 
     config CPE_ENUM_FILTER_ENABLE
-        bool "Enable USB host enumeration filter (advanced)"
+        bool "Force the USB configuration value of a specific modem (advanced)"
         default n
         depends on USB_HOST_ENABLE_ENUM_FILTER_CALLBACK
         help
-            The enumeration filter callback can force the USB configuration
-            value of a device. The official example forced *every* multi
-            configuration device to configuration 2, which breaks generic ECM
-            modules. Keep this disabled unless a specific module requires it,
-            and then set the VID/PID below. Requires the local iot_usbh_cdc
-            fork with enum_filter_cb support.
+            Selects the USB configuration (bConfigurationValue) of the modem
+            identified by the VID/PID below. The official example forced *every*
+            multi configuration device to configuration 2, which breaks generic
+            ECM modules; this one only touches the configured device.
+
+            Despite the historical name this is a configuration selector, not a
+            filter: devices that do not match are still enumerated with their
+            own default configuration, the callback only accepts them without
+            changing anything. Keep this disabled unless a specific module
+            requires it. Requires the local iot_usbh_cdc fork with
+            enum_filter_cb support.
 
             This option additionally depends on
             "USB Host -> Enable enumeration filter callback" (usb component
@@ -22,20 +27,23 @@ menu "CPE Application Configuration"
             hex "Target device VID (0 = any)"
             default 0x0
             help
-                Vendor ID of the device the filter applies to. 0 matches any.
+                Vendor ID of the device whose configuration is forced. 0 matches
+                any. Non-matching devices are still enumerated as usual.
 
         config CPE_ECM_PID
             hex "Target device PID (0 = any)"
             default 0x0
             help
-                Product ID of the device the filter applies to. 0 matches any.
+                Product ID of the device whose configuration is forced. 0 matches
+                any. Non-matching devices are still enumerated as usual.
 
         config CPE_ECM_CONFIG_VALUE
             int "Forced USB configuration value"
             default 1
             range 1 8
             help
-                USB bConfigurationValue to select for the matched device.
+                USB bConfigurationValue to select for the matched device. Left
+                untouched for every other device.
     endif
 
     config CPE_MAX_RECOVERY_ATTEMPTS

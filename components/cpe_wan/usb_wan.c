@@ -51,14 +51,24 @@ static bool s_cdc_installed;
 /* ------------------------------------------------------------------------- */
 
 #if CONFIG_CPE_ENUM_FILTER_ENABLE
-static bool cpe_enum_filter_cb(const usb_device_desc_t *dev_desc, uint8_t *bConfigurationValue)
+/* Configuration selector, not a filter: the VID/PID below only decide which
+ * device gets the forced bConfigurationValue. Every device is still enumerated
+ * (the callback always accepts), because rejecting one here would silently hide
+ * a modem that comes up with a different VID/PID (for example in download mode)
+ * and leave nothing but "no USB modem" to diagnose. */
+static bool cpe_config_selector_cb(const usb_device_desc_t *dev_desc,
+                                   uint8_t *bConfigurationValue)
 {
     bool vid_ok = (CONFIG_CPE_ECM_VID == 0) || (dev_desc->idVendor == CONFIG_CPE_ECM_VID);
     bool pid_ok = (CONFIG_CPE_ECM_PID == 0) || (dev_desc->idProduct == CONFIG_CPE_ECM_PID);
     if (vid_ok && pid_ok) {
         *bConfigurationValue = CONFIG_CPE_ECM_CONFIG_VALUE;
-        ESP_LOGI(TAG, "Enumeration filter: %04X:%04X -> configuration %d",
+        ESP_LOGI(TAG, "Configuration selector: %04X:%04X -> configuration %d",
                  dev_desc->idVendor, dev_desc->idProduct, CONFIG_CPE_ECM_CONFIG_VALUE);
+    } else {
+        ESP_LOGI(TAG, "Configuration selector: %04X:%04X is not the target device, "
+                 "keeping its default configuration",
+                 dev_desc->idVendor, dev_desc->idProduct);
     }
     return true;
 }
@@ -76,7 +86,7 @@ esp_err_t wan_usb_cdc_install(void)
         .task_coreid = CONFIG_CPE_USB_TASK_CORE_ID,
         .skip_init_usb_host_driver = false,
 #if CONFIG_CPE_ENUM_FILTER_ENABLE
-        .enum_filter_cb = cpe_enum_filter_cb,
+        .enum_filter_cb = cpe_config_selector_cb,
 #endif
     };
 
