@@ -5,8 +5,14 @@
  *
  * 4G link manager: keeps the WAN alive with bounded recovery:
  * L1 rebuild ECM driver -> L2 root port power cycle -> L3 controlled reboot
- * (NVS boot counter, cleared once healthy). "Link up but no IP" (no SIM / PDP
- * not active) never reboots: the device stays in fault mode with AP/Web.
+ * (NVS boot counter, cleared once healthy).
+ * "Link up but no IP" (no SIM / PDP not active) never reboots: the device stays
+ * in fault mode with AP/Web, and its ECM rebuilds are bounded by
+ * CONFIG_CPE_IP_MAX_ECM_REBUILDS, after which only the DHCP client is restarted,
+ * which still picks the link up when the SIM/PDP shows up later.
+ * "No modem enumerated" never reboots either: it power-cycles the root port at
+ * most CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS times per round and then retries,
+ * because a modem may be plugged in at any time.
  */
 
 #include <inttypes.h>
@@ -87,6 +93,10 @@ typedef struct {
     uint32_t ip_attempts;
     uint32_t enum_reset_attempts;
     uint32_t dhcp_restarts;
+    /* ECM rebuilds of the current "link up but no IP" episode: the expensive
+     * step (it resets the modem USB interface) is bounded separately from the
+     * cheap DHCP-client restarts. */
+    uint32_t ecm_rebuilds;
     int64_t wait_start_us;
     int64_t online_start_us;
     bool was_online;
@@ -150,6 +160,7 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
              * over and the DHCP client gets a clean set of retries. */
             ctx->usb_attempts = 0;
             ctx->ip_attempts = 0;
+            ctx->ecm_rebuilds = 0;
         }
         cpe_wan_log_heap(st->link_up ? "link up" : "link down");
     }
@@ -159,6 +170,7 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
         if (st->got_ip) {
             ctx->ip_attempts = 0;
             ctx->dhcp_restarts = 0;
+            ctx->ecm_rebuilds = 0;
             wan_link_online();
         } else {
             wan_link_offline();
@@ -177,6 +189,7 @@ static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t
         ctx->usb_attempts = 0;
         ctx->ip_attempts = 0;
         ctx->enum_reset_attempts = 0;
+        ctx->ecm_rebuilds = 0;
         ctx->online_start_us = now;
         cpe_status_set_recovery_attempts(0);
         cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
@@ -214,9 +227,11 @@ static lm_tick_result_t lm_recover_dhcp(lm_ctx_t *ctx, int64_t now)
 static lm_tick_result_t lm_rebuild_ecm(lm_ctx_t *ctx)
 {
     ctx->dhcp_restarts = 0;
+    ctx->ecm_rebuilds++;
     cpe_status_set_error("link up but no IP (SIM/PDP problem?)");
     cpe_status_set_state(CPE_STATE_FAULT, "no IP from modem (SIM/PDP?), retrying");
-    ESP_LOGW(TAG, "DHCP client retries exhausted, rebuilding the ECM driver");
+    ESP_LOGW(TAG, "DHCP client retries exhausted, rebuilding the ECM driver "
+             "(rebuild %"PRIu32")", ctx->ecm_rebuilds);
     wan_ecm_teardown();
     ctx->wait_start_us = 0;
     lm_enter_phase(ctx, LM_PHASE_BOOT);
@@ -243,6 +258,23 @@ static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
 
     if (CONFIG_CPE_IP_DHCP_RESTARTS > 0 &&
             ctx->dhcp_restarts < CONFIG_CPE_IP_DHCP_RESTARTS) {
+        return lm_recover_dhcp(ctx, now);
+    }
+    if (CONFIG_CPE_IP_MAX_ECM_REBUILDS > 0 &&
+            ctx->ecm_rebuilds >= CONFIG_CPE_IP_MAX_ECM_REBUILDS) {
+        /* Bounded escalation: every ECM rebuild resets the modem USB interface
+         * and never fixes a missing SIM or an inactive PDP context, so stop
+         * tearing the driver down after the configured number of attempts.
+         * Recovery does not stop, it degrades to the cheap step: the DHCP
+         * client keeps retrying, which still picks the link up when the SIM or
+         * the PDP context shows up later, and the SoftAP/Web console stays
+         * available the whole time. */
+        ESP_LOGW(TAG, "ECM rebuilds exhausted, retrying the DHCP client only "
+                 "(AP/Web stay available)");
+        cpe_status_set_error("no IP from modem (SIM/PDP problem?)");
+        cpe_status_set_state(CPE_STATE_FAULT,
+                             "no IP from modem (SIM/PDP?), DHCP retries only");
+        ctx->dhcp_restarts = 0;
         return lm_recover_dhcp(ctx, now);
     }
     return lm_rebuild_ecm(ctx);
@@ -425,6 +457,7 @@ static lm_tick_result_t lm_scheduled_rebuild(lm_ctx_t *ctx)
     ctx->ip_attempts = 0;
     ctx->enum_reset_attempts = 0;
     ctx->dhcp_restarts = 0;
+    ctx->ecm_rebuilds = 0;
     ctx->wait_start_us = 0;
     ctx->was_online = false;
     cpe_status_set_recovery_attempts(0);

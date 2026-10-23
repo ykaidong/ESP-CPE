@@ -187,8 +187,12 @@ lm_tick()
 | 步骤 | 动作 | 次数 |
 | --- | --- | --- |
 | ① | 保持 ECM/USB 会话，只重启 DHCP 客户端（stop → 300ms → start），再给一个 90s 窗口 | `CPE_IP_DHCP_RESTARTS`，默认 **2** 次 |
-| ② | DHCP 重试耗尽 → 拆 ECM 重建，退避 60s 后重新建链 | 循环 |
-| ③ | 仍失败 | 保持 `FAULT`，后台继续重试，**绝不重启整机** |
+| ② | DHCP 重试耗尽 → 拆 ECM 重建，退避 60s 后重新建链 | `CPE_IP_MAX_ECM_REBUILDS`，默认 **3** 次（`0` = 不限） |
+| ③ | ECM 拆建次数用尽 | 不再拆 ECM，退化为"只重启 DHCP 客户端"，保持 `FAULT`（"no IP from modem (SIM/PDP?), DHCP retries only"），后台继续重试，**绝不重启整机** |
+
+第 ③ 步只封顶"最贵的一步"：拆 ECM 会复位模组 USB 接口，而根因若是无 SIM / PDP 未激活，
+重建多少次都不会有 IP。降级后 DHCP 客户端仍在重试，SIM 或 PDP 稍后可用时链路照样能起来，
+AP/Web 全程可用。设置 `CPE_IP_MAX_ECM_REBUILDS=0` 即回到"每次超时都拆 ECM"的旧行为。
 
 日志会明确打印 DHCP 客户端状态（`ESP_NETIF_DHCP_STARTED` 等），便于区分
 "DHCP 客户端没跑起来"和"客户端在跑但模组不回包"。
@@ -215,6 +219,7 @@ lm_tick()
 | 等 link up | `CPE_LINK_TIMEOUT_MS` | 30s | 正常枚举+ECM 配置几秒内完成，30s 覆盖模组上电慢的情况 |
 | 等 IP（DHCP） | `CPE_IP_TIMEOUT_MS` | 90s | 模组 USB 复位后重新附着网络、重建 PDP、启动 DHCP 需要时间 |
 | 无 IP 时重启 DHCP 客户端 | `CPE_IP_DHCP_RESTARTS` | 2 次 | 只重启 DHCP，不破坏 USB/ECM 会话 |
+| 无 IP 时的 ECM 拆建上限 | `CPE_IP_MAX_ECM_REBUILDS` | 3 次 | 封顶最贵的一步；用尽后只重启 DHCP，`0` = 不限 |
 | 恢复退避（ECM 重建/无设备） | `CPE_RECOVERY_RETRY_MS` | 60s | 避免高频拆装 USB 驱动，给模组重新初始化时间 |
 | 无设备时的恢复次数 | `CPE_USB_ENUM_RESET_ATTEMPTS` | 3 | 覆盖模组 `RESET_N` 脉冲与根端口掉电两种手段 |
 | ECM 卡死判定轮数 | `CPE_MAX_RECOVERY_ATTEMPTS` | 3 | 多次 ECM 重建无效后才考虑重启整机 |
@@ -239,7 +244,8 @@ lm_tick()
 | `CPE online (WAN IP ...)` | 进入 ONLINE，此时 NAPT/DNS 已配置 |
 | `Link up but no IP after 90000 ms (attempt N)` | 90s 内没拿到 IP，准备重启 DHCP 客户端 |
 | `Restarting the DHCP client (status N, ...)` | 只重启 DHCP；`status 2` = DHCP 客户端正在运行 |
-| `DHCP client retries exhausted, rebuilding the ECM driver` | DHCP 重试耗尽，开始拆 ECM 重建 |
+| `DHCP client retries exhausted, rebuilding the ECM driver (rebuild N)` | DHCP 重试耗尽，开始第 N 次拆 ECM 重建 |
+| `ECM rebuilds exhausted, retrying the DHCP client only (AP/Web stay available)` | ECM 拆建次数用尽，退化为只重启 DHCP 客户端 |
 | `No USB link after 30000 ms (attempt N)` | 30s 内没有 USB link |
 | `Firmware version ... on ota_0, next boot ota_1` | 启动时打印运行版本/分区，以及下次启动分区 |
 | `Image is pending verification, validating in 60000 ms` | 该次启动来自 OTA，等待健康判定后标记有效 |

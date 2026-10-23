@@ -49,4 +49,19 @@ menu "CPE WAN Configuration"
             gives the DHCP server a much shorter window on the next attempt.
             0 keeps the old behaviour (rebuild ECM on the first timeout).
 
+    config CPE_IP_MAX_ECM_REBUILDS
+        int "ECM rebuilds before falling back to DHCP-only recovery"
+        default 3
+        range 0 20
+        help
+            Bounds the expensive step of the recovery: every ECM rebuild resets
+            the modem USB interface, and repeating it forever never helps when
+            the real cause is a missing SIM or an inactive PDP context. Once the
+            limit is reached the link manager stops tearing the ECM driver down
+            and keeps retrying the DHCP client only, so a SIM (or a PDP context)
+            that shows up later is still picked up while the SoftAP/Web console
+            stays available. The counter is reset whenever the link or the IP
+            comes back. 0 keeps the old behaviour (rebuild ECM on every
+            timeout, unbounded).
+
 endmenu

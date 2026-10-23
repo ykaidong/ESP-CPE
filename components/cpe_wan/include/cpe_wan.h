@@ -7,7 +7,10 @@
  *
  * The component owns the USB host/CDC/ECM lifecycle, the WAN-side network
  * services (NAPT and upstream DNS for the SoftAP clients) and the link manager
- * with its bounded recovery policy. main only orchestrates the boot order.
+ * with its bounded recovery policy (see cpe_wan_start()). Only a stuck ECM link
+ * can end in a controlled reboot, and that is limited by the persistent boot
+ * counter; the "no IP" and "no modem" paths stay in fault mode with AP/Web up.
+ * main only orchestrates the boot order.
  */
 
 #pragma once
@@ -35,7 +38,7 @@ extern "C" {
  * is deliberate: the driver may report LINK_UP before the ECM netif exists, and
  * those events must not be lost.
  *
- * Individual registration failures are logged; the function returns the last
+ * Individual registration failures are logged; the function returns the first
  * error but the caller normally continues (matching the previous boot path).
  */
 esp_err_t cpe_wan_events_register(void);
@@ -53,9 +56,14 @@ esp_err_t cpe_wan_ap_hook_register(void);
  * @brief Pulse the optional module reset GPIO and start the link manager task.
  *
  * The link manager installs the USB host/CDC driver once, creates the ECM
- * driver/netif and recovers the WAN with bounded escalation (ECM rebuild ->
- * root port power cycle -> controlled reboot). It never tears down the USB
- * Host stack.
+ * driver/netif and recovers the WAN with bounded escalation: a stuck ECM link
+ * goes ECM rebuild -> root port power cycle -> controlled reboot (limited by
+ * the persistent boot counter). "Link up but no IP" (no SIM / PDP inactive) and
+ * "no modem enumerated" never reboot: the device stays in fault mode with the
+ * SoftAP/Web console available, and only the cheap steps keep retrying, bounded
+ * per round: the DHCP client restarts, and so does the root port power cycle,
+ * up to CONFIG_CPE_IP_MAX_ECM_REBUILDS and CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS
+ * times. It never tears down the USB Host stack.
  *
  * @return ESP_OK when the task was created, an IDF error code otherwise; on
  *         failure the device stays AP/Web-only (the caller decides whether to
@@ -80,7 +88,9 @@ void cpe_wan_log_heap(const char *reason);
  * A scheduled rebuild is maintenance, not a fault: the recovery budget is not
  * consumed and no modem reset is issued (the USB session is kept).
  *
- * @note The request is dropped when link manager is not running.
+ * @note The request is sticky, not dropped: when the link manager has not
+ *       reached its tick yet the flag stays raised and the rebuild still runs
+ *       once, on the first tick after it starts.
  */
 void cpe_wan_request_ecm_rebuild(void);
 
