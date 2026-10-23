@@ -344,7 +344,7 @@ static void maint_ecm_rebuild(maint_ctx_t *ctx, int64_t now)
 {
     if (ota_busy()) {
         ctx->next_ecm_us = now + (int64_t)MAINT_OTA_DEFER_MS * 1000LL;
-        ESP_LOGW(TAG, "Scheduled ECM rebuild deferred: OTA in progress or image pending verify");
+        ESP_LOGI(TAG, "Scheduled ECM rebuild deferred: OTA in progress or image pending verify");
         return;
     }
     if (ctx->ecm_started_us != 0) {
@@ -356,7 +356,7 @@ static void maint_ecm_rebuild(maint_ctx_t *ctx, int64_t now)
     ctx->ecm_started_us = now;
     ctx->next_ecm_us = now + period_us(ctx->cfg.ecm_period_min);
     ctx->ecm_runs++;
-    ESP_LOGW(TAG, "Scheduled ECM rebuild #%" PRIu32 " (every %" PRIu32 " min, uptime %" PRIi64 " s)",
+    ESP_LOGI(TAG, "Scheduled ECM rebuild #%" PRIu32 " (every %" PRIu32 " min, uptime %" PRIi64 " s)",
              ctx->ecm_runs, ctx->cfg.ecm_period_min, now / 1000000LL);
     cpe_wan_request_ecm_rebuild();
 }
@@ -366,7 +366,7 @@ static void maint_reboot(maint_ctx_t *ctx, int64_t now)
 {
     if (ota_busy()) {
         ctx->next_reboot_us = now + (int64_t)MAINT_OTA_DEFER_MS * 1000LL;
-        ESP_LOGW(TAG, "Scheduled reboot deferred: OTA in progress or image pending verify");
+        ESP_LOGI(TAG, "Scheduled reboot deferred: OTA in progress or image pending verify");
         return;
     }
 
@@ -390,7 +390,7 @@ static void maint_reboot(maint_ctx_t *ctx, int64_t now)
     ctx->sched_count = next;
     ctx->frozen = false;
     ctx->reboot_runs++;
-    ESP_LOGW(TAG, "Scheduled reboot #%" PRIu32 " (every %" PRIu32 " min, uptime %" PRIi64 " s, "
+    ESP_LOGI(TAG, "Scheduled reboot #%" PRIu32 " (every %" PRIu32 " min, uptime %" PRIi64 " s, "
              "reset modem: %s)",
              next, ctx->cfg.reboot_period_min, now / 1000000LL,
              ctx->cfg.reset_modem ? "yes" : "no");
@@ -432,7 +432,7 @@ static void maintenance_task(void *arg)
         if (!config_equal(&cfg, &ctx.cfg)) {
             ctx.cfg = cfg;
             schedule_from_config(&ctx, now);
-            ESP_LOGW(TAG, "Maintenance schedule updated: ECM every %" PRIu32 " min, "
+            ESP_LOGI(TAG, "Maintenance schedule updated: ECM every %" PRIu32 " min, "
                      "reboot every %" PRIu32 " min",
                      cfg.ecm_period_min, cfg.reboot_period_min);
         }

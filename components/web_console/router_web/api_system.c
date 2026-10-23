@@ -91,7 +91,7 @@ esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
     cpe_auth_logout_all();
     (void)cpe_web_clear_session_cookie(req);
     cpe_web_clear_csrf_cookie(req);
-    ESP_LOGW(TAG, "Factory reset requested from the web console, restarting");
+    ESP_LOGI(TAG, "Factory reset requested from the web console, restarting");
 
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 96);
@@ -122,7 +122,7 @@ esp_err_t api_system_reboot_post_handler(httpd_req_t *req)
     cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"rebooting\"}");
     err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 
-    ESP_LOGW(TAG, "Reboot requested from the web console");
+    ESP_LOGI(TAG, "Reboot requested from the web console");
     schedule_system_reboot();
     return err;
 }

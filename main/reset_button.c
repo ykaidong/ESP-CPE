@@ -83,13 +83,13 @@ esp_err_t reset_button_init(void)
 
 static void print_credentials(void)
 {
-    ESP_LOGW(TAG, "Reset button double-clicked: printing credentials");
+    ESP_LOGI(TAG, "Reset button double-clicked: printing credentials");
     cpe_config_print_credentials("reset button double-click");
 }
 
 static void reset_button_reboot(void)
 {
-    ESP_LOGW(TAG, "Rebooting; double-click within %d ms after boot to print "
+    ESP_LOGI(TAG, "Rebooting; double-click within %d ms after boot to print "
              "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
     if (cpe_wan_reboot_deferred(true, "reset button") != ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(300));
@@ -126,7 +126,7 @@ static void reset_button_task(void *arg)
             }
             last_press_us = now_us;
 
-            ESP_LOGW(TAG, "Reset button pressed (hold %d ms for factory reset)",
+            ESP_LOGI(TAG, "Reset button pressed (hold %d ms for factory reset)",
                      CONFIG_CPE_FACTORY_RESET_HOLD_MS);
         } else if (!now) {
             pressed = false;
@@ -150,7 +150,7 @@ static void reset_button_task(void *arg)
                 (int64_t)CONFIG_CPE_FACTORY_RESET_HOLD_MS * 1000LL) {
             reset_triggered = true;
             status_led_factory_reset();
-            ESP_LOGW(TAG, "Reset button held for %d ms, restoring factory settings",
+            ESP_LOGI(TAG, "Reset button held for %d ms, restoring factory settings",
                      CONFIG_CPE_FACTORY_RESET_HOLD_MS);
             /* Same call as the web console: configuration, station nicknames,
              * the maintenance policy and the recovery budget are all cleared
@@ -167,7 +167,7 @@ static void reset_button_task(void *arg)
              * the device half reset forever. */
             reboot_pending = true;
             pending_warn_us = now_us;
-            ESP_LOGW(TAG, "Release the button to complete the factory reset");
+            ESP_LOGI(TAG, "Release the button to complete the factory reset");
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));

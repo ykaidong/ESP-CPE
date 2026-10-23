@@ -252,7 +252,7 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
 
     /* The response is queued; the shared helper waits for it to leave the
      * socket and then boots the new image. */
-    ESP_LOGW(TAG, "Firmware update stored, restarting into the new image");
+    ESP_LOGI(TAG, "Firmware update stored, restarting into the new image");
     if (cpe_wan_reboot_deferred(true, "firmware update") != ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(800));
         cpe_wan_reboot(true);

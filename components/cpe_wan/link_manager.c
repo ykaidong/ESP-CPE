@@ -35,7 +35,7 @@
 #include "cpe_wan.h"
 #include "wan_internal.h"
 
-static const char *TAG = "cpe";
+static const char *TAG = "cpe_link";
 
 /* Back-off after a USB host or ECM driver install failure, and the pause after
  * a scheduled rebuild before the driver is created again. */

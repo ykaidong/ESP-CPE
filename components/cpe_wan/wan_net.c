@@ -25,7 +25,7 @@
 #include "cpe_wan.h"
 #include "wan_internal.h"
 
-static const char *TAG = "cpe";
+static const char *TAG = "cpe_net";
 
 static void wan_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {

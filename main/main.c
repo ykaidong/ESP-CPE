@@ -37,7 +37,7 @@
 #include "reset_button.h"
 #include "status_led.h"
 
-static const char *TAG = "cpe";
+static const char *TAG = "cpe_main";
 
 /* Validate an image that was just installed by OTA.
  *

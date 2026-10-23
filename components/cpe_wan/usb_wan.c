@@ -30,7 +30,7 @@
 #include "cpe_wan.h"
 #include "wan_internal.h"
 
-static const char *TAG = "cpe";
+static const char *TAG = "cpe_wan";
 
 #define ECM_NETIF_KEY       "ECM0"
 #define ECM_NETIF_DESC      "usb-ecm"

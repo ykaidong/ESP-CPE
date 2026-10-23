@@ -220,10 +220,10 @@ esp_err_t cpe_ota_end(void)
 
     esp_app_desc_t new_desc;
     if (esp_ota_get_partition_description(partition, &new_desc) == ESP_OK) {
-        ESP_LOGW(TAG, "OTA image validated: version %s on %s (%u bytes), boot partition switched",
+        ESP_LOGI(TAG, "OTA image validated: version %s on %s (%u bytes), boot partition switched",
                  new_desc.version, partition->label, (unsigned)written);
     } else {
-        ESP_LOGW(TAG, "OTA image validated on %s (%u bytes), boot partition switched",
+        ESP_LOGI(TAG, "OTA image validated on %s (%u bytes), boot partition switched",
                  partition->label, (unsigned)written);
     }
 
@@ -273,7 +273,7 @@ esp_err_t cpe_ota_mark_running_valid(void)
     }
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     if (err == ESP_OK) {
-        ESP_LOGW(TAG, "OTA image validated and marked valid (rollback cancelled)");
+        ESP_LOGI(TAG, "OTA image validated and marked valid (rollback cancelled)");
     } else {
         ESP_LOGE(TAG, "esp_ota_mark_app_valid_cancel_rollback failed: %s", esp_err_to_name(err));
     }
