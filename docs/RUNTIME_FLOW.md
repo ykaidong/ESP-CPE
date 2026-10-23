@@ -114,6 +114,9 @@ lm_tick()
   │                         ECM 未就绪 → wan_ecm_bring_up()
   │                         （bring-up 即把 ECM netif 设为默认网卡；
   │                          link 可能在 glue 挂接前就 up，这里会补一次 connected 同步）
+  │                          拆 ECM 时 netif 被销毁，esp_netif 会自动把默认网卡
+  │                          改选为仍然 up 的 AP（无需在 teardown 里显式回退），
+  │                          下次 bring-up 再把 ECM 设为默认
   ├─ lm_service()           读取状态快照，处理 link/IP 边沿、NAPT/DNS、周期 heap 日志
   └─ 按状态分派：
        link up && got_ip   → lm_online()    ONLINE

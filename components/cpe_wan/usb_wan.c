@@ -187,6 +187,13 @@ void wan_ecm_teardown(void)
         s_ecm.glue = NULL;
     }
     if (s_ecm.netif != NULL) {
+        /* Destroying the netif drops the lwIP default route, but esp_netif
+         * re-elects one immediately: esp_netif_destroy() ends with
+         * esp_netif_update_default_netif(ESP_NETIF_STOPPED), and since the
+         * destroyed netif is unlisted by then, the override is dropped and the
+         * remaining netif that is up (here: the SoftAP) becomes default. No
+         * explicit fallback is needed here; wan_ecm_bring_up() sets the ECM
+         * netif as default again as soon as it exists. */
         esp_netif_destroy(s_ecm.netif);
         s_ecm.netif = NULL;
     }
