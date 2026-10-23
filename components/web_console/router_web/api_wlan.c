@@ -197,7 +197,7 @@ esp_err_t wlan_general_post_handler(httpd_req_t *req)
         return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);
     }
 
-    /* ---- server side validation (audit P1-13) ---- */
+    /* ---- server side validation ---- */
     if (!has_ssid || cpe_config_validate_ap_ssid(ssid) != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
         return cpe_web_send_error_response(req, HTTPD_400, "invalid_ssid", false);

@@ -62,7 +62,7 @@ void cpe_status_deinit(void)
 /* Every setter is the same three steps: check that the module is up, take the
  * lock, write the field. Keeping that boilerplate in these typed helpers (no
  * void *, so passing the wrong field is still a compile error) means a new
- * field cannot forget one of the steps (audit C2). */
+ * field cannot forget one of the steps. */
 static bool status_enter(void)
 {
     if (!s_inited) {

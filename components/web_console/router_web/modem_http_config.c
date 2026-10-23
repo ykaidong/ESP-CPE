@@ -101,7 +101,7 @@ static void free_rest_context(void)
 }
 
 /* Single registration entry point: the route table in web_routes.c owns the
- * URI list and the authentication of every entry (audit A6). */
+ * URI list and the authentication of every entry. */
 static esp_err_t register_api_handlers(httpd_handle_t server)
 {
     return cpe_web_routes_register(server, s_rest_context);
@@ -126,7 +126,7 @@ static esp_err_t start_http_server(void)
     /* The management console must only be reachable from the SoftAP side. The
      * ECM WAN interface can get a routable address from the modem (e.g.
      * 192.168.225.x); binding the listening socket to the AP netif keeps the
-     * console off the WAN (audit item 7.6). The ifreq only has to stay valid
+     * console off the WAN. The ifreq only has to stay valid
      * until httpd_start() returns. */
     struct ifreq ap_ifr;
     memset(&ap_ifr, 0, sizeof(ap_ifr));
@@ -283,7 +283,7 @@ esp_err_t modem_http_start(void)
     }
 
     /* The mutex MUST exist before any Wi-Fi event handler or HTTP handler is
-     * registered (audit P1-17). */
+     * registered. */
     err = cpe_web_station_registry_init();
     if (err != ESP_OK) {
         goto fail;

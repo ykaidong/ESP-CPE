@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * One random string generator for the whole component (audit C4). The session
+ * One random string generator for the whole component. The session
  * and CSRF tokens and the generated SoftAP password used to have their own
  * copy, with different alphabets and different truncation rules.
  */

@@ -410,7 +410,7 @@ esp_err_t cpe_config_factory_reset(void)
 
     /* PBKDF2 is long running: derive the new admin hash before taking the
      * lock, so a factory reset cannot stall configuration readers for the
-     * whole derivation (audit D6). The salt is random and does not depend on
+     * whole derivation. The salt is random and does not depend on
      * the state, and the hash is derived from the copied AP password which is
      * also the one written back below, so the two always agree. */
     uint8_t salt[CPE_ADMIN_SALT_LEN];
@@ -469,7 +469,7 @@ esp_err_t cpe_config_factory_reset(void)
     if (err == ESP_OK) {
         /* The persistent recovery budget is cleared by
          * cpe_system_factory_reset(): keeping it out of the configuration layer
-         * avoids cpe_core depending on the recovery section (audit A7). */
+         * avoids cpe_core depending on the recovery section. */
         /* The credentials are printed on the next boot when the reset button
          * is held down while the application starts (only while the admin
          * password has not been changed). */

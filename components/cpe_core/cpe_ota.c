@@ -93,7 +93,7 @@ esp_err_t cpe_ota_get_info(cpe_ota_info_t *info)
 
 /* Clears the whole OTA bookkeeping in one critical section. The four fields are
  * only ever meaningful together, so every exit path goes through here: leaving
- * one behind would make the module look idle while it is not (audit C3). */
+ * one behind would make the module look idle while it is not. */
 static void ota_reset_state(void)
 {
     portENTER_CRITICAL(&s_state_lock);
@@ -109,7 +109,7 @@ esp_err_t cpe_ota_begin(size_t expected_size)
     /* Test and set in one critical section: the slot is reserved before the
      * (slow) partition work starts. esp_ota_begin() also refuses a second
      * session, but only once it gets there, so two callers could previously
-     * both pass the busy check and race into it (audit D10). */
+     * both pass the busy check and race into it. */
     portENTER_CRITICAL(&s_state_lock);
     bool busy = s_upload_in_progress;
     if (!busy) {

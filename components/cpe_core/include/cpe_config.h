@@ -103,7 +103,7 @@ esp_err_t cpe_config_validate_ap(const cpe_config_t *cfg);
  *        non-empty admin user.
  *
  * Used before storing a new configuration and when loading one from NVS, so
- * both agree on what "valid" means (audit C1).
+ * both agree on what "valid" means.
  */
 esp_err_t cpe_config_validate(const cpe_config_t *cfg);
 

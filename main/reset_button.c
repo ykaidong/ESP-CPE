@@ -43,7 +43,7 @@ static const char *TAG = "reset_button";
 #define BUTTON_ACTIVE_LEVEL CONFIG_CPE_RESET_BUTTON_ACTIVE_LEVEL
 
 /* How often to complain while a factory reset is waiting for the button to be
- * released (audit D10: the wait must not be open ended). */
+ * released (the wait must not be open ended). */
 #define RESET_RELEASE_REMINDER_MS   5000
 
 static bool s_gpio_ready;
@@ -164,7 +164,7 @@ static void reset_button_task(void *arg)
              * UART download mode. The wait happens in the main loop instead of
              * blocking here: a stuck button then only postpones the reboot
              * (and says so every RESET_RELEASE_REMINDER_MS) instead of leaving
-             * the device half reset forever (audit D10). */
+             * the device half reset forever. */
             reboot_pending = true;
             pending_warn_us = now_us;
             ESP_LOGW(TAG, "Release the button to complete the factory reset");

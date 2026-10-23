@@ -675,7 +675,7 @@ static void at_copy_line(char *dst, size_t dst_size, const char *src, size_t len
 }
 
 /* Copies into a fixed field and reports a truncation instead of hiding it: a
- * silently cut model or IMEI looks like a modem reporting garbage (audit D9). */
+ * silently cut model or IMEI looks like a modem reporting garbage. */
 static void at_store_str(char *dst, size_t dst_size, const char *src,
                          const char *what)
 {
@@ -688,7 +688,7 @@ static void at_store_str(char *dst, size_t dst_size, const char *src,
 
 /* True when the answer carries the given +CME ERROR code. The number is parsed
  * instead of matching a fixed substring, so "10" is not confused with the 10x
- * codes and any spacing after the colon is tolerated (audit D9). */
+ * codes and any spacing after the colon is tolerated. */
 static bool at_cme_error_is(const char *resp, long code)
 {
     const char *cme = strstr(resp, "+CME ERROR:");
@@ -982,7 +982,7 @@ static esp_err_t at_poll(void)
 
 /* The only place that forgets the port handle: everything else goes through it,
  * so readiness, failure count and telemetry status cannot drift apart from
- * s_port (audit D8). `close` must be false when the device is gone, because the
+ * s_port. `close` must be false when the device is gone, because the
  * CDC driver closes the ports of a removed device itself. */
 static void at_release_port(bool close);
 
@@ -1080,7 +1080,7 @@ static void at_register_events(void)
         /* The CDC driver is installed by the WAN link manager task, which may
          * still be starting. Retry until it is available, but stop hiding it:
          * after AT_EVENT_REGISTER_FAST_TRIES the console shows why there is no
-         * AT telemetry, and the cadence drops to save CPU (audit D8). */
+         * AT telemetry, and the cadence drops to save CPU. */
         if (attempt == 1) {
             ESP_LOGW(TAG, "Cannot register for USB device events yet (%s), retrying",
                      esp_err_to_name(err));
@@ -1199,7 +1199,7 @@ esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
     xTaskNotifyGive(s_task);
 
     /* Wait for the completion of *this* request: a semaphore given for a reset
-     * whose caller timed out earlier must not satisfy this one (audit D8). */
+     * whose caller timed out earlier must not satisfy this one. */
     const TickType_t limit = pdMS_TO_TICKS(timeout_ms);
     TickType_t start = xTaskGetTickCount();
     for (;;) {

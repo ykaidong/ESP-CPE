@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Single route table of the management web server (audit A6) and the
+ * Single route table of the management web server and the
  * authentication gate that goes with it.
  */
 

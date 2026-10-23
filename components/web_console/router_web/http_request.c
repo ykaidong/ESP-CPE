@@ -108,7 +108,7 @@ esp_err_t cpe_web_send_body_error(httpd_req_t *req, cpe_web_body_result_t result
 /*
  * Common pre-body checks. Everything here runs before authentication and
  * before a single byte of the body is consumed, which is what prevents the
- * unauthenticated content-length DoS (audit P1-12).
+ * unauthenticated content-length DoS.
  */
 esp_err_t cpe_web_precheck_post(httpd_req_t *req, bool require_body)
 {

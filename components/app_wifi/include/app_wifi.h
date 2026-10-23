@@ -9,7 +9,7 @@
  * maximum station count) come from components/cpe_core (cpe_config.h), never
  * from compile-time credentials. Every API returns an error instead of
  * aborting through ESP_ERROR_CHECK so that a bad configuration can never turn
- * into a boot loop (audit P1-13).
+ * into a boot loop.
  */
 
 #pragma once

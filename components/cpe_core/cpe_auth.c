@@ -110,7 +110,7 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
 
     /* Verifying the password runs PBKDF2, which is far too slow to do under
      * the auth lock: every session lookup of the other httpd tasks would wait
-     * for it (audit D6). Only the shared state below needs the lock, and the
+     * for it. Only the shared state below needs the lock, and the
      * lockout is checked again once it is held. */
     cpe_config_t cfg;
     if (cpe_config_get(&cfg) != ESP_OK) {

@@ -6,7 +6,7 @@
  * Thin wrapper over NVS.
  *
  * Four different namespaces and the same open/get/commit/close boilerplate used
- * to be repeated in every component that persists something (audit A5/C6). The
+ * to be repeated in every component that persists something. The
  * namespace strings live here so "what does the device store" can be answered
  * from one file, and the wrapper keeps the error handling in one place.
  *

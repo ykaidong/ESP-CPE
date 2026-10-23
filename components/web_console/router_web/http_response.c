@@ -32,7 +32,7 @@ esp_err_t cpe_web_set_common_headers(httpd_req_t *req, bool no_store)
 /*
  * Send a JSON response. close_socket == true is implemented by returning
  * ESP_FAIL on purpose: ESP-IDF then closes the session immediately and, most
- * importantly, skips its "purge unread body" loop (audit P1-12).
+ * importantly, skips its "purge unread body" loop.
  */
 esp_err_t cpe_web_send_json_body(httpd_req_t *req, const char *status_line,
                                  const char *json, bool close_socket)

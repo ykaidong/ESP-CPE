@@ -199,7 +199,7 @@ esp_err_t cpe_web_json_get_string_unescaped(const cJSON *root, const char *name,
         return ESP_ERR_NOT_FOUND;
     }
     /* Distinguish a missing field from a present but malformed/oversized
-     * value: callers must reject the latter with 400 (audit P1-13), not
+     * value: callers must reject the latter with 400, not
      * silently ignore it. */
     if (!cJSON_IsString(item) || item->valuestring == NULL) {
         return ESP_ERR_INVALID_ARG;

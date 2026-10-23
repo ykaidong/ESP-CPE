@@ -88,7 +88,7 @@ esp_err_t cpe_boot_count_increment(uint32_t *count)
     }
     value++;
     /* Same helper as the maintenance counter: open, set, commit and close in
-     * one place, so both counters fail the same way (audit C5). */
+     * one place, so both counters fail the same way. */
     err = write_u32(NVS_KEY_BOOT_COUNT, value);
     ESP_LOGW(TAG, "Boot/recovery count: %u", value);
     *count = value;

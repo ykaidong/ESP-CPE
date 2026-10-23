@@ -27,11 +27,11 @@
 #define CPE_WEB_SESSION_BUF_LEN         (CPE_SESSION_TOKEN_LEN + 8)
 #define CPE_WEB_CSRF_BUF_LEN            (CPE_CSRF_TOKEN_LEN + 8)
 
-/* Maximum accepted JSON request body (audit P1-12). */
+/* Maximum accepted JSON request body. */
 #define CPE_WEB_MAX_JSON_BODY           2048
 /* Upper bound for the whole body read, regardless of the socket timeouts. */
 #define CPE_WEB_BODY_READ_TIMEOUT_US    (2 * 1000 * 1000)
-/* cJSON's parser is recursive (audit R-12); reject deeply nested documents
+/* cJSON's parser is recursive; reject deeply nested documents
  * before handing them to it. */
 #define CPE_WEB_JSON_MAX_DEPTH          6
 
@@ -112,7 +112,7 @@ typedef struct {
     cJSON *parser;                  /* NULL unless parse_json succeeded */
 } cpe_web_post_ctx_t;
 
-/* GET counterpart of the POST preamble (audit B6): body rejection plus session
+/* GET counterpart of the POST preamble: body rejection plus session
  * validation in one call. Used by the route dispatcher, so a GET endpoint can
  * no longer be added without its authentication being declared. */
 typedef enum {
@@ -125,7 +125,7 @@ typedef struct {
     bool csrf;                      /* honoured for SESSION_REQUIRED only */
 } cpe_web_get_opts_t;
 
-/* --- route table (audit A6) ---------------------------------------------- */
+/* --- route table ----------------------------------------------------------- */
 
 /* Authentication required by one route. GET routes are enforced by the
  * dispatcher; POST routes get a uniform session gate there as well, while the

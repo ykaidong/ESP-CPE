@@ -64,7 +64,7 @@ static const char *content_type_for_path(const char *path)
 }
 
 /* The SPIFFS namespace is flat today, but the URI is normalized anyway so the
- * handler stays safe if the assets move to FAT/SD later (audit 6.4). */
+ * handler stays safe if the assets move to FAT/SD later. */
 static bool uri_is_safe(const char *uri)
 {
     if (uri == NULL || uri[0] != '/') {
@@ -81,7 +81,7 @@ static bool uri_is_safe(const char *uri)
     return true;
 }
 
-/* Anonymous access is limited to the page shells and their assets (audit D2).
+/* Anonymous access is limited to the page shells and their assets.
  * Everything else in the SPIFFS partition needs a session, so a file dropped
  * into the image later does not silently become world-readable. The data behind
  * the pages always comes from the authenticated /api endpoints, so serving the

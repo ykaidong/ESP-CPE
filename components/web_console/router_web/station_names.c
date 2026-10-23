@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Station MAC helpers and nickname persistence (audit P1-16/P1-17).
+ * Station MAC helpers and nickname persistence.
  */
 
 #include <ctype.h>
@@ -77,7 +77,7 @@ bool cpe_web_mac_parse(const char *str, uint8_t mac[6])
     return false;
 }
 
-/* Whitelist for the user visible station name (audit P1-16). */
+/* Whitelist for the user visible station name. */
 bool cpe_web_station_name_valid(const char *name)
 {
     if (name == NULL) {

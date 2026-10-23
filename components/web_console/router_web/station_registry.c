@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * In-memory station list fed by Wi-Fi/IP events (audit P1-17).
+ * In-memory station list fed by Wi-Fi/IP events.
  */
 
 #include <stdio.h>

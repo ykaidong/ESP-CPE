@@ -68,7 +68,7 @@ esp_err_t cpe_web_require_session(httpd_req_t *req,
 }
 
 /* Same as require_session(), but refuses to change anything until the forced
- * first-login password change has been performed (audit P0-3). */
+ * first-login password change has been performed. */
 esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
                                           char session[CPE_WEB_SESSION_BUF_LEN])
 {

@@ -5,7 +5,7 @@
  *
  * SoftAP start-up / runtime reconfiguration for the ESP-CPE product.
  *
- * Security notes (audit P0-3 / P1-13 / P1-15):
+ * Security notes:
  *  - No credential is compiled in: SSID and WPA2 password come from
  *    cpe_config (per-device random credential generated on first boot).
  *  - The AP is always WPA2-PSK, an empty password can never downgrade the AP

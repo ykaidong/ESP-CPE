@@ -56,7 +56,7 @@ esp_err_t cpe_system_factory_reset(void)
 
     /* Recovery state, not configuration: clearing it here instead of inside
      * cpe_config_factory_reset() keeps the configuration layer free of the
-     * recovery section (audit A7). */
+     * recovery section. */
     (void)cpe_boot_count_clear();
     ESP_LOGI(TAG, "Factory settings restored (AP credentials kept)");
     return ESP_OK;
