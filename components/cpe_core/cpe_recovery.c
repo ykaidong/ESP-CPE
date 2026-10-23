@@ -5,7 +5,6 @@
  */
 
 #include "esp_log.h"
-#include "nvs.h"
 
 #include "cpe_kv.h"
 #include "cpe_recovery.h"
@@ -19,18 +18,17 @@ static const char *TAG = "cpe_recovery";
  * not been written yet. Real NVS errors are logged and returned. */
 static esp_err_t read_u32(const char *key, uint32_t *out)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READONLY, &h);
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_SYSTEM, false);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         *out = 0;
         return ESP_OK;
     }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to open %s: %s", CPE_KV_NS_SYSTEM, esp_err_to_name(err));
         *out = 0;
         return err;
     }
-    err = nvs_get_u32(h, key, out);
+    err = cpe_kv_get_u32(&kv, key, out);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
         *out = 0;
         err = ESP_OK;
@@ -38,24 +36,24 @@ static esp_err_t read_u32(const char *key, uint32_t *out)
         ESP_LOGE(TAG, "Failed to read %s: %s", key, esp_err_to_name(err));
         *out = 0;
     }
-    nvs_close(h);
+    cpe_kv_close(&kv);
     return err;
 }
 
 static esp_err_t write_u32(const char *key, uint32_t value)
 {
-    nvs_handle_t h;
-    esp_err_t err = nvs_open(CPE_KV_NS_SYSTEM, NVS_READWRITE, &h);
+    cpe_kv_t kv;
+    esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_SYSTEM, true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open %s for writing: %s",
                  CPE_KV_NS_SYSTEM, esp_err_to_name(err));
         return err;
     }
-    err = nvs_set_u32(h, key, value);
+    err = cpe_kv_set_u32(&kv, key, value);
     if (err == ESP_OK) {
-        err = nvs_commit(h);
+        err = cpe_kv_commit(&kv);
     }
-    nvs_close(h);
+    cpe_kv_close(&kv);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to persist %s: %s", key, esp_err_to_name(err));
     }
