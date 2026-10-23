@@ -42,6 +42,10 @@ static const char *TAG = "reset_button";
 #define BUTTON_GPIO         CONFIG_CPE_RESET_BUTTON_GPIO
 #define BUTTON_ACTIVE_LEVEL CONFIG_CPE_RESET_BUTTON_ACTIVE_LEVEL
 
+/* How often to complain while a factory reset is waiting for the button to be
+ * released (audit D10: the wait must not be open ended). */
+#define RESET_RELEASE_REMINDER_MS   5000
+
 static bool s_gpio_ready;
 static bool s_boot_printed;
 static int64_t s_boot_print_deadline_us;
@@ -83,13 +87,26 @@ static void print_credentials(void)
     cpe_config_print_credentials("reset button double-click");
 }
 
+static void reset_button_reboot(void)
+{
+    ESP_LOGW(TAG, "Rebooting; double-click within %d ms after boot to print "
+             "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
+    if (cpe_wan_reboot_deferred(true, "reset button") != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(300));
+        cpe_wan_reboot(true);
+    }
+}
+
 static void reset_button_task(void *arg)
 {
     (void)arg;
     bool pressed = false;
     bool reset_triggered = false;
+    /* Factory reset stored, reboot waiting for the button to be released. */
+    bool reboot_pending = false;
     int64_t press_start_us = 0;
     int64_t last_press_us = 0;
+    int64_t pending_warn_us = 0;
 
     for (;;) {
         bool now = button_is_pressed();
@@ -113,6 +130,19 @@ static void reset_button_task(void *arg)
                      CONFIG_CPE_FACTORY_RESET_HOLD_MS);
         } else if (!now) {
             pressed = false;
+            if (reboot_pending) {
+                /* Released: GPIO0 is high again, so the reboot cannot fall into
+                 * the ROM download mode. */
+                reboot_pending = false;
+                reset_button_reboot();
+            }
+        }
+
+        if (reboot_pending &&
+                (now_us - pending_warn_us) >= (int64_t)RESET_RELEASE_REMINDER_MS * 1000LL) {
+            pending_warn_us = now_us;
+            ESP_LOGE(TAG, "Button still held: the factory settings are stored but "
+                     "the reboot is postponed, release the button to complete it");
         }
 
         if (pressed && !reset_triggered &&
@@ -130,17 +160,14 @@ static void reset_button_task(void *arg)
                 ESP_LOGE(TAG, "Factory reset failed: %s; rebooting anyway",
                          esp_err_to_name(err));
             }
-            ESP_LOGW(TAG, "Reboot blocked while the button is held: GPIO0 must be "
-                     "released before reset, otherwise the ROM enters UART download mode");
-            while (button_is_pressed()) {
-                vTaskDelay(pdMS_TO_TICKS(100));
-            }
-            ESP_LOGW(TAG, "Rebooting; double-click within %d ms after boot to print "
-                     "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
-            if (cpe_wan_reboot_deferred(true, "reset button") != ESP_OK) {
-                vTaskDelay(pdMS_TO_TICKS(300));
-                cpe_wan_reboot(true);
-            }
+            /* GPIO0 must be released before the reboot, otherwise the ROM enters
+             * UART download mode. The wait happens in the main loop instead of
+             * blocking here: a stuck button then only postpones the reboot
+             * (and says so every RESET_RELEASE_REMINDER_MS) instead of leaving
+             * the device half reset forever (audit D10). */
+            reboot_pending = true;
+            pending_warn_us = now_us;
+            ESP_LOGW(TAG, "Release the button to complete the factory reset");
         }
 
         vTaskDelay(pdMS_TO_TICKS(50));
