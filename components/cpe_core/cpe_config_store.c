@@ -96,8 +96,16 @@ static const cfg_key_desc_t s_keys[CFG_KEY_COUNT] = {
 /* Small helpers                                                             */
 /* ------------------------------------------------------------------------- */
 
-static void random_password(char *buf, size_t len)
+/* `size` is the capacity of buf, the same convention as random_token() in
+ * cpe_auth.c: the terminator always lands inside the buffer, so a length that
+ * is mistaken for a capacity can no longer write one byte past the end. The
+ * password itself stays CPE_PASSWORD_LEN characters (audit D9). */
+static void random_password(char *buf, size_t size)
 {
+    size_t len = (size > 0) ? size - 1 : 0;
+    if (len > CPE_PASSWORD_LEN) {
+        len = CPE_PASSWORD_LEN;
+    }
     const uint32_t alphabet_len = (uint32_t)(sizeof(PASSWORD_ALPHABET) - 1);
     /* 2^32 is not a multiple of alphabet_len: reject the low values so that
      * the modulo below stays unbiased. */
@@ -247,7 +255,7 @@ esp_err_t cpe_config_store_apply_defaults(cpe_config_state_t *st,
     }
     snprintf(cfg->ap_ssid, sizeof(cfg->ap_ssid), "%s-%02X%02X",
              CONFIG_CPE_AP_SSID_PREFIX, mac[4], mac[5]);
-    random_password(cfg->ap_password, CPE_PASSWORD_LEN);
+    random_password(cfg->ap_password, sizeof(cfg->ap_password));
     cfg->ap_channel = CONFIG_CPE_AP_CHANNEL_DEFAULT;
     /* HT20 by default: 2.4 GHz has no really free 40 MHz block, and the wider
      * channel measurably increases jitter/latency for interactive traffic. */
