@@ -97,8 +97,11 @@ esp_err_t cpe_config_validate_device_name(const char *name)
     return is_printable_ascii(name, len) ? ESP_OK : ESP_ERR_INVALID_ARG;
 }
 
-static esp_err_t validate_cfg(const cpe_config_t *cfg)
+esp_err_t cpe_config_validate_ap(const cpe_config_t *cfg)
 {
+    if (cfg == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
     esp_err_t err = cpe_config_validate_ap_ssid(cfg->ap_ssid);
     if (err == ESP_OK) {
         err = cpe_config_validate_wifi_password(cfg->ap_password);
@@ -112,6 +115,12 @@ static esp_err_t validate_cfg(const cpe_config_t *cfg)
     if (err == ESP_OK) {
         err = cpe_config_validate_max_sta(cfg->max_sta);
     }
+    return err;
+}
+
+esp_err_t cpe_config_validate(const cpe_config_t *cfg)
+{
+    esp_err_t err = cpe_config_validate_ap(cfg);
     if (err == ESP_OK) {
         err = cpe_config_validate_device_name(cfg->device_name);
     }
@@ -262,7 +271,7 @@ esp_err_t cpe_config_update(cpe_config_mutator_t mutate, void *ctx)
         cpe_config_state_t next = s_cfg.state;
         err = mutate(&next.cfg, ctx);
         if (err == ESP_OK) {
-            err = validate_cfg(&next.cfg);
+            err = cpe_config_validate(&next.cfg);
         }
         if (err == ESP_OK) {
             err = cpe_config_store_persist_diff(s_cfg.nvs, &s_cfg.state, &next);

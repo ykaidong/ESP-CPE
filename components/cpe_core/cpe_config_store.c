@@ -373,13 +373,7 @@ bool cpe_config_store_load(nvs_handle_t nvs, cpe_config_state_t *st, bool *found
         return false;
     }
 
-    if (cpe_config_validate_ap_ssid(cfg->ap_ssid) != ESP_OK ||
-            cpe_config_validate_wifi_password(cfg->ap_password) != ESP_OK ||
-            cpe_config_validate_channel(cfg->ap_channel) != ESP_OK ||
-            cpe_config_validate_bandwidth(cfg->ap_bandwidth) != ESP_OK ||
-            cpe_config_validate_max_sta(cfg->max_sta) != ESP_OK ||
-            cpe_config_validate_device_name(cfg->device_name) != ESP_OK ||
-            cfg->admin_user[0] == '\0') {
+    if (cpe_config_validate(cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Stored configuration is invalid (channel=%u, bw=%u, max_sta=%u), restoring secure defaults",
                  cfg->ap_channel, cfg->ap_bandwidth, cfg->max_sta);
         return false;

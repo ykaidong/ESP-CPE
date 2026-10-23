@@ -76,11 +76,9 @@ static esp_err_t build_ap_config(const cpe_config_t *cfg, wifi_config_t *out)
     if (cfg == NULL || out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (cpe_config_validate_ap_ssid(cfg->ap_ssid) != ESP_OK ||
-            cpe_config_validate_wifi_password(cfg->ap_password) != ESP_OK ||
-            cpe_config_validate_channel(cfg->ap_channel) != ESP_OK ||
-            cpe_config_validate_bandwidth(cfg->ap_bandwidth) != ESP_OK ||
-            cpe_config_validate_max_sta(cfg->max_sta) != ESP_OK) {
+    /* Only the AP part: the device name and the admin user have nothing to do
+     * with the radio, they must not stop the SoftAP from coming up. */
+    if (cpe_config_validate_ap(cfg) != ESP_OK) {
         ESP_LOGE(TAG, "Refusing invalid AP configuration");
         return ESP_ERR_INVALID_ARG;
     }

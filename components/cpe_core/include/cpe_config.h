@@ -90,6 +90,24 @@ esp_err_t cpe_config_validate_max_sta(int max_sta);
 esp_err_t cpe_config_validate_device_name(const char *name);
 
 /**
+ * @brief Validate the SoftAP part of a configuration as a whole.
+ *
+ * Single source of truth for callers that only care about the AP (the Wi-Fi
+ * driver): a configuration that fails here cannot be applied to the radio, but
+ * an unrelated field (device name, admin user) does not stop the SoftAP.
+ */
+esp_err_t cpe_config_validate_ap(const cpe_config_t *cfg);
+
+/**
+ * @brief Validate a complete configuration: the AP part, the device name and a
+ *        non-empty admin user.
+ *
+ * Used before storing a new configuration and when loading one from NVS, so
+ * both agree on what "valid" means (audit C1).
+ */
+esp_err_t cpe_config_validate(const cpe_config_t *cfg);
+
+/**
  * @brief Callback used by cpe_config_update() to edit a working copy.
  *
  * Runs with the internal configuration lock held: only modify fields of
