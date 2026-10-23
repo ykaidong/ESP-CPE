@@ -70,23 +70,20 @@ esp_err_t system_station_delete_device_post_handler(httpd_req_t *req)
 
     uint8_t mac[6] = { 0 };
     if (err != ESP_OK || !cpe_web_mac_parse(mac_str, mac)) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_mac", false);
+        return cpe_web_send_error(req, "invalid_mac");
     }
     if (!cpe_web_sta_node_exists(mac)) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_404_STR,
-                                           "station_not_found", false);
+        return cpe_web_send_error(req, "station_not_found");
     }
 
     /* The AID lookup and esp_wifi_deauth_sta() live in app_wifi: the console
      * must not need the Wi-Fi driver's station table. */
     err = app_wifi_sta_disconnect(mac);
     if (err == ESP_ERR_NOT_FOUND) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_404_STR,
-                                           "station_not_found", false);
+        return cpe_web_send_error(req, "station_not_found");
     }
     if (err != ESP_OK) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "deauth_failed", false);
+        return cpe_web_send_error(req, "deauth_failed");
     }
 
     ESP_LOGI(TAG, "Station " MACSTR " was disconnected from the web console", MAC2STR(mac));
@@ -121,18 +118,16 @@ esp_err_t system_station_change_name_post_handler(httpd_req_t *req)
 
     uint8_t mac[6] = { 0 };
     if (err != ESP_OK) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);
+        return cpe_web_send_error(req, "invalid_request");
     }
     if (!cpe_web_mac_parse(mac_str, mac)) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_mac", false);
+        return cpe_web_send_error(req, "invalid_mac");
     }
     if (!cpe_web_station_name_valid(name_str)) {
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "invalid_station_name", false);
+        return cpe_web_send_error(req, "invalid_station_name");
     }
     if (!cpe_web_sta_node_rename(mac, name_str)) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_404_STR,
-                                           "station_not_found", false);
+        return cpe_web_send_error(req, "station_not_found");
     }
 
     /* Best effort persistence: the live list already carries the new name. */

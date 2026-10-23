@@ -85,8 +85,7 @@ esp_err_t api_factory_reset_post_handler(httpd_req_t *req)
     err = cpe_system_factory_reset();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Factory reset failed: %s", esp_err_to_name(err));
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "factory_reset_failed", false);
+        return cpe_web_send_error(req, "factory_reset_failed");
     }
 
     cpe_auth_logout_all();
@@ -164,22 +163,19 @@ esp_err_t api_maintenance_post_handler(httpd_req_t *req)
     cpe_web_post_end(&ctx);
 
     if (err != ESP_OK) {
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "invalid_request_body", false);
+        return cpe_web_send_error(req, "invalid_request_body");
     }
     if (!has_ecm && !has_reboot) {
-        return cpe_web_send_error_response(req, HTTPD_400, "no_fields", false);
+        return cpe_web_send_error(req, "no_fields");
     }
     if ((has_ecm && (ecm_period < 0 || ecm_period > CPE_MAINT_PERIOD_MAX_MIN)) ||
             (has_reboot && (reboot_period < 0 || reboot_period > CPE_MAINT_PERIOD_MAX_MIN))) {
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "invalid_maintenance_period", false);
+        return cpe_web_send_error(req, "invalid_maintenance_period");
     }
 
     cpe_maint_config_t cfg;
     if (cpe_maint_config_get(&cfg) != ESP_OK) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "config_unavailable", false);
+        return cpe_web_send_error(req, "config_unavailable");
     }
     if (has_ecm) {
         cfg.ecm_period_min = (uint32_t)ecm_period;
@@ -190,13 +186,11 @@ esp_err_t api_maintenance_post_handler(httpd_req_t *req)
 
     err = cpe_maint_config_set(&cfg);
     if (err == ESP_ERR_INVALID_ARG) {
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "invalid_maintenance_period", false);
+        return cpe_web_send_error(req, "invalid_maintenance_period");
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to persist the maintenance policy: %s", esp_err_to_name(err));
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "persist_failed", false);
+        return cpe_web_send_error(req, "persist_failed");
     }
 
     cpe_web_sbuf_t sb;

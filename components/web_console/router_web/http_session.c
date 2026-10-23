@@ -38,7 +38,7 @@ static bool request_csrf_token(httpd_req_t *req, char *csrf, size_t csrf_len)
 
 static esp_err_t send_unauthorized(httpd_req_t *req)
 {
-    return cpe_web_send_error_response(req, CPE_WEB_HTTPD_401_STR, "unauthorized", true);
+    return cpe_web_send_error(req, "unauthorized");
 }
 
 /**
@@ -60,8 +60,7 @@ esp_err_t cpe_web_require_session(httpd_req_t *req,
         if (!request_csrf_token(req, csrf, sizeof(csrf)) ||
                 !cpe_auth_csrf_valid(session, csrf)) {
             ESP_LOGW(TAG, "Rejected %s: missing or invalid CSRF token", req->uri);
-            return cpe_web_send_error_response(req, CPE_WEB_HTTPD_403_STR,
-                                               "csrf_invalid", true);
+            return cpe_web_send_error(req, "csrf_invalid");
         }
     }
     return ESP_OK;
@@ -77,8 +76,7 @@ esp_err_t cpe_web_require_session_mutable(httpd_req_t *req,
         return err;
     }
     if (cpe_config_admin_must_change()) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_403_STR,
-                                           "password_change_required", true);
+        return cpe_web_send_error(req, "password_change_required");
     }
     return ESP_OK;
 }
@@ -164,7 +162,7 @@ esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
 
     if (!cpe_web_json_depth_ok(ctx->body, ctx->body_len, CPE_WEB_JSON_MAX_DEPTH)) {
         cpe_web_post_end(ctx);
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", true);
+        return cpe_web_send_error(req, "invalid_json");
     }
 
     /* Require the document to end after the top-level value (no trailing
@@ -175,7 +173,7 @@ esp_err_t cpe_web_post_begin(httpd_req_t *req, const cpe_web_post_opts_t *opts,
     if (root == NULL || !cJSON_IsObject(root)) {
         cJSON_Delete(root);
         cpe_web_post_end(ctx);
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_json", true);
+        return cpe_web_send_error(req, "invalid_json");
     }
     ctx->parser = root;
     return ESP_OK;

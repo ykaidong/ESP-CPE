@@ -95,13 +95,13 @@ esp_err_t cpe_web_send_body_error(httpd_req_t *req, cpe_web_body_result_t result
 {
     switch (result) {
     case CPE_WEB_BODY_TOO_LARGE:
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_413_STR, "body_too_large", true);
+        return cpe_web_send_error(req, "body_too_large");
     case CPE_WEB_BODY_TIMEOUT:
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_408_STR, "body_timeout", true);
+        return cpe_web_send_error(req, "body_timeout");
     case CPE_WEB_BODY_EMPTY:
-        return cpe_web_send_error_response(req, HTTPD_400, "empty_body", true);
+        return cpe_web_send_error(req, "empty_body");
     default:
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_body", true);
+        return cpe_web_send_error(req, "invalid_body");
     }
 }
 
@@ -115,20 +115,17 @@ esp_err_t cpe_web_precheck_post(httpd_req_t *req, bool require_body)
     if (req->content_len > CPE_WEB_MAX_JSON_BODY) {
         ESP_LOGW(TAG, "Rejecting %s: body of %u bytes exceeds limit",
                  req->uri, (unsigned)req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_413_STR,
-                                           "body_too_large", true);
+        return cpe_web_send_error(req, "body_too_large");
     }
     if (require_body && req->content_len == 0) {
-        return cpe_web_send_error_response(req, HTTPD_400, "empty_body", true);
+        return cpe_web_send_error(req, "empty_body");
     }
     if (req->content_len > 0 && !request_content_type_is_json(req)) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_415_STR,
-                                           "unsupported_media_type", true);
+        return cpe_web_send_error(req, "unsupported_media_type");
     }
     if (!cpe_web_request_origin_is_same_origin(req)) {
         ESP_LOGW(TAG, "Rejecting cross-origin request to %s", req->uri);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_403_STR,
-                                           "cross_origin_rejected", true);
+        return cpe_web_send_error(req, "cross_origin_rejected");
     }
     return ESP_OK;
 }
@@ -186,5 +183,5 @@ esp_err_t cpe_web_reject_unexpected_body(httpd_req_t *req)
     if (req->content_len == 0) {
         return ESP_OK;
     }
-    return cpe_web_send_error_response(req, HTTPD_400, "unexpected_body", true);
+    return cpe_web_send_error(req, "unexpected_body");
 }

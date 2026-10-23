@@ -42,7 +42,7 @@ esp_err_t api_login_post_handler(httpd_req_t *req)
 
     if (err != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", true);
+        return cpe_web_send_error(req, "invalid_request");
     }
 
     char session[CPE_SESSION_TOKEN_LEN] = { 0 };
@@ -56,8 +56,7 @@ esp_err_t api_login_post_handler(httpd_req_t *req)
     switch (result) {
     case CPE_AUTH_OK: {
         if (cpe_web_set_session_cookie(req, session) != ESP_OK) {
-            return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                               "internal_error", true);
+            return cpe_web_send_error(req, "internal_error");
         }
         (void)cpe_web_set_csrf_cookie(req, csrf);
         cpe_web_sbuf_t sb;
@@ -76,14 +75,12 @@ esp_err_t api_login_post_handler(httpd_req_t *req)
         snprintf(retry_after, sizeof(retry_after), "%u", (unsigned)remaining);
         (void)httpd_resp_set_hdr(req, "Retry-After", retry_after);
         ESP_LOGW(TAG, "Login rejected: locked out for %u s", (unsigned)remaining);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_429_STR,
-                                           "locked_out", false);
+        return cpe_web_send_error(req, "locked_out");
     }
     default:
         /* Do not log the attempted credential. */
         ESP_LOGW(TAG, "Login failed");
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_401_STR,
-                                           "invalid_credentials", false);
+        return cpe_web_send_error(req, "invalid_credentials");
     }
 }
 
@@ -143,12 +140,12 @@ esp_err_t api_password_post_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         cpe_web_secure_wipe(old_password, sizeof(old_password));
         cpe_web_secure_wipe(new_password, sizeof(new_password));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);
+        return cpe_web_send_error(req, "invalid_request");
     }
     if (cpe_config_validate_wifi_password(new_password) != ESP_OK) {
         cpe_web_secure_wipe(old_password, sizeof(old_password));
         cpe_web_secure_wipe(new_password, sizeof(new_password));
-        return cpe_web_send_error_response(req, HTTPD_400, "weak_password", false);
+        return cpe_web_send_error(req, "weak_password");
     }
 
     err = cpe_auth_change_password(old_password, new_password);
@@ -157,10 +154,8 @@ esp_err_t api_password_post_handler(httpd_req_t *req)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Password change rejected: %s", esp_err_to_name(err));
         bool bad_input = (err == ESP_ERR_INVALID_ARG);
-        return cpe_web_send_error_response(req,
-                                           bad_input ? HTTPD_400 : CPE_WEB_HTTPD_500_STR,
-                                           bad_input ? "invalid_credentials" : "internal_error",
-                                           false);
+        return cpe_web_send_error(req, bad_input ? "invalid_credentials"
+                                                 : "internal_error");
     }
 
     /* cpe_auth_change_password() invalidated every session, including the

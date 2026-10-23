@@ -125,8 +125,7 @@ esp_err_t cpe_web_send_sbuf_json(httpd_req_t *req, const char *status_line,
 {
     if (sb->failed || sb->data == NULL) {
         cpe_web_sbuf_free(sb);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "out_of_memory", true);
+        return cpe_web_send_error(req, "out_of_memory");
     }
     esp_err_t ret = cpe_web_send_json_body(req, status_line, sb->data, close_socket);
     cpe_web_sbuf_free(sb);

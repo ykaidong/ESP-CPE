@@ -118,8 +118,7 @@ esp_err_t wlan_general_get_handler(httpd_req_t *req)
     cpe_config_t cfg;
     esp_err_t err = cpe_config_get(&cfg);
     if (err != ESP_OK) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "config_unavailable", false);
+        return cpe_web_send_error(req, "config_unavailable");
     }
 
     cpe_web_sbuf_t sb;
@@ -194,38 +193,36 @@ esp_err_t wlan_general_post_handler(httpd_req_t *req)
 
     if (err != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);
+        return cpe_web_send_error(req, "invalid_request");
     }
 
     /* ---- server side validation ---- */
     if (!has_ssid || cpe_config_validate_ap_ssid(ssid) != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_ssid", false);
+        return cpe_web_send_error(req, "invalid_ssid");
     }
     bool password_changed = false;
     if (has_password && password[0] != '\0') {
         if (cpe_config_validate_wifi_password(password) != ESP_OK) {
             cpe_web_secure_wipe(password, sizeof(password));
-            return cpe_web_send_error_response(req, HTTPD_400, "invalid_password", false);
+            return cpe_web_send_error(req, "invalid_password");
         }
         password_changed = true;
     }
     if (has_device_name && cpe_config_validate_device_name(device_name) != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "invalid_device_name", false);
+        return cpe_web_send_error(req, "invalid_device_name");
     }
     if (has_max_sta && cpe_config_validate_max_sta(max_sta) != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_max_sta", false);
+        return cpe_web_send_error(req, "invalid_max_sta");
     }
 
     cpe_config_t current;
     err = cpe_config_get(&current);
     if (err != ESP_OK) {
         cpe_web_secure_wipe(password, sizeof(password));
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "config_unavailable", false);
+        return cpe_web_send_error(req, "config_unavailable");
     }
 
     cpe_config_t next = current;
@@ -273,8 +270,7 @@ esp_err_t wlan_general_post_handler(httpd_req_t *req)
                 ESP_LOGE(TAG, "Failed to persist device name: %s", esp_err_to_name(err));
                 cpe_web_sbuf_free(&sb);
                 cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
-                return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                                   "persist_failed", false);
+                return cpe_web_send_error(req, "persist_failed");
             }
         }
         esp_err_t reply_err = cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
@@ -331,8 +327,7 @@ esp_err_t wlan_advance_get_handler(httpd_req_t *req)
     cpe_config_t cfg;
     esp_err_t err = cpe_config_get(&cfg);
     if (err != ESP_OK) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "config_unavailable", false);
+        return cpe_web_send_error(req, "config_unavailable");
     }
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 96);
@@ -366,20 +361,19 @@ esp_err_t wlan_advance_post_handler(httpd_req_t *req)
     cpe_web_post_end(&ctx);
 
     if (err != ESP_OK || !has_channel || !has_bandwidth) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_request", false);
+        return cpe_web_send_error(req, "invalid_request");
     }
     if (cpe_config_validate_channel(channel) != ESP_OK) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_channel", false);
+        return cpe_web_send_error(req, "invalid_channel");
     }
     if (cpe_config_validate_bandwidth(bandwidth) != ESP_OK) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_bandwidth", false);
+        return cpe_web_send_error(req, "invalid_bandwidth");
     }
 
     cpe_config_t current;
     err = cpe_config_get(&current);
     if (err != ESP_OK) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "config_unavailable", false);
+        return cpe_web_send_error(req, "config_unavailable");
     }
     cpe_config_t next = current;
     next.ap_channel = (uint8_t)channel;

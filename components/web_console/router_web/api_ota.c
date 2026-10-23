@@ -43,12 +43,11 @@ static const char *TAG = "cpe_web";
 static esp_err_t precheck_ota_post(httpd_req_t *req)
 {
     if (req->content_len == 0) {
-        return cpe_web_send_error_response(req, HTTPD_400, "empty_body", true);
+        return cpe_web_send_error(req, "empty_body");
     }
     if (!cpe_web_request_origin_is_same_origin(req)) {
         ESP_LOGW(TAG, "Rejecting cross-origin firmware upload");
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_403_STR,
-                                           "cross_origin_rejected", true);
+        return cpe_web_send_error(req, "cross_origin_rejected");
     }
     return ESP_OK;
 }
@@ -57,8 +56,7 @@ esp_err_t api_ota_status_get_handler(httpd_req_t *req)
 {
     cpe_ota_info_t info;
     if (cpe_ota_get_info(&info) != ESP_OK) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "ota_info_failed", false);
+        return cpe_web_send_error(req, "ota_info_failed");
     }
 
     cpe_web_sbuf_t sb;
@@ -126,8 +124,7 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
     uint8_t *buf = malloc(OTA_CHUNK_SIZE);
     if (buf == NULL) {
         ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "out_of_memory", true);
+        return cpe_web_send_error(req, "out_of_memory");
     }
 
     /* Read the first chunk before touching flash: it carries the image magic
@@ -146,8 +143,7 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
                  * network error instead of the real 408. */
                 ota_drain_unread_body(req, remaining);
                 free(buf);
-                return cpe_web_send_error_response(req, CPE_WEB_HTTPD_408_STR,
-                                                   "upload_timeout", true);
+                return cpe_web_send_error(req, "upload_timeout");
             }
             continue;
         }
@@ -155,44 +151,38 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
     }
     if (first_len <= 0) {
         free(buf);
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "upload_interrupted", true);
+        return cpe_web_send_error(req, "upload_interrupted");
     }
     last_rx_us = esp_timer_get_time();
     if (buf[0] != 0xE9) { /* ESP_IMAGE_HEADER_MAGIC */
         ESP_LOGW(TAG, "Rejected upload: not an ESP32 firmware image (magic 0x%02x)", buf[0]);
         free(buf);
         ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
-        return cpe_web_send_error_response(req, HTTPD_400,
-                                           "invalid_firmware_image", true);
+        return cpe_web_send_error(req, "invalid_firmware_image");
     }
 
     esp_err_t err = cpe_ota_begin(req->content_len);
     if (err == ESP_ERR_INVALID_SIZE) {
         free(buf);
         ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_413_STR,
-                                           "image_too_large", true);
+        return cpe_web_send_error(req, "image_too_large");
     }
     if (err == CPE_OTA_ERR_PENDING_VERIFY) {
         /* The running image was installed by OTA and has not been validated
          * yet (cpe_ota validates it CPE_OTA_VALIDATE_DELAY_MS after boot). */
         free(buf);
         ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_409_STR,
-                                           "pending_verify", true);
+        return cpe_web_send_error(req, "pending_verify");
     }
     if (err == CPE_OTA_ERR_BUSY) {
         free(buf);
         ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_409_STR,
-                                           "ota_busy", true);
+        return cpe_web_send_error(req, "ota_busy");
     }
     if (err != ESP_OK) {
         free(buf);
         ota_drain_unread_body(req, (size_t)req->content_len - (size_t)first_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "ota_begin_failed", true);
+        return cpe_web_send_error(req, "ota_begin_failed");
     }
 
     esp_err_t upload_err = ESP_OK;
@@ -232,21 +222,17 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
             ota_drain_unread_body(req, remaining);
         }
         if (upload_err == CPE_OTA_ERR_INVALID_IMAGE) {
-            return cpe_web_send_error_response(req, HTTPD_400,
-                                               "invalid_firmware_image", true);
+            return cpe_web_send_error(req, "invalid_firmware_image");
         }
         if (upload_err == ESP_ERR_TIMEOUT) {
-            return cpe_web_send_error_response(req, CPE_WEB_HTTPD_408_STR,
-                                               "upload_timeout", true);
+            return cpe_web_send_error(req, "upload_timeout");
         }
         if (upload_err == ESP_FAIL) {
             /* httpd_req_recv() <= 0: the client went away mid-upload. */
-            return cpe_web_send_error_response(req, HTTPD_400,
-                                               "upload_interrupted", true);
+            return cpe_web_send_error(req, "upload_interrupted");
         }
         /* A real write/finalization error, not a bad image or a dropped link. */
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "ota_write_failed", true);
+        return cpe_web_send_error(req, "ota_write_failed");
     }
 
     err = cpe_ota_end();
@@ -254,11 +240,9 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
         ESP_LOGE(TAG, "Firmware image rejected or boot partition switch failed: %s",
                  esp_err_to_name(err));
         if (err == CPE_OTA_ERR_INVALID_IMAGE) {
-            return cpe_web_send_error_response(req, HTTPD_400,
-                                               "invalid_firmware_image", true);
+            return cpe_web_send_error(req, "invalid_firmware_image");
         }
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "ota_finalize_failed", true);
+        return cpe_web_send_error(req, "ota_finalize_failed");
     }
 
     cpe_web_sbuf_t sb;
@@ -306,20 +290,17 @@ esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     cpe_ota_info_t info;
     if (cpe_ota_get_info(&info) != ESP_OK) {
         ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "ota_info_failed", true);
+        return cpe_web_send_error(req, "ota_info_failed");
     }
     if (info.upload_in_progress) {
         ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_409_STR,
-                                           "ota_busy", true);
+        return cpe_web_send_error(req, "ota_busy");
     }
     if (info.max_image_size > 0 && req->content_len > info.max_image_size) {
         ESP_LOGW(TAG, "Rejecting firmware upload of %u bytes (partition is %u bytes)",
                  (unsigned)req->content_len, (unsigned)info.max_image_size);
         ota_drain_unread_body(req, req->content_len);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_413_STR,
-                                           "image_too_large", true);
+        return cpe_web_send_error(req, "image_too_large");
     }
 
     /* Everything below (reading the body, writing flash, rebooting) must not run
@@ -329,15 +310,13 @@ esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
     err = httpd_req_async_handler_begin(req, &async_req);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start the asynchronous upload: %s", esp_err_to_name(err));
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "out_of_memory", true);
+        return cpe_web_send_error(req, "out_of_memory");
     }
     if (xTaskCreate(ota_upload_task, "ota_upload", OTA_UPLOAD_TASK_STACK, async_req,
                     OTA_UPLOAD_TASK_PRIO, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create the upload task");
         httpd_req_async_handler_complete(async_req);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "internal_error", true);
+        return cpe_web_send_error(req, "internal_error");
     }
     return ESP_OK;
 }

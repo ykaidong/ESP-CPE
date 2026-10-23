@@ -174,8 +174,10 @@ esp_err_t cpe_web_register_uris(httpd_handle_t server, const httpd_uri_t *uris,
 
 esp_err_t cpe_web_send_json_body(httpd_req_t *req, const char *status_line,
                                  const char *json, bool close_socket);
-esp_err_t cpe_web_send_error_response(httpd_req_t *req, const char *status_line,
-                                      const char *code, bool close_socket);
+/* Answer with one of the declared errors: the HTTP status and whether the
+ * connection is dropped both come from the table in http_response.c, so a call
+ * site only names the error. An unknown code is logged and answered as 500. */
+esp_err_t cpe_web_send_error(httpd_req_t *req, const char *code);
 esp_err_t cpe_web_set_common_headers(httpd_req_t *req, bool no_store);
 
 esp_err_t cpe_web_set_session_cookie(httpd_req_t *req, const char *session);

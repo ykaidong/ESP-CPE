@@ -126,13 +126,12 @@ static esp_err_t rest_common_get_handler(httpd_req_t *req)
         return gate_err;
     }
     if (!uri_is_safe(req->uri)) {
-        return cpe_web_send_error_response(req, HTTPD_400, "invalid_path", false);
+        return cpe_web_send_error(req, "invalid_path");
     }
 
     cpe_web_rest_context_t *context = (cpe_web_rest_context_t *)req->user_ctx;
     if (context == NULL) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "internal_error", false);
+        return cpe_web_send_error(req, "internal_error");
     }
 
     char filepath[CPE_WEB_FILE_PATH_MAX];
@@ -146,15 +145,13 @@ static esp_err_t rest_common_get_handler(httpd_req_t *req)
                            context->base_path, req->uri);
     }
     if (written < 0 || (size_t)written >= sizeof(filepath)) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_414_STR,
-                                           "uri_too_long", false);
+        return cpe_web_send_error(req, "uri_too_long");
     }
 
     int fd = open(filepath, O_RDONLY, 0);
     if (fd < 0) {
         ESP_LOGD(TAG, "Static file not found: %s", filepath);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_404_STR,
-                                           "not_found", false);
+        return cpe_web_send_error(req, "not_found");
     }
 
     esp_err_t err = httpd_resp_set_type(req, content_type_for_path(filepath));

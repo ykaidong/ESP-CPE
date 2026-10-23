@@ -104,8 +104,7 @@ static esp_err_t route_gate(httpd_req_t *req, const cpe_web_route_t *route)
     cpe_web_secure_wipe(session, sizeof(session));
 
     if (route->auth == CPE_WEB_AUTH_MUTABLE && cpe_config_admin_must_change()) {
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_403_STR,
-                                           "password_change_required", true);
+        return cpe_web_send_error(req, "password_change_required");
     }
     return ESP_OK;
 }
@@ -117,8 +116,7 @@ static esp_err_t route_dispatch(httpd_req_t *req)
     const cpe_web_route_t *route = (const cpe_web_route_t *)req->user_ctx;
     if (route == NULL || route->handler == NULL) {
         ESP_LOGE(TAG, "No route entry for %s", req->uri);
-        return cpe_web_send_error_response(req, CPE_WEB_HTTPD_500_STR,
-                                           "internal_error", true);
+        return cpe_web_send_error(req, "internal_error");
     }
 
     esp_err_t err = route_gate(req, route);
