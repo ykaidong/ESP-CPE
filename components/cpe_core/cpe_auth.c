@@ -12,12 +12,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
-#include "esp_random.h"
 #include "esp_timer.h"
 
 #include "cpe_auth.h"
 #include "cpe_config.h"
 #include "cpe_ct.h"
+#include "cpe_random.h"
 
 static const char *TAG = "cpe_auth";
 
@@ -42,17 +42,9 @@ static int s_fail_count;
 static int64_t s_lock_until_us;
 static int s_lockout_level;
 
-static void random_token(char *out, size_t out_len)
-{
-    static const char hex[] = "0123456789abcdef";
-    uint8_t raw[16];
-    esp_fill_random(raw, sizeof(raw));
-    for (size_t i = 0; i < 16 && (i * 2 + 1) < out_len; i++) {
-        out[i * 2] = hex[raw[i] >> 4];
-        out[i * 2 + 1] = hex[raw[i] & 0x0f];
-    }
-    out[out_len - 1] = '\0';
-}
+/* Session and CSRF tokens are lowercase hex. Shared generator, see
+ * cpe_random.h: the same call also produces the generated SoftAP password. */
+static const char TOKEN_ALPHABET[] = "0123456789abcdef";
 
 /* Must be called with s_lock held. */
 static cpe_session_t *find_session(const char *token)
@@ -181,8 +173,8 @@ cpe_auth_result_t cpe_auth_login(const char *username, const char *password,
 
     memset(slot, 0, sizeof(*slot));
     slot->used = true;
-    random_token(slot->token, CPE_SESSION_TOKEN_LEN);
-    random_token(slot->csrf, CPE_CSRF_TOKEN_LEN);
+    cpe_random_string(slot->token, sizeof(slot->token), TOKEN_ALPHABET);
+    cpe_random_string(slot->csrf, sizeof(slot->csrf), TOKEN_ALPHABET);
     slot->last_used_us = now;
 
     snprintf(session, session_len, "%s", slot->token);
