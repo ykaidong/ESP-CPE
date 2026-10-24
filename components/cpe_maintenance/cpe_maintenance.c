@@ -46,6 +46,13 @@ static const char *TAG = "cpe_maint";
 #define MAINT_ECM_SETTLE_MS 120000
 /* Any planned action is deferred by this much while an OTA is in progress. */
 #define MAINT_OTA_DEFER_MS  60000
+/* Time the state page gets to report the pending reboot when the reboot helper
+ * could not be scheduled, before the device is restarted anyway. */
+#define MAINT_REBOOT_GRACE_MS 200
+
+/* Stack and priority of the 1 s maintenance task. */
+#define MAINT_TASK_STACK    3072
+#define MAINT_TASK_PRIO     2
 
 #define US_PER_MIN          60000000LL
 
@@ -397,7 +404,7 @@ static void maint_reboot(maint_ctx_t *ctx, int64_t now)
     /* The shared helper waits for the log line and the NVS commit to settle
      * before restarting, without blocking the maintenance task. */
     if (cpe_wan_reboot_deferred(ctx->cfg.reset_modem, "scheduled reboot") != ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(MAINT_REBOOT_GRACE_MS));
         cpe_wan_reboot(ctx->cfg.reset_modem);
     }
 }
@@ -477,7 +484,8 @@ esp_err_t cpe_maintenance_start(void)
     s_cfg_ready = true;
     portEXIT_CRITICAL(&s_mux);
 
-    if (xTaskCreate(maintenance_task, "cpe_maint", 3072, NULL, 2, NULL) != pdPASS) {
+    if (xTaskCreate(maintenance_task, "cpe_maint",
+                    MAINT_TASK_STACK, NULL, MAINT_TASK_PRIO, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create the maintenance task");
         return ESP_ERR_NO_MEM;
     }

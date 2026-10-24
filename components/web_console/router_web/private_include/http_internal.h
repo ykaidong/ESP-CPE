@@ -43,6 +43,12 @@
 #define CPE_WEB_FILE_PATH_MAX           (ESP_VFS_PATH_MAX + 128)
 #define CPE_WEB_SCRATCH_BUFSIZE         10240
 
+/* A handler must return quickly, so anything that blocks runs in its own
+ * one-shot task. All of them are short lived and do the same kind of work, so
+ * they share one stack size and one priority. */
+#define CPE_WEB_HELPER_TASK_STACK       4096
+#define CPE_WEB_HELPER_TASK_PRIO        5
+
 #define CPE_WEB_HTTPD_401_STR           "401 Unauthorized"
 #define CPE_WEB_HTTPD_403_STR           "403 Forbidden"
 #define CPE_WEB_HTTPD_404_STR           "404 Not Found"

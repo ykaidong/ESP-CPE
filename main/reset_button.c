@@ -46,6 +46,15 @@ static const char *TAG = "reset_button";
  * released (the wait must not be open ended). */
 #define RESET_RELEASE_REMINDER_MS   5000
 
+/* Time the console reply gets to leave the socket when the reboot helper could
+ * not be scheduled, before the device is restarted anyway. */
+#define REBOOT_GRACE_MS             300
+
+/* Button polling period, and the stack/priority of the monitor task. */
+#define BUTTON_POLL_MS              50
+#define BUTTON_TASK_STACK           3072
+#define BUTTON_TASK_PRIO            3
+
 static bool s_gpio_ready;
 static bool s_boot_printed;
 static int64_t s_boot_print_deadline_us;
@@ -92,7 +101,7 @@ static void reset_button_reboot(void)
     ESP_LOGI(TAG, "Rebooting; double-click within %d ms after boot to print "
              "the credentials", CONFIG_CPE_CREDENTIAL_PRINT_WINDOW_MS);
     if (cpe_wan_reboot_deferred(true, "reset button") != ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(300));
+        vTaskDelay(pdMS_TO_TICKS(REBOOT_GRACE_MS));
         cpe_wan_reboot(true);
     }
 }
@@ -170,7 +179,7 @@ static void reset_button_task(void *arg)
             ESP_LOGI(TAG, "Release the button to complete the factory reset");
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(BUTTON_POLL_MS));
     }
 }
 
@@ -179,7 +188,8 @@ esp_err_t reset_button_start(void)
     if (!s_gpio_ready) {
         return ESP_ERR_INVALID_STATE;
     }
-    BaseType_t created = xTaskCreate(reset_button_task, "reset_btn", 3072, NULL, 3, NULL);
+    BaseType_t created = xTaskCreate(reset_button_task, "reset_btn",
+                                     BUTTON_TASK_STACK, NULL, BUTTON_TASK_PRIO, NULL);
     if (created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create reset button task");
         return ESP_ERR_NO_MEM;

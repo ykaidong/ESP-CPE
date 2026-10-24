@@ -29,10 +29,9 @@ static const char *TAG = "cpe_web";
 #define OTA_UPLOAD_IDLE_TIMEOUT_US  (15LL * 1000 * 1000)
 #define OTA_DRAIN_TIMEOUT_US        (5LL * 1000 * 1000)
 
-/* Stack and priority of the one-shot upload task (same order of magnitude as
- * the other console helper tasks). */
-#define OTA_UPLOAD_TASK_STACK       4096
-#define OTA_UPLOAD_TASK_PRIO        5
+/* Time the "ota_ready" reply gets to leave the socket when the reboot helper
+ * could not be scheduled, before the new image is booted anyway. */
+#define OTA_REBOOT_GRACE_MS         800
 
 /*
  * The OTA upload is a binary body (not JSON), so precheck_post() cannot be
@@ -254,7 +253,7 @@ static esp_err_t ota_upload_run(httpd_req_t *req)
      * socket and then boots the new image. */
     ESP_LOGI(TAG, "Firmware update stored, restarting into the new image");
     if (cpe_wan_reboot_deferred(true, "firmware update") != ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(800));
+        vTaskDelay(pdMS_TO_TICKS(OTA_REBOOT_GRACE_MS));
         cpe_wan_reboot(true);
     }
     return err;
@@ -312,8 +311,8 @@ esp_err_t api_ota_upload_post_handler(httpd_req_t *req)
         ESP_LOGE(TAG, "Failed to start the asynchronous upload: %s", esp_err_to_name(err));
         return cpe_web_send_error(req, "out_of_memory");
     }
-    if (xTaskCreate(ota_upload_task, "ota_upload", OTA_UPLOAD_TASK_STACK, async_req,
-                    OTA_UPLOAD_TASK_PRIO, NULL) != pdPASS) {
+    if (xTaskCreate(ota_upload_task, "ota_upload", CPE_WEB_HELPER_TASK_STACK, async_req,
+                    CPE_WEB_HELPER_TASK_PRIO, NULL) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create the upload task");
         httpd_req_async_handler_complete(async_req);
         return cpe_web_send_error(req, "internal_error");

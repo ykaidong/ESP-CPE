@@ -35,6 +35,12 @@ static const char *TAG = "cpe_wan";
 #define ECM_NETIF_KEY       "ECM0"
 #define ECM_NETIF_DESC      "usb-ecm"
 
+/* Pause before the netif glue is freed, so an in-flight RX callback has left
+ * the glue. */
+#define ECM_GLUE_RELEASE_MS     20
+/* Pause between stopping and restarting the DHCP client. */
+#define ECM_DHCP_RESTART_GAP_MS 300
+
 typedef struct {
     iot_eth_driver_t *driver;
     iot_eth_handle_t eth;
@@ -182,7 +188,7 @@ esp_err_t wan_ecm_teardown(void)
         iot_eth_update_input_path(s_ecm.eth, NULL, NULL);
     }
     if (s_ecm.glue != NULL) {
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(ECM_GLUE_RELEASE_MS));
         iot_eth_del_netif_glue(s_ecm.glue);
         s_ecm.glue = NULL;
     }
@@ -358,7 +364,7 @@ void wan_ecm_dhcp_restart(void)
     if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
         ESP_LOGW(TAG, "esp_netif_dhcpc_stop failed: %s", esp_err_to_name(err));
     }
-    vTaskDelay(pdMS_TO_TICKS(300));
+    vTaskDelay(pdMS_TO_TICKS(ECM_DHCP_RESTART_GAP_MS));
     err = esp_netif_dhcpc_start(s_ecm.netif);
     if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
         ESP_LOGW(TAG, "esp_netif_dhcpc_start failed: %s", esp_err_to_name(err));

@@ -52,8 +52,6 @@ static esp_err_t wlan_advance_mutate(cpe_config_t *cfg, void *arg)
  * closed before the radio goes down. httpd_stop() waits for the task that runs
  * the current handler to exit, so it cannot be called from the handler itself:
  * the apply sequence runs in this short-lived helper task. */
-#define WLAN_APPLY_TASK_STACK        4096
-#define WLAN_APPLY_TASK_PRIO         5
 
 /* Time the queued reply gets to leave the radio before the listener closes its
  * socket. */
@@ -296,7 +294,7 @@ esp_err_t wlan_general_post_handler(httpd_req_t *req)
         job->mutate_arg = &job->update;
         job->suspend_listener = true;
         if (xTaskCreate(wlan_apply_task, "cpe_wlan_apply",
-                        WLAN_APPLY_TASK_STACK, job, WLAN_APPLY_TASK_PRIO,
+                        CPE_WEB_HELPER_TASK_STACK, job, CPE_WEB_HELPER_TASK_PRIO,
                         NULL) == pdPASS) {
             cpe_web_secure_wipe(next.ap_password, sizeof(next.ap_password));
             return reply_err;
@@ -404,7 +402,7 @@ esp_err_t wlan_advance_post_handler(httpd_req_t *req)
             job->mutate_arg = &job->next;
             job->suspend_listener = false;
             if (xTaskCreate(wlan_apply_task, "cpe_wlan_apply",
-                            WLAN_APPLY_TASK_STACK, job, WLAN_APPLY_TASK_PRIO,
+                            CPE_WEB_HELPER_TASK_STACK, job, CPE_WEB_HELPER_TASK_PRIO,
                             NULL) == pdPASS) {
                 return reply_err;
             }

@@ -41,6 +41,19 @@ static const char *TAG = "cpe_link";
  * a scheduled rebuild before the driver is created again. */
 #define LM_INIT_RETRY_MS        5000
 #define LM_REBUILD_SETTLE_MS    500
+/* Granularity of the link-up wait loop: it also bounds how long a shutdown
+ * request keeps the task alive. */
+#define LM_LINK_WAIT_SLICE_MS   500
+/* Let the fault log and the status page settle before the device restarts. */
+#define LM_REBOOT_GRACE_MS      1000
+/* Pause before the next recovery attempt once no reboot is left. */
+#define LM_FAULT_PAUSE_MS       2000
+/* Tick period while there is nothing to do. */
+#define LM_IDLE_TICK_MS         500
+
+/* Stack and priority of the link manager task. */
+#define LM_TASK_STACK           4096
+#define LM_TASK_PRIO            6
 
 /* Set by cpe_wan_request_ecm_rebuild() (any task) and consumed by the link
  * manager on its next tick. The ECM handles are not locked, so a scheduled
@@ -59,8 +72,9 @@ void cpe_wan_log_heap(const char *reason)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
 
-/* Sleep in 500 ms slices, returning early if the 4G link comes up (e.g. the
- * user plugs the modem back in while the link manager is backing off). */
+/* Sleep in LM_LINK_WAIT_SLICE_MS slices, returning early if the 4G link comes up
+ * (e.g. the user plugs the modem back in while the link manager is backing
+ * off). */
 static void backoff_sleep_ms(uint32_t ms)
 {
     uint32_t waited = 0;
@@ -70,8 +84,8 @@ static void backoff_sleep_ms(uint32_t ms)
         if (st.link_up) {
             return;
         }
-        vTaskDelay(pdMS_TO_TICKS(500));
-        waited += 500;
+        vTaskDelay(pdMS_TO_TICKS(LM_LINK_WAIT_SLICE_MS));
+        waited += LM_LINK_WAIT_SLICE_MS;
     }
 }
 
@@ -414,7 +428,7 @@ static void lm_controlled_restart(uint32_t boot_count)
     ESP_LOGE(TAG, "ECM link stuck, controlled reboot %"PRIu32"/%d",
              boot_count, CONFIG_CPE_MAX_REBOOTS);
     cpe_status_set_state(CPE_STATE_FAULT, "restarting to recover ECM link");
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(LM_REBOOT_GRACE_MS));
     cpe_wan_reboot(true);
 }
 
@@ -433,7 +447,7 @@ static lm_tick_result_t lm_escalate_usb_fault(lm_ctx_t *ctx)
         cpe_status_set_state(CPE_STATE_FAULT, "ECM link stuck, AP/Web still available");
         backoff_sleep_ms(CONFIG_CPE_RECOVERY_RETRY_MS);
     } else {
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(LM_FAULT_PAUSE_MS));
     }
     return LM_TICK_ACTION;
 }
@@ -534,14 +548,15 @@ static void link_manager_task(void *arg)
 
     for (;;) {
         if (lm_tick(&ctx) == LM_TICK_IDLE) {
-            vTaskDelay(pdMS_TO_TICKS(500));
+            vTaskDelay(pdMS_TO_TICKS(LM_IDLE_TICK_MS));
         }
     }
 }
 
 esp_err_t wan_link_manager_start(void)
 {
-    BaseType_t created = xTaskCreate(link_manager_task, "cpe_link", 4096, NULL, 6, NULL);
+    BaseType_t created = xTaskCreate(link_manager_task, "cpe_link",
+                                     LM_TASK_STACK, NULL, LM_TASK_PRIO, NULL);
     return created == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

@@ -218,7 +218,7 @@ static void on_wifi_ap_start(void *arg, esp_event_base_t base,
     }
     s_listener_restart_pending = true;
     if (xTaskCreate(http_listener_restart_task, "cpe_http_relisten",
-                    4096, NULL, 5, NULL) != pdPASS) {
+                    CPE_WEB_HELPER_TASK_STACK, NULL, CPE_WEB_HELPER_TASK_PRIO, NULL) != pdPASS) {
         s_listener_restart_pending = false;
         ESP_LOGE(TAG, "No memory to schedule HTTP listener re-creation");
     }
