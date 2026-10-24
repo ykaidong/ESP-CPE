@@ -75,9 +75,6 @@ esp_err_t cpe_ota_end(void);
 /** @brief Abort an in-progress update and leave the current image untouched. */
 void cpe_ota_abort(void);
 
-/** @brief True when the running image is in PENDING_VERIFY state. */
-bool cpe_ota_running_pending_verify(void);
-
 /**
  * @brief Mark the running image as valid, cancelling a pending rollback.
  *

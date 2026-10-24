@@ -248,7 +248,9 @@ void cpe_ota_abort(void)
     ota_reset_state();
 }
 
-bool cpe_ota_running_pending_verify(void)
+/* Only cpe_ota_mark_running_valid() needs it, and it logs the image state on
+ * every call, so it stays inside this file rather than being a public query. */
+static bool ota_running_pending_verify(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
     if (running == NULL) {
@@ -268,7 +270,7 @@ bool cpe_ota_running_pending_verify(void)
 
 esp_err_t cpe_ota_mark_running_valid(void)
 {
-    if (!cpe_ota_running_pending_verify()) {
+    if (!ota_running_pending_verify()) {
         return ESP_OK;
     }
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();

@@ -58,8 +58,9 @@ typedef struct {
     bool guard_checked;       /* the NVS guard was already cleared this boot */
     uint32_t sched_count;     /* consecutive scheduled reboots, 0 = healthy */
     bool frozen;              /* scheduled reboots stopped by the guard */
+    /* Scheduled rebuilds since boot; the reboot counter is not kept here, the
+     * authoritative one lives in NVS (cpe_maint_reboot_count_*). */
     uint32_t ecm_runs;
-    uint32_t reboot_runs;
 } maint_ctx_t;
 
 /* Shared with the HTTP handlers. A spinlock is enough: only a few scalars are
@@ -389,7 +390,6 @@ static void maint_reboot(maint_ctx_t *ctx, int64_t now)
     (void)cpe_maint_reboot_count_increment(&next);
     ctx->sched_count = next;
     ctx->frozen = false;
-    ctx->reboot_runs++;
     ESP_LOGI(TAG, "Scheduled reboot #%" PRIu32 " (every %" PRIu32 " min, uptime %" PRIi64 " s, "
              "reset modem: %s)",
              next, ctx->cfg.reboot_period_min, now / 1000000LL,
