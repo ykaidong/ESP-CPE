@@ -44,11 +44,22 @@ static const char *TAG = "cpe_at";
 #define AT_MAX_FAILURES        3
 #define AT_RINGBUF_SIZE        1024
 #define AT_TRANSFER_SIZE       512
+/* Writing a command line to the CDC port. */
+#define AT_WRITE_TIMEOUT_MS    1000
+/* Polling period while a response is being collected. */
+#define AT_RESPONSE_POLL_MS    20
+/* Drain window after flushing the RX ring buffer: a USB transfer that was
+ * already in flight can still land right after the flush. */
+#define AT_FLUSH_SETTLE_MS     30
 /* USB device event registration: the CDC driver is installed by the WAN link
  * manager, which may still be starting. Retry once per second at first, then
  * report the degradation and slow down instead of spinning forever. */
 #define AT_EVENT_REGISTER_FAST_TRIES    10
+#define AT_EVENT_REGISTER_FAST_MS       1000
 #define AT_EVENT_REGISTER_SLOW_MS       5000
+/* Stack and priority of the telemetry task. */
+#define AT_TASK_STACK          4096
+#define AT_TASK_PRIO           3
 
 typedef struct {
     uint8_t intf_num;
@@ -268,7 +279,7 @@ static esp_err_t at_send_line(const char *cmd)
         return ESP_ERR_INVALID_SIZE;
     }
     return usbh_cdc_write_bytes(s_port, (const uint8_t *)line, (size_t)len,
-                                pdMS_TO_TICKS(1000));
+                                pdMS_TO_TICKS(AT_WRITE_TIMEOUT_MS));
 }
 
 typedef enum {
@@ -344,7 +355,7 @@ static esp_err_t at_read_response(char *buf, size_t size, uint32_t timeout_ms)
         if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS >= timeout_ms) {
             break;
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(AT_RESPONSE_POLL_MS));
     }
     return at_response_complete(buf) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
@@ -360,7 +371,7 @@ static bool at_command(const char *cmd, char *resp, size_t resp_size, uint32_t t
     /* The flush only drops bytes already queued in the ring buffer; a USB
      * transfer that was in flight can still land right after it. Drain once
      * more so a late answer is not taken for this command's response. */
-    vTaskDelay(pdMS_TO_TICKS(30));
+    vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
     (void)usbh_cdc_flush_rx_buffer(s_port);
     if (at_send_line(cmd) != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send %s", cmd);
@@ -1091,7 +1102,8 @@ static void at_register_events(void)
                      "slowing down", attempt, esp_err_to_name(err));
         }
         vTaskDelay(pdMS_TO_TICKS(attempt >= AT_EVENT_REGISTER_FAST_TRIES ?
-                                 (uint32_t)AT_EVENT_REGISTER_SLOW_MS : 1000U));
+                                 (uint32_t)AT_EVENT_REGISTER_SLOW_MS
+                                 : (uint32_t)AT_EVENT_REGISTER_FAST_MS));
     }
 }
 
@@ -1235,7 +1247,7 @@ esp_err_t cpe_at_start(void)
         s_lock = NULL;
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(at_task, "cpe_at", 4096, NULL, 3, &s_task) != pdPASS) {
+    if (xTaskCreate(at_task, "cpe_at", AT_TASK_STACK, NULL, AT_TASK_PRIO, &s_task) != pdPASS) {
         vSemaphoreDelete(s_reset_done);
         s_reset_done = NULL;
         vSemaphoreDelete(s_lock);
