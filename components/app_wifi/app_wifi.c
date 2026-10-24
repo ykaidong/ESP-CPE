@@ -53,9 +53,17 @@ static const char *TAG = "app_wifi";
 #error "CONFIG_LWIP_DHCPS_MAX_STATION_NUM must be >= CPE_MAX_STA_MAX"
 #endif
 
-static bool s_wifi_inited;
-static bool s_wifi_started;
-static bool s_handlers_registered;
+/* Bring-up is a fixed sequence, so the state is one value instead of three
+ * flags that could disagree: init -> event handler -> started. app_wifi_stop()
+ * unwinds it in reverse, and every step is skipped when it was never reached. */
+typedef enum {
+    APP_WIFI_STOPPED = 0,
+    APP_WIFI_INITED,    /* esp_wifi_init() done */
+    APP_WIFI_HANDLERS,  /* Wi-Fi event handler registered */
+    APP_WIFI_STARTED,   /* the SoftAP is up */
+} app_wifi_state_t;
+
+static app_wifi_state_t s_state = APP_WIFI_STOPPED;
 static esp_netif_t *s_ap_netif;
 
 /* ------------------------------------------------------------------------- */
@@ -268,9 +276,33 @@ static void use_fresh_bssid_after_abrupt_reset(void)
              MAC2STR(mac));
 }
 
+void app_wifi_stop(void)
+{
+    if (s_state == APP_WIFI_STOPPED && s_ap_netif == NULL) {
+        return;
+    }
+    if (s_state == APP_WIFI_STARTED) {
+        (void)esp_wifi_stop();
+    }
+    if (s_state >= APP_WIFI_HANDLERS) {
+        (void)esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, app_wifi_event_handler);
+    }
+    if (s_state >= APP_WIFI_INITED) {
+        (void)esp_wifi_deinit();
+    }
+    if (s_ap_netif != NULL) {
+        /* Created by esp_netif_create_default_wifi_ap(): use the matching
+         * destructor so the default handler and DHCP state go with it. */
+        esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
+    }
+    s_state = APP_WIFI_STOPPED;
+    ESP_LOGI(TAG, "SoftAP torn down");
+}
+
 esp_err_t app_wifi_start(void)
 {
-    if (s_wifi_started) {
+    if (s_state == APP_WIFI_STARTED) {
         return ESP_OK;
     }
 
@@ -295,7 +327,7 @@ esp_err_t app_wifi_start(void)
 
     err = ap_apply_static_ip(s_ap_netif);
     if (err != ESP_OK) {
-        goto fail_netif;
+        goto fail;
     }
 
     /* Bounded lease + a table big enough for max_sta: see the #error above. */
@@ -308,21 +340,21 @@ esp_err_t app_wifi_start(void)
     err = esp_wifi_init(&init_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
-        goto fail_netif;
+        goto fail;
     }
-    s_wifi_inited = true;
+    s_state = APP_WIFI_INITED;
 
     err = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, app_wifi_event_handler, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register Wi-Fi event handler: %s", esp_err_to_name(err));
-        goto fail_wifi;
+        goto fail;
     }
-    s_handlers_registered = true;
+    s_state = APP_WIFI_HANDLERS;
 
     err = esp_wifi_set_mode(WIFI_MODE_AP);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_mode failed: %s", esp_err_to_name(err));
-        goto fail_wifi;
+        goto fail;
     }
 
     /* Must happen before esp_wifi_start(): esp_wifi_set_mac() only works while
@@ -334,18 +366,18 @@ esp_err_t app_wifi_start(void)
     err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_storage failed: %s", esp_err_to_name(err));
-        goto fail_wifi;
+        goto fail;
     }
 
     err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to apply AP configuration: %s", esp_err_to_name(err));
-        goto fail_wifi;
+        goto fail;
     }
     err = esp_wifi_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
-        goto fail_wifi;
+        goto fail;
     }
 
     /* Bandwidth is a per-interface setting, not part of wifi_ap_config_t. */
@@ -355,28 +387,15 @@ esp_err_t app_wifi_start(void)
         ESP_LOGW(TAG, "Failed to set AP bandwidth: %s", esp_err_to_name(bw_err));
     }
 
-    s_wifi_started = true;
+    s_state = APP_WIFI_STARTED;
     ESP_LOGI(TAG, "SoftAP started: SSID \"%s\", channel %u, %u MHz, WPA2-PSK, hidden=%d, max_sta=%u",
              cfg.ap_ssid, (unsigned)cfg.ap_channel, (unsigned)cfg.ap_bandwidth,
              cfg.ap_hidden ? 1 : 0, (unsigned)cfg.max_sta);
     return ESP_OK;
 
-fail_wifi:
-    if (s_handlers_registered) {
-        (void)esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, app_wifi_event_handler);
-        s_handlers_registered = false;
-    }
-    if (s_wifi_inited) {
-        (void)esp_wifi_deinit();
-        s_wifi_inited = false;
-    }
-fail_netif:
-    if (s_ap_netif != NULL) {
-        /* Created by esp_netif_create_default_wifi_ap(): use the matching
-         * destructor so the default handler and DHCP state go with it. */
-        esp_netif_destroy_default_wifi(s_ap_netif);
-        s_ap_netif = NULL;
-    }
+fail:
+    /* Unwind whatever was reached: stop() skips the steps that were not. */
+    app_wifi_stop();
     return err;
 }
 
@@ -385,7 +404,7 @@ esp_err_t app_wifi_apply(const cpe_config_t *cfg)
     if (cfg == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_wifi_started) {
+    if (s_state != APP_WIFI_STARTED) {
         ESP_LOGE(TAG, "Cannot apply AP configuration before app_wifi_start()");
         return ESP_ERR_INVALID_STATE;
     }

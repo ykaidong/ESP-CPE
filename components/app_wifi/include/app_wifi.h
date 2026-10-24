@@ -34,6 +34,16 @@ extern "C" {
 esp_err_t app_wifi_start(void);
 
 /**
+ * @brief Bring the SoftAP down and release the Wi-Fi driver and AP netif.
+ *
+ * Counterpart of app_wifi_start(): it unwinds the steps that were actually
+ * reached (stop -> unregister the event handler -> deinit -> destroy the netif)
+ * and app_wifi_start() can be called again afterwards. Safe to call when the AP
+ * was never started.
+ */
+void app_wifi_stop(void);
+
+/**
  * @brief Apply new AP parameters at runtime.
  *
  * The radio configuration is only changed after every field passed validation
