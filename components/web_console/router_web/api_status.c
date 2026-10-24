@@ -31,9 +31,6 @@ esp_err_t api_status_get_handler(httpd_req_t *req)
                          status.link_up ? "true" : "false",
                          status.got_ip ? "true" : "false");
     cpe_web_sbuf_append_json_string(&sb, status.ip);
-    cpe_web_sbuf_appendf(&sb, ",\"has_public_ip\":%s,\"public_ip\":",
-                         status.has_public_ip ? "true" : "false");
-    cpe_web_sbuf_append_json_string(&sb, status.public_ip);
     cpe_web_sbuf_appendf(&sb, ",\"rssi\":%d,\"rssi_valid\":%s,\"modem_model\":",
                          (int)status.rssi, status.rssi_valid ? "true" : "false");
     cpe_web_sbuf_append_json_string(&sb, status.modem_model);

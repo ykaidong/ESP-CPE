@@ -37,8 +37,6 @@ typedef struct {
     bool got_ip;
     char ip[20];                /*!< IPv4 needs 16 bytes; the slack keeps a
                                  *   longer string from being cut silently */
-    bool has_public_ip;
-    char public_ip[20];
     int8_t rssi;                /*!< 0 when unknown, negative dBm otherwise */
     bool rssi_valid;
     char modem_model[40];
@@ -80,7 +78,6 @@ void cpe_status_set_state(cpe_state_t state, const char *fmt, ...);
 void cpe_status_set_usb_connected(bool connected);
 void cpe_status_set_link(bool up);
 void cpe_status_set_ip(const char *ip);          /* NULL or "" clears it */
-void cpe_status_set_public_ip(const char *ip);
 void cpe_status_set_rssi(int rssi, bool valid);
 /** Model, firmware revision and IMEI read over the modem AT port. */
 void cpe_status_set_modem_info(const char *model, const char *fw, const char *imei);

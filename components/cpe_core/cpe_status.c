@@ -170,21 +170,6 @@ void cpe_status_set_ip(const char *ip)
     status_leave();
 }
 
-void cpe_status_set_public_ip(const char *ip)
-{
-    if (!status_enter()) {
-        return;
-    }
-    if (ip != NULL && ip[0] != '\0') {
-        snprintf(s_status.public_ip, sizeof(s_status.public_ip), "%s", ip);
-        s_status.has_public_ip = true;
-    } else {
-        s_status.public_ip[0] = '\0';
-        s_status.has_public_ip = false;
-    }
-    status_leave();
-}
-
 void cpe_status_set_rssi(int rssi, bool valid)
 {
     status_set_i8_pair(&s_status.rssi, &s_status.rssi_valid, rssi, valid);
