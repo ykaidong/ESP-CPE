@@ -365,13 +365,28 @@ static lm_tick_result_t lm_reset_modem(lm_ctx_t *ctx, int64_t now)
  * flow: what carries the data is the PDP context. AT telemetry polls it every
  * CONFIG_CPE_AT_POLL_INTERVAL_S and marks it invalid when it cannot be read, and
  * that unknown state must not keep the CPE out of ONLINE - it counts as usable,
- * which is exactly the behaviour from before this check existed. */
+ * which is exactly the behaviour from before this check existed.
+ * A missing SIM card is the one state that is always known: AT+CGACT? itself
+ * often fails without a SIM, so without that check the CPE would report itself
+ * online while the modem has no card in it. */
 static bool lm_wan_usable(const cpe_status_t *st)
 {
     if (CONFIG_CPE_PDP_WAIT_MS <= 0) {
         return true;
     }
-    return !st->pdp_valid || st->pdp_active;
+    /* Direct proof that data can flow wins: a few modules report a SIM state
+     * that does not match the context they actually run. */
+    if (st->pdp_valid && st->pdp_active) {
+        return true;
+    }
+    if (st->sim_valid && !st->sim_inserted) {
+        return false;
+    }
+    /* An active context was handled above, so a known PDP state is inactive. */
+    if (st->pdp_valid) {
+        return false;
+    }
+    return true;
 }
 
 /* Why there is no data, so the console says more than "no mobile data": the AT
