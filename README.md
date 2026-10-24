@@ -93,12 +93,18 @@ idf.py -p COMx flash monitor
 测试脚本：
 
 ```powershell
+# 纯逻辑单元测试（host 进程内运行，只需 MinGW 的 gcc，不需 idf.py 与设备）
+powershell -ExecutionPolicy Bypass -File .\tests\host\run.ps1
+
 # 串口日志统计（保存 monitor 输出到 build_log.txt 后运行）
 .\scripts\serial_log_check.ps1 -LogFile .\build_log.txt
 
 # 管理面安全回归（PC 连接设备 SoftAP 后运行，默认 192.168.4.1）
 python .\scripts\web_security_test.py --password '<admin 口令>'
 ```
+
+`tests/host/` 用桩头文件替代 ESP-IDF，把纯逻辑（JSON 转义与字段读取、MAC 解析、配置校验）编译进普通
+进程运行，覆盖 192 项断言；它不属于固件构建，任何组件的 `CMakeLists.txt` 都不引用该目录。
 
 Phase 2 验收清单见 [docs/PHASE2_TEST_PLAN.md](docs/PHASE2_TEST_PLAN.md)。
 
