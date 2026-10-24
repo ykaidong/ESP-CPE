@@ -14,7 +14,7 @@ ESP32-S3 同时提供 SoftAP + NAPT + Web 管理面。本仓库是**重新开始
 | --- | --- | --- |
 | 启动顺序 | 等到 4G 拿到 IP 后才启动 AP/Web；无网络即永久卡死 | **AP/Web 先行**，4G 链路由后台任务管理；无 SIM/无 IP 仍可进后台排障 |
 | 默认安全 | 开放 AP，管理员固定 `esp32/12345678`，HTTP Basic | **WPA2 + 每台唯一随机口令**；管理员口令首启随机、首次登录强制修改；会话 Cookie + CSRF |
-| USB 恢复 | 无；偶发枚举失败只能重插 | 枚举事件补发 + ECM 重建 + 可选端口掉电 + **有界受控重启**；"link up 无 IP"另有一套有界阶梯（重启 DHCP → ECM 重建 → **重启 4G 模块**），**永不整机重启**，AP/Web 全程可用 |
+| USB 恢复 | 无；偶发枚举失败只能重插 | 枚举事件补发 + ECM 重建 + 可选端口掉电 + **有界受控重启**；"link up 无 IP"另有一套有界阶梯（重启 DHCP → ECM 重建 → **重启 4G 模块**），**永不整机重启**，AP/Web 全程可用；模组 DHCP 无 SIM 也会发地址，故 ONLINE 另要求 PDP 上下文已激活 |
 | 配置校验 | 任意参数直写 NVS，`channel:"999"` 会变砖 | 服务端强校验、失败回滚、启动时非法值回退默认 |
 | 分区 | 单 factory，无 OTA | 16MB + `ota_0`/`ota_1` 双分区；Phase 3 接入管理面本地 OTA（上传 + 回滚保护） |
 | 驱动 | registry 版本存在 UAF/double free/TX 令牌丢失 | 本地 fork（`components/iot_usbh_*`）逐条修补，见各组件 CHANGELOG |
