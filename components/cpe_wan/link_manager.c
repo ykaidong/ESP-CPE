@@ -138,7 +138,12 @@ static void lm_enter_phase(lm_ctx_t *ctx, lm_phase_t phase)
  * from that moment on: the two always go together. */
 static void lm_teardown_ecm(lm_ctx_t *ctx)
 {
-    wan_ecm_teardown();
+    /* A failed uninstall leaves the driver instance behind; wan_ecm_bring_up()
+     * finishes it on the next tick. Say so, otherwise a rebuild that never
+     * really happened looks like a successful one in the log. */
+    if (wan_ecm_teardown() != ESP_OK) {
+        ESP_LOGW(TAG, "ECM teardown incomplete, the driver is uninstalled on the next attempt");
+    }
     ctx->wait_start_us = 0;
 }
 

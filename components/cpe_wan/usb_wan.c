@@ -161,10 +161,10 @@ static esp_err_t netif_action_connected(void *ctx)
     return ESP_OK;
 }
 
-void wan_ecm_teardown(void)
+esp_err_t wan_ecm_teardown(void)
 {
     if (!s_ecm.ready && s_ecm.eth == NULL) {
-        return;
+        return ESP_OK;
     }
     s_ecm.ready = false;
     ESP_LOGI(TAG, "Tearing down ECM driver");
@@ -207,7 +207,7 @@ void wan_ecm_teardown(void)
             cpe_status_set_link(false);
             cpe_status_set_usb_connected(false);
             cpe_status_set_ip(NULL);
-            return;
+            return err;
         }
         s_ecm.eth = NULL;
     }
@@ -219,6 +219,16 @@ void wan_ecm_teardown(void)
     cpe_status_set_link(false);
     cpe_status_set_usb_connected(false);
     cpe_status_set_ip(NULL);
+    return ESP_OK;
+}
+
+/* Cleanup after a failed bring-up: an incomplete teardown is not an error of
+ * its own, the next bring-up finishes it, but it must not pass unnoticed. */
+static void ecm_cleanup(void)
+{
+    if (wan_ecm_teardown() != ESP_OK) {
+        ESP_LOGW(TAG, "ECM teardown incomplete, the next bring-up retries it");
+    }
 }
 
 esp_err_t wan_ecm_bring_up(void)
@@ -229,7 +239,9 @@ esp_err_t wan_ecm_bring_up(void)
     /* A previous teardown may have left an uninstall retry pending: finish it
      * before creating a second instance. */
     if (s_ecm.eth != NULL) {
-        wan_ecm_teardown();
+        if (wan_ecm_teardown() != ESP_OK) {
+            ESP_LOGW(TAG, "Previous ECM teardown still incomplete, retrying it now");
+        }
         if (s_ecm.eth != NULL) {
             return ESP_ERR_INVALID_STATE;
         }
@@ -268,28 +280,28 @@ esp_err_t wan_ecm_bring_up(void)
     s_ecm.netif = esp_netif_new(&netif_config);
     if (s_ecm.netif == NULL) {
         ESP_LOGE(TAG, "Failed to create ECM netif");
-        wan_ecm_teardown();
+        ecm_cleanup();
         return ESP_ERR_NO_MEM;
     }
 
     s_ecm.glue = iot_eth_new_netif_glue(s_ecm.eth);
     if (s_ecm.glue == NULL) {
         ESP_LOGE(TAG, "Failed to create netif glue");
-        wan_ecm_teardown();
+        ecm_cleanup();
         return ESP_ERR_NO_MEM;
     }
 
     err = esp_netif_attach(s_ecm.netif, s_ecm.glue);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to attach netif glue: %s", esp_err_to_name(err));
-        wan_ecm_teardown();
+        ecm_cleanup();
         return err;
     }
 
     err = iot_eth_start(s_ecm.eth);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to start ECM driver: %s", esp_err_to_name(err));
-        wan_ecm_teardown();
+        ecm_cleanup();
         return err;
     }
 
