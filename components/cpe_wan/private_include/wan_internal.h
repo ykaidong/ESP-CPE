@@ -30,11 +30,22 @@ bool wan_usb_modem_reset(void);
 bool wan_usb_device_present(void);
 esp_netif_t *wan_ecm_netif(void);
 iot_eth_handle_t wan_ecm_eth_handle(void);
+/* Borrow the handles before dereferencing them from another task: see
+ * wan_ecm_borrow() in usb_wan.c for the rules. Never blocks, always paired
+ * with wan_ecm_release(). */
+bool wan_ecm_borrow(void);
+void wan_ecm_release(void);
 
 /* --- wan_net.c ----------------------------------------------------------- */
 
 void wan_link_online(void);
 void wan_link_offline(void);
+/* Deferred "re-apply NAPT and upstream DNS". The SoftAP restart handler asks
+ * for it when it could not create a task, because that work blocks on the
+ * TCP/IP thread and must therefore not run in the event loop. The link manager
+ * owns the ECM handles and picks the request up on its next tick. */
+void wan_request_napt_reapply(void);
+bool wan_napt_reapply_take(void);
 
 /* --- link_manager.c ------------------------------------------------------ */
 

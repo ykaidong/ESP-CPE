@@ -19,6 +19,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "usb/usb_host.h"
 
 #include "iot_eth.h"
@@ -40,6 +41,12 @@ static const char *TAG = "cpe_wan";
 #define ECM_GLUE_RELEASE_MS     20
 /* Pause between stopping and restarting the DHCP client. */
 #define ECM_DHCP_RESTART_GAP_MS 300
+/* How long a teardown waits for the borrowers to release the handles. It is a
+ * bound, not a lock: a borrower only runs a few non-blocking calls, and when it
+ * does not come back in time the teardown keeps the handles and is retried by
+ * the next wan_ecm_bring_up(). Waiting without a bound here would hang the link
+ * manager, which is exactly what the mutex did (commit bcca642). */
+#define ECM_RELEASE_TIMEOUT_MS  200
 
 typedef struct {
     iot_eth_driver_t *driver;
@@ -47,6 +54,18 @@ typedef struct {
     iot_eth_netif_glue_handle_t glue;
     esp_netif_t *netif;
     bool ready;
+    /* Lifetime. The link manager task owns bring-up and teardown, everyone else
+     * only borrows the handles - and a borrower must never block, because it
+     * can be an event callback. So teardown does not lock anyone out: it
+     * publishes "closing", waits for the borrowers to leave (bounded, see
+     * ECM_RELEASE_TIMEOUT_MS) and keeps the handles if they do not.
+     * The driver's own RX path (USB/ECM thread into lwIP) is NOT covered by
+     * this: it is not our code. It is handled by stopping the driver,
+     * disconnecting the input path and the settle delay below. */
+    /* Both are only touched through the __atomic_* builtins, the way the rest of
+     * the project publishes a scalar across tasks. */
+    int refs;
+    bool closing;
 } ecm_ctx_t;
 
 static ecm_ctx_t s_ecm;
@@ -167,13 +186,61 @@ static esp_err_t netif_action_connected(void *ctx)
     return ESP_OK;
 }
 
+/* Borrow the ECM handles from another task. Never blocks, so it is safe from an
+ * event callback: it fails while the interface is not up or a teardown is
+ * running. Every successful call must be paired with wan_ecm_release(); until
+ * then wan_ecm_netif()/wan_ecm_eth_handle() may be dereferenced.
+ * Comparing them without borrowing stays allowed - that is all the event
+ * handler does - because a comparison never touches the object. */
+bool wan_ecm_borrow(void)
+{
+    if (!s_ecm.ready || __atomic_load_n(&s_ecm.closing, __ATOMIC_ACQUIRE)) {
+        return false;
+    }
+    __atomic_fetch_add(&s_ecm.refs, 1, __ATOMIC_ACQ_REL);
+    /* A teardown may have started in between: give the reference back. */
+    if (__atomic_load_n(&s_ecm.closing, __ATOMIC_ACQUIRE)) {
+        __atomic_fetch_sub(&s_ecm.refs, 1, __ATOMIC_ACQ_REL);
+        return false;
+    }
+    return true;
+}
+
+void wan_ecm_release(void)
+{
+    __atomic_fetch_sub(&s_ecm.refs, 1, __ATOMIC_ACQ_REL);
+}
+
+/* Bounded, see ECM_RELEASE_TIMEOUT_MS: a borrower only runs a few non-blocking
+ * calls, and if it does not come back the teardown is postponed rather than
+ * hanging the link manager here. */
+static esp_err_t ecm_wait_for_borrowers(void)
+{
+    int64_t deadline_us = esp_timer_get_time() + (int64_t)ECM_RELEASE_TIMEOUT_MS * 1000LL;
+    while (__atomic_load_n(&s_ecm.refs, __ATOMIC_ACQUIRE) > 0) {
+        if (esp_timer_get_time() >= deadline_us) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return ESP_OK;
+}
+
 esp_err_t wan_ecm_teardown(void)
 {
     if (!s_ecm.ready && s_ecm.eth == NULL) {
         return ESP_OK;
     }
     s_ecm.ready = false;
+    /* Stop admitting borrowers first: nothing new may take a reference while
+     * these handles are on their way out. */
+    __atomic_store_n(&s_ecm.closing, true, __ATOMIC_RELEASE);
     ESP_LOGI(TAG, "Tearing down ECM driver");
+
+    if (ecm_wait_for_borrowers() != ESP_OK) {
+        ESP_LOGW(TAG, "ECM handles still in use, keeping them and retrying the teardown");
+        return ESP_ERR_TIMEOUT;
+    }
 
     if (s_ecm.eth != NULL) {
         /* STOP is posted asynchronously by iot_eth_stop(); stop the lwIP netif
@@ -218,6 +285,9 @@ esp_err_t wan_ecm_teardown(void)
         s_ecm.eth = NULL;
     }
     s_ecm.driver = NULL;
+    /* The handles are gone, so nothing can borrow them any more: allow the next
+     * bring-up to admit borrowers again. */
+    __atomic_store_n(&s_ecm.closing, false, __ATOMIC_RELEASE);
 
     /* The link state belongs to this interface: clear it explicitly so the
      * link manager does not keep acting on stale "link up / got IP" values
@@ -311,6 +381,8 @@ esp_err_t wan_ecm_bring_up(void)
         return err;
     }
 
+    __atomic_store_n(&s_ecm.refs, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&s_ecm.closing, false, __ATOMIC_RELEASE);
     s_ecm.ready = true;
 
     /* Make the ECM netif the default route as soon as it exists, instead of

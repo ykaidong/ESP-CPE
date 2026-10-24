@@ -708,6 +708,13 @@ static lm_tick_result_t lm_tick(lm_ctx_t *ctx)
 
     lm_service(ctx, &st, now);
 
+    /* A SoftAP restart may have asked for NAPT/DNS to be re-applied when no task
+     * could be created for it. This task owns the ECM handles, so it is the one
+     * that may do it (the request came from the event loop). */
+    if (st.got_ip && wan_napt_reapply_take()) {
+        wan_link_online();
+    }
+
     if (st.link_up && st.got_ip) {
         if (!lm_wan_usable(&st)) {
             ctx->was_online = false;

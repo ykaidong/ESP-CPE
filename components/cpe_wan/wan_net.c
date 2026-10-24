@@ -86,14 +86,24 @@ static void wan_event_handler(void *arg, esp_event_base_t base, int32_t id, void
 static void wan_apply_upstream_dns(void)
 {
     esp_netif_t *ap = app_wifi_get_ap_netif();
-    esp_netif_t *wan = wan_ecm_netif();
-    if (ap == NULL || wan == NULL) {
+    if (ap == NULL) {
         return;
     }
-
+    /* The ECM netif belongs to the link manager task: borrow it, so a teardown
+     * cannot destroy it while its DNS address is read here. wan_apply_upstream_dns()
+     * runs on ap_reapply_task (and on the link manager task), never on the event
+     * loop, but the borrow is non-blocking either way. */
+    if (!wan_ecm_borrow()) {
+        return;
+    }
+    esp_netif_t *wan = wan_ecm_netif();
     esp_netif_dns_info_t dns = {0};
-    if (esp_netif_get_dns_info(wan, ESP_NETIF_DNS_MAIN, &dns) != ESP_OK ||
-            dns.ip.u_addr.ip4.addr == 0) {
+    bool have_dns = (wan != NULL &&
+                     esp_netif_get_dns_info(wan, ESP_NETIF_DNS_MAIN, &dns) == ESP_OK &&
+                     dns.ip.u_addr.ip4.addr != 0);
+    wan_ecm_release();
+
+    if (!have_dns) {
         ESP_LOGW(TAG, "No upstream DNS from the 4G modem");
         return;
     }
@@ -165,6 +175,21 @@ void wan_link_online(void)
     wan_apply_upstream_dns();
 }
 
+/* Asked for when the SoftAP restart handler could not create its task: the work
+ * blocks on the TCP/IP thread and deauthenticates stations, so it must not run
+ * in the event loop. The link manager owns the ECM handles and executes it. */
+static bool s_napt_reapply_req;
+
+void wan_request_napt_reapply(void)
+{
+    __atomic_store_n(&s_napt_reapply_req, true, __ATOMIC_RELEASE);
+}
+
+bool wan_napt_reapply_take(void)
+{
+    return __atomic_exchange_n(&s_napt_reapply_req, false, __ATOMIC_ACQ_REL);
+}
+
 void wan_link_offline(void)
 {
     esp_netif_t *ap = app_wifi_get_ap_netif();
@@ -213,8 +238,11 @@ static void on_ap_start_reapply_napt(void *arg, esp_event_base_t base,
     ESP_LOGI(TAG, "SoftAP restarted; re-applying NAPT and upstream DNS");
     if (xTaskCreate(ap_reapply_task, "cpe_ap_reapply", AP_REAPPLY_TASK_STACK, NULL,
                     AP_REAPPLY_TASK_PRIO, NULL) != pdPASS) {
-        ESP_LOGW(TAG, "No memory for the NAPT task, re-applying from the event loop");
-        wan_link_online();
+        /* Not from here: this is the event loop task, and the work blocks on the
+         * TCP/IP thread. The link manager owns the ECM handles and does it on
+         * its next tick. */
+        ESP_LOGW(TAG, "No memory for the NAPT task, asking the link manager to re-apply");
+        wan_request_napt_reapply();
     }
 }
 
