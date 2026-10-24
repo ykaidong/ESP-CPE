@@ -66,4 +66,23 @@ menu "CPE WAN Configuration"
             rebuild would start with a fresh budget. 0 keeps the old behaviour
             (rebuild ECM on every timeout, unbounded).
 
+    config CPE_IP_MODEM_RESETS
+        int "Modem restarts when the link is up but no IP arrives"
+        default 2
+        range 0 5
+        help
+            Last step of the "link up but no IP" ladder, tried only after the
+            DHCP-client restarts AND the ECM rebuilds above are both exhausted:
+            restarting the 4G module itself (AT+CFUN=1,1). Field observation:
+            a modem that keeps its ECM session but never answers DHCP comes back
+            with an address after a module restart, while rebuilding the ECM
+            driver alone does not. The module drops off the USB bus, so the ECM
+            interface is torn down and recreated; the ladder then starts over
+            (DHCP -> ECM rebuild -> another module restart) until this budget is
+            used up, after which recovery degrades to DHCP retries only. The
+            counter is reset when an IP is acquired, when the CPE reaches ONLINE
+            and by a scheduled rebuild. Requires AT telemetry
+            (CONFIG_CPE_AT_ENABLE): without it the step is skipped and DHCP
+            retries continue. 0 disables the step.
+
 endmenu

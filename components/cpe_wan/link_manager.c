@@ -7,9 +7,11 @@
  * L1 rebuild ECM driver -> L2 root port power cycle -> L3 controlled reboot
  * (NVS boot counter, cleared once healthy).
  * "Link up but no IP" (no SIM / PDP not active) never reboots: the device stays
- * in fault mode with AP/Web, and its ECM rebuilds are bounded by
- * CONFIG_CPE_IP_MAX_ECM_REBUILDS, after which only the DHCP client is restarted,
- * which still picks the link up when the SIM/PDP shows up later.
+ * in fault mode with AP/Web. Its own ladder is bounded on every step: restart the
+ * DHCP client (CONFIG_CPE_IP_DHCP_RESTARTS) -> rebuild the ECM driver
+ * (CONFIG_CPE_IP_MAX_ECM_REBUILDS) -> restart the 4G module itself
+ * (CONFIG_CPE_IP_MODEM_RESETS, AT+CFUN=1,1), after which only the DHCP client is
+ * restarted, which still picks the link up when the SIM/PDP shows up later.
  * "No modem enumerated" never reboots either: it power-cycles the root port at
  * most CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS times per round and then retries,
  * because a modem may be plugged in at any time.
@@ -50,6 +52,11 @@ static const char *TAG = "cpe_link";
 #define LM_FAULT_PAUSE_MS       2000
 /* Tick period while there is nothing to do. */
 #define LM_IDLE_TICK_MS         500
+/* Minimum time between two 4G module restarts. The ladder already spends
+ * CONFIG_CPE_IP_TIMEOUT_MS on every step before another restart can happen, so
+ * this only matters when those options are set to 0: a module restart is the
+ * most disruptive step and must not turn into a restart loop of its own. */
+#define LM_MODEM_RESET_COOLDOWN_MS  60000
 
 /* Stack and priority of the link manager task. */
 #define LM_TASK_STACK           4096
@@ -116,6 +123,12 @@ typedef struct {
      * step (it resets the modem USB interface) is bounded separately from the
      * cheap DHCP-client restarts. */
     uint32_t ecm_rebuilds;
+    /* Restarts of the 4G module in the current "link up but no IP" episode: the
+     * last and most disruptive step, bounded on its own. Like ecm_rebuilds it
+     * survives the link drop it causes, and is only cleared by an IP, by ONLINE
+     * and by a scheduled rebuild. */
+    uint32_t modem_resets;
+    int64_t last_modem_reset_us;
     int64_t wait_start_us;
     int64_t online_start_us;
     bool was_online;
@@ -214,6 +227,8 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
             ctx->ip_attempts = 0;
             ctx->dhcp_restarts = 0;
             ctx->ecm_rebuilds = 0;
+            ctx->modem_resets = 0;
+            ctx->last_modem_reset_us = 0;
             wan_link_online();
         } else {
             wan_link_offline();
@@ -233,6 +248,8 @@ static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t
         ctx->ip_attempts = 0;
         ctx->enum_reset_attempts = 0;
         ctx->ecm_rebuilds = 0;
+        ctx->modem_resets = 0;
+        ctx->last_modem_reset_us = 0;
         ctx->online_start_us = now;
         cpe_status_set_recovery_attempts(0);
         cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
@@ -280,6 +297,49 @@ static lm_tick_result_t lm_rebuild_ecm(lm_ctx_t *ctx)
     return LM_TICK_ACTION;
 }
 
+/* Last step of the ladder: restart the 4G module itself. A modem that holds the
+ * ECM session but never answers DHCP has been seen to come back with an address
+ * after a module restart, where rebuilding the ECM driver alone did not help.
+ * The module leaves the USB bus, so the interface has to be torn down and the
+ * driver is created again from the BOOT phase. */
+static lm_tick_result_t lm_reset_modem(lm_ctx_t *ctx, int64_t now)
+{
+    ctx->modem_resets++;
+    ctx->last_modem_reset_us = now;
+    cpe_status_set_error("no IP from modem, restarting the module");
+    cpe_status_set_state(CPE_STATE_FAULT, "restarting the 4G module (no IP)");
+    ESP_LOGW(TAG, "DHCP retries and ECM rebuilds exhausted, restarting the 4G module "
+             "(restart %"PRIu32"/%d)", ctx->modem_resets, CONFIG_CPE_IP_MODEM_RESETS);
+
+    /* AT+CFUN=1,1 first: it reboots the module without touching the power
+     * supply, and it needs the USB device (so the ECM driver) still in place.
+     * Best effort - without AT telemetry it reports ESP_ERR_NOT_SUPPORTED, and
+     * a busy AT port reports INVALID_STATE. */
+    esp_err_t err = cpe_at_modem_reset(CPE_AT_MODEM_RESET_TIMEOUT_MS);
+    bool reset_by_at = (err == ESP_OK);
+
+    lm_teardown_ecm(ctx);
+
+    if (!reset_by_at) {
+        /* Reset in hardware instead (module reset GPIO, or a root port power
+         * cycle when there is none) - the same path the "no modem enumerated"
+         * recovery uses. Done after the teardown so no driver is left running
+         * while the module is yanked off the bus. */
+        ESP_LOGW(TAG, "AT module restart not confirmed (%s), resetting it in hardware",
+                 esp_err_to_name(err));
+        if (!wan_usb_modem_reset()) {
+            ESP_LOGW(TAG, "No hardware reset available, rebuilding the interface only");
+        }
+    }
+
+    /* Start the ladder over: DHCP client first, then ECM rebuilds, then another
+     * module restart if the budget allows. */
+    ctx->dhcp_restarts = 0;
+    ctx->ecm_rebuilds = 0;
+    lm_backoff_to_boot(ctx, CONFIG_CPE_RECOVERY_RETRY_MS);
+    return LM_TICK_ACTION;
+}
+
 static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
 {
     lm_enter_phase(ctx, LM_PHASE_LINK_WAIT);
@@ -303,6 +363,13 @@ static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
     }
     if (CONFIG_CPE_IP_MAX_ECM_REBUILDS > 0 &&
             ctx->ecm_rebuilds >= CONFIG_CPE_IP_MAX_ECM_REBUILDS) {
+        if (CONFIG_CPE_IP_MODEM_RESETS > 0 &&
+                ctx->modem_resets < CONFIG_CPE_IP_MODEM_RESETS &&
+                (ctx->last_modem_reset_us == 0 ||
+                 (now - ctx->last_modem_reset_us) >=
+                 (int64_t)LM_MODEM_RESET_COOLDOWN_MS * 1000LL)) {
+            return lm_reset_modem(ctx, now);
+        }
         /* Bounded escalation: every ECM rebuild resets the modem USB interface
          * and never fixes a missing SIM or an inactive PDP context, so stop
          * tearing the driver down after the configured number of attempts.
@@ -498,6 +565,8 @@ static lm_tick_result_t lm_scheduled_rebuild(lm_ctx_t *ctx)
     ctx->enum_reset_attempts = 0;
     ctx->dhcp_restarts = 0;
     ctx->ecm_rebuilds = 0;
+    ctx->modem_resets = 0;
+    ctx->last_modem_reset_us = 0;
     ctx->was_online = false;
     cpe_status_set_recovery_attempts(0);
     cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);

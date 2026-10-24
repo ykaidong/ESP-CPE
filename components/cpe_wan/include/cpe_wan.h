@@ -63,7 +63,9 @@ esp_err_t cpe_wan_ap_hook_register(void);
  * SoftAP/Web console available, and only the cheap steps keep retrying, bounded
  * per round: the DHCP client restarts, and so does the root port power cycle,
  * up to CONFIG_CPE_IP_MAX_ECM_REBUILDS and CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS
- * times. It never tears down the USB Host stack.
+ * times. When those are exhausted the "no IP" path restarts the 4G module itself
+ * (AT+CFUN=1,1) up to CONFIG_CPE_IP_MODEM_RESETS times, and then degrades to
+ * DHCP retries only. It never tears down the USB Host stack.
  *
  * @return ESP_OK when the task was created, an IDF error code otherwise; on
  *         failure the device stays AP/Web-only (the caller decides whether to
