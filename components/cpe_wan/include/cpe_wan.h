@@ -65,7 +65,11 @@ esp_err_t cpe_wan_ap_hook_register(void);
  * up to CONFIG_CPE_IP_MAX_ECM_REBUILDS and CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS
  * times. When those are exhausted the "no IP" path restarts the 4G module itself
  * (AT+CFUN=1,1) up to CONFIG_CPE_IP_MODEM_RESETS times, and then degrades to
- * DHCP retries only. It never tears down the USB Host stack.
+ * DHCP retries only. The CPE only counts as ONLINE while the modem also has a
+ * data connection: its DHCP server answers even without a SIM, so an address
+ * without an active PDP context (CONFIG_CPE_PDP_WAIT_MS) is treated like "no
+ * usable WAN" and goes through the same module restart. It never tears down the
+ * USB Host stack.
  *
  * @return ESP_OK when the task was created, an IDF error code otherwise; on
  *         failure the device stays AP/Web-only (the caller decides whether to

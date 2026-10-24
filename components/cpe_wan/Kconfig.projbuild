@@ -38,6 +38,26 @@ menu "CPE WAN Configuration"
             reachable through SoftAP/Web in that case; no automatic reboot is
             performed.
 
+    config CPE_PDP_WAIT_MS
+        int "Time an inactive PDP context is tolerated before the modem is restarted (ms)"
+        default 60000
+        range 0 600000
+        help
+            The 4G module runs its own DHCP server on the ECM interface and
+            answers it even with no SIM card inserted, so an IP address alone
+            does not prove that traffic can flow: what carries the data is the
+            PDP context, reported by the AT telemetry (AT+CGACT?). With this
+            option the CPE only counts as ONLINE while that context is active,
+            and restarts the module when it stays inactive for this long
+            (bounded by CPE_IP_MODEM_RESETS, the same budget as the "no IP"
+            ladder). The state has to persist for the whole window: a single
+            poll reporting the context down while the modem is attaching is not
+            a reason to restart it. An unknown PDP state - AT telemetry
+            disabled, a modem that does not answer the command, or the first
+            seconds before the first poll - counts as usable, so the CPE still
+            comes online without AT. 0 disables the check: an IP is enough,
+            the behaviour before this option existed.
+
     config CPE_IP_DHCP_RESTARTS
         int "DHCP-client restarts before rebuilding the ECM driver"
         default 2

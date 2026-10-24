@@ -12,6 +12,10 @@
  * (CONFIG_CPE_IP_MAX_ECM_REBUILDS) -> restart the 4G module itself
  * (CONFIG_CPE_IP_MODEM_RESETS, AT+CFUN=1,1), after which only the DHCP client is
  * restarted, which still picks the link up when the SIM/PDP shows up later.
+ * An address alone is not ONLINE: the module answers DHCP even with no SIM, so
+ * the PDP context has to be active as well (CONFIG_CPE_PDP_WAIT_MS, see
+ * lm_wan_usable()). A link that has an address but no data goes through the same
+ * module restart, bounded by the same budget.
  * "No modem enumerated" never reboots either: it power-cycles the root port at
  * most CONFIG_CPE_USB_ENUM_RESET_ATTEMPTS times per round and then retries,
  * because a modem may be plugged in at any time.
@@ -129,6 +133,10 @@ typedef struct {
      * and by a scheduled rebuild. */
     uint32_t modem_resets;
     int64_t last_modem_reset_us;
+    /* "IP but no data" episode: when the missing PDP context was first seen,
+     * and whether that window has already been acted on once. */
+    int64_t data_wait_start_us;
+    bool data_escalated;
     int64_t wait_start_us;
     int64_t online_start_us;
     bool was_online;
@@ -174,6 +182,14 @@ static void lm_teardown_ecm(lm_ctx_t *ctx)
     ctx->wait_start_us = 0;
 }
 
+/* The "IP but no data" window is measured on the current link and address: it
+ * starts over whenever either of them changes. */
+static void lm_data_wait_reset(lm_ctx_t *ctx)
+{
+    ctx->data_wait_start_us = 0;
+    ctx->data_escalated = false;
+}
+
 /* Back to the BOOT phase and give the modem / CDC stack a moment before the
  * next tick creates the driver again. */
 static void lm_backoff_to_boot(lm_ctx_t *ctx, uint32_t ms)
@@ -205,6 +221,7 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
 {
     if (st->link_up != ctx->last_link_up) {
         ctx->wait_start_us = now;
+        lm_data_wait_reset(ctx);
         ctx->last_link_up = st->link_up;
         if (st->link_up) {
             /* A fresh link starts a fresh recovery budget: the USB fault is
@@ -222,6 +239,7 @@ static void lm_service(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
     }
     if (st->got_ip != ctx->last_got_ip) {
         ctx->wait_start_us = now;
+        lm_data_wait_reset(ctx);
         ctx->last_got_ip = st->got_ip;
         if (st->got_ip) {
             ctx->ip_attempts = 0;
@@ -250,6 +268,7 @@ static lm_tick_result_t lm_online(lm_ctx_t *ctx, const cpe_status_t *st, int64_t
         ctx->ecm_rebuilds = 0;
         ctx->modem_resets = 0;
         ctx->last_modem_reset_us = 0;
+        lm_data_wait_reset(ctx);
         ctx->online_start_us = now;
         cpe_status_set_recovery_attempts(0);
         cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
@@ -306,10 +325,11 @@ static lm_tick_result_t lm_reset_modem(lm_ctx_t *ctx, int64_t now)
 {
     ctx->modem_resets++;
     ctx->last_modem_reset_us = now;
-    cpe_status_set_error("no IP from modem, restarting the module");
-    cpe_status_set_state(CPE_STATE_FAULT, "restarting the 4G module (no IP)");
-    ESP_LOGW(TAG, "DHCP retries and ECM rebuilds exhausted, restarting the 4G module "
-             "(restart %"PRIu32"/%d)", ctx->modem_resets, CONFIG_CPE_IP_MODEM_RESETS);
+    cpe_status_set_error("no usable WAN connection, restarting the module");
+    cpe_status_set_state(CPE_STATE_FAULT, "restarting the 4G module (no usable WAN)");
+    ESP_LOGW(TAG, "Restarting the 4G module (restart %"PRIu32"/%d): no IP or no data "
+             "connection after every lighter step", ctx->modem_resets,
+             CONFIG_CPE_IP_MODEM_RESETS);
 
     /* AT+CFUN=1,1 first: it reboots the module without touching the power
      * supply, and it needs the USB device (so the ECM driver) still in place.
@@ -338,6 +358,81 @@ static lm_tick_result_t lm_reset_modem(lm_ctx_t *ctx, int64_t now)
     ctx->ecm_rebuilds = 0;
     lm_backoff_to_boot(ctx, CONFIG_CPE_RECOVERY_RETRY_MS);
     return LM_TICK_ACTION;
+}
+
+/* The module runs its own DHCP server on the ECM interface and answers it even
+ * with no SIM card inserted, so an address alone does not prove that traffic can
+ * flow: what carries the data is the PDP context. AT telemetry polls it every
+ * CONFIG_CPE_AT_POLL_INTERVAL_S and marks it invalid when it cannot be read, and
+ * that unknown state must not keep the CPE out of ONLINE - it counts as usable,
+ * which is exactly the behaviour from before this check existed. */
+static bool lm_wan_usable(const cpe_status_t *st)
+{
+    if (CONFIG_CPE_PDP_WAIT_MS <= 0) {
+        return true;
+    }
+    return !st->pdp_valid || st->pdp_active;
+}
+
+/* Why there is no data, so the console says more than "no mobile data": the AT
+ * state is enough to tell the common cases apart. */
+static const char *lm_no_data_reason(const cpe_status_t *st)
+{
+    if (st->sim_valid && !st->sim_inserted) {
+        return "no SIM card";
+    }
+    if (st->ps_valid && !st->ps_attached) {
+        return "not attached to the packet network";
+    }
+    return "PDP context not active";
+}
+
+/* Link and address are both there, but the modem has no data connection: it
+ * handed out an address - it does that without a SIM too - while its PDP context
+ * never came up. Nothing on the USB/ECM side is wrong, so the only step that
+ * helps is the one the field showed to work: restart the module, bounded by the
+ * same budget as the "no IP" ladder. Once that is used up the link is left alone:
+ * the SIM or the subscription may become usable later, and AP/Web stay up all
+ * the time. */
+static lm_tick_result_t lm_wait_data(lm_ctx_t *ctx, const cpe_status_t *st, int64_t now)
+{
+    lm_enter_phase(ctx, LM_PHASE_LINK_WAIT);
+
+    if (ctx->data_wait_start_us == 0) {
+        ctx->data_wait_start_us = now;
+        ESP_LOGW(TAG, "IP %s but no data connection: %s", st->ip, lm_no_data_reason(st));
+    }
+    /* The state has to persist for the whole window: a single poll that reports
+     * the context down during an attach is not a reason to restart the module. */
+    if ((now - ctx->data_wait_start_us) <= (int64_t)CONFIG_CPE_PDP_WAIT_MS * 1000LL) {
+        cpe_status_set_state(CPE_STATE_LINK_WAIT, "no mobile data (%s)",
+                             lm_no_data_reason(st));
+        return LM_TICK_IDLE;
+    }
+
+    if (!ctx->data_escalated) {
+        ctx->data_escalated = true;
+        ctx->ip_attempts++;
+        cpe_status_set_recovery_attempts(ctx->ip_attempts);
+        cpe_status_set_recovery_stage(CPE_RECOVERY_IP);
+        cpe_status_set_error("IP address but no data (%s)", lm_no_data_reason(st));
+        ESP_LOGW(TAG, "No data for %d ms with IP %s (%s)", CONFIG_CPE_PDP_WAIT_MS,
+                 st->ip, lm_no_data_reason(st));
+
+        if (CONFIG_CPE_IP_MODEM_RESETS > 0 &&
+                ctx->modem_resets < CONFIG_CPE_IP_MODEM_RESETS &&
+                (ctx->last_modem_reset_us == 0 ||
+                 (now - ctx->last_modem_reset_us) >=
+                 (int64_t)LM_MODEM_RESET_COOLDOWN_MS * 1000LL)) {
+            return lm_reset_modem(ctx, now);
+        }
+        ESP_LOGW(TAG, "Modem restarts exhausted, keeping the link and watching the "
+                 "PDP state (AP/Web stay available)");
+    }
+
+    cpe_status_set_state(CPE_STATE_FAULT, "no mobile data (%s), AP/Web still available",
+                         lm_no_data_reason(st));
+    return LM_TICK_IDLE;
 }
 
 static lm_tick_result_t lm_wait_ip(lm_ctx_t *ctx, int64_t now)
@@ -567,6 +662,7 @@ static lm_tick_result_t lm_scheduled_rebuild(lm_ctx_t *ctx)
     ctx->ecm_rebuilds = 0;
     ctx->modem_resets = 0;
     ctx->last_modem_reset_us = 0;
+    lm_data_wait_reset(ctx);
     ctx->was_online = false;
     cpe_status_set_recovery_attempts(0);
     cpe_status_set_recovery_stage(CPE_RECOVERY_NONE);
@@ -598,6 +694,10 @@ static lm_tick_result_t lm_tick(lm_ctx_t *ctx)
     lm_service(ctx, &st, now);
 
     if (st.link_up && st.got_ip) {
+        if (!lm_wan_usable(&st)) {
+            ctx->was_online = false;
+            return lm_wait_data(ctx, &st, now);
+        }
         return lm_online(ctx, &st, now);
     }
 
