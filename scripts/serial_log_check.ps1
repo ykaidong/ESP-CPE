@@ -44,10 +44,16 @@ $stats = [ordered]@{
     '4G WAN IP'                            = (Count-Pattern '4G WAN IP:')
     'CPE online'                           = (Count-Pattern 'CPE online \(WAN IP')
     'Link up but no IP'                    = (Count-Pattern 'Link up but no IP after')
+    '  -> ECM rebuild'                     = (Count-Pattern 'rebuilding the ECM driver')
+    '  -> 4G module restart'               = (Count-Pattern 'restarting the 4G module')
+    '  -> module reset in hardware'        = (Count-Pattern 'resetting it in hardware')
     'No USB link'                          = (Count-Pattern 'No USB link after')
     'USB root port power cycles'           = (Count-Pattern 'Power-cycling the USB root port')
     'ECM link stuck'                       = (Count-Pattern 'ECM link stuck')
     'Boot counter cleared'                 = (Count-Pattern 'Healthy for \d+ s, boot counter cleared')
+    'ECM teardown incomplete'              = (Count-Pattern 'ECM teardown incomplete')
+    'Scheduled ECM rebuild'                = (Count-Pattern 'Scheduled ECM rebuild')
+    'Scheduled reboot'                     = (Count-Pattern 'Scheduled reboot #')
     'Replay (device actually delivered)'   = (Count-Pattern 'Replaying the CONNECTED event for device')
     'CHECK_SHORT_DEV_DESC'                 = (Count-Pattern 'CHECK_SHORT_DEV_DESC')
 }
@@ -77,6 +83,14 @@ if ($spam -gt 0) {
 }
 if ($stats['Replay (device actually delivered)'] -gt 5) {
     Write-Host "WARN: more than 5 replayed devices; check for repeated event loss or re-enumeration" -ForegroundColor Yellow
+}
+if ($stats['ECM teardown incomplete'] -gt 0) {
+    Write-Host "WARN: an ECM teardown did not complete; a rebuild counted as successful may not have happened" -ForegroundColor Yellow
+}
+# The modem restart budget is per "no IP" episode (CONFIG_CPE_IP_MODEM_RESETS,
+# at most 5), so a log with many of them means the link never stayed up.
+if ($stats['  -> 4G module restart'] -ge 10) {
+    Write-Host "WARN: the 4G module was restarted $($stats['  -> 4G module restart']) times; check that the link recovers at all" -ForegroundColor Yellow
 }
 
 if ($failed) {
