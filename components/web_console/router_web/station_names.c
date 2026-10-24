@@ -28,16 +28,16 @@ static int hex_nibble(char c)
     return -1;
 }
 
-void cpe_web_mac_to_hex(const uint8_t mac[6], char out[13])
+void cpe_web_mac_to_hex(const uint8_t mac[6], char out[CPE_WEB_MAC_HEX_BUFSIZE])
 {
-    snprintf(out, 13, "%02x%02x%02x%02x%02x%02x",
+    snprintf(out, CPE_WEB_MAC_HEX_BUFSIZE, "%02x%02x%02x%02x%02x%02x",
              (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
              (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
 }
 
-void cpe_web_mac_to_colon(const uint8_t mac[6], char out[18])
+void cpe_web_mac_to_colon(const uint8_t mac[6], char out[CPE_WEB_MAC_COLON_BUFSIZE])
 {
-    snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x",
+    snprintf(out, CPE_WEB_MAC_COLON_BUFSIZE, "%02x:%02x:%02x:%02x:%02x:%02x",
              (unsigned)mac[0], (unsigned)mac[1], (unsigned)mac[2],
              (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
 }
@@ -104,7 +104,7 @@ bool cpe_web_station_name_valid(const char *name)
 
 esp_err_t cpe_web_station_name_load(const uint8_t mac[6], char *out, size_t out_len)
 {
-    char key[13];
+    char key[CPE_WEB_MAC_HEX_BUFSIZE];
     cpe_web_mac_to_hex(mac, key);
 
     cpe_kv_t kv;
@@ -122,7 +122,7 @@ esp_err_t cpe_web_station_name_load(const uint8_t mac[6], char *out, size_t out_
 
 esp_err_t cpe_web_station_name_save(const uint8_t mac[6], const char *name)
 {
-    char key[13];
+    char key[CPE_WEB_MAC_HEX_BUFSIZE];
     cpe_web_mac_to_hex(mac, key);
 
     cpe_kv_t kv;

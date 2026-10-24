@@ -71,6 +71,7 @@ esp_err_t api_login_post_handler(httpd_req_t *req)
     }
     case CPE_AUTH_ERR_LOCKED: {
         uint32_t remaining = cpe_auth_lockout_remaining_s();
+        /* Seconds in decimal: a uint32 needs 10 digits at most. */
         char retry_after[16];
         snprintf(retry_after, sizeof(retry_after), "%u", (unsigned)remaining);
         (void)httpd_resp_set_hdr(req, "Retry-After", retry_after);

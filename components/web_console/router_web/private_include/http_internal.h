@@ -36,6 +36,12 @@
 #define CPE_WEB_JSON_MAX_DEPTH          6
 
 #define CPE_WEB_STA_NAME_MAX_LEN        32
+/* Text forms of a station address: "aa:bb:cc:dd:ee:ff", the same 12 hex digits
+ * without separators (used as the NVS key), and a dotted IPv4. Buffer sizes,
+ * NUL included: the snapshot fields and the formatters have to agree on them. */
+#define CPE_WEB_MAC_COLON_BUFSIZE       18
+#define CPE_WEB_MAC_HEX_BUFSIZE         13
+#define CPE_WEB_IPV4_BUFSIZE            16
 /* The station-nickname namespace lives in cpe_kv.h (CPE_KV_NS_STA_NAMES). */
 #define CPE_WEB_STA_SNAPSHOT_MAX        10
 #define CPE_WEB_STA_LOCK_TIMEOUT_MS     100
@@ -83,8 +89,8 @@ typedef struct {
 
 typedef struct {
     char name[CPE_WEB_STA_NAME_MAX_LEN + 1];
-    char mac[18];
-    char ip[16];
+    char mac[CPE_WEB_MAC_COLON_BUFSIZE];
+    char ip[CPE_WEB_IPV4_BUFSIZE];
     int64_t start_time_us;
 } cpe_web_sta_snapshot_t;
 
@@ -234,8 +240,8 @@ esp_err_t cpe_web_json_get_bool_flexible(const cJSON *root, const char *name,
 
 /* --- station_names.c ----------------------------------------------------- */
 
-void cpe_web_mac_to_hex(const uint8_t mac[6], char out[13]);
-void cpe_web_mac_to_colon(const uint8_t mac[6], char out[18]);
+void cpe_web_mac_to_hex(const uint8_t mac[6], char out[CPE_WEB_MAC_HEX_BUFSIZE]);
+void cpe_web_mac_to_colon(const uint8_t mac[6], char out[CPE_WEB_MAC_COLON_BUFSIZE]);
 bool cpe_web_mac_parse(const char *str, uint8_t mac[6]);
 bool cpe_web_station_name_valid(const char *name);
 esp_err_t cpe_web_station_name_load(const uint8_t mac[6], char *out, size_t out_len);

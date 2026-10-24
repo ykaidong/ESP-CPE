@@ -91,7 +91,7 @@ static esp_err_t http_log_handler(httpd_req_t *req)
         return ESP_ERR_INVALID_STATE;
     }
 
-    char client[16];
+    char client[CPE_WEB_IPV4_BUFSIZE];
     format_client_ip(req, client, sizeof(client));
     const char *method = http_method_name(route->uri.method);
     int64_t start_us = esp_timer_get_time();
