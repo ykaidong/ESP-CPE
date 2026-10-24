@@ -39,6 +39,18 @@
 
 static const char *TAG = "cpe_main";
 
+/* A failure that can neither be recovered nor retried, and that must not turn
+ * into a reboot loop: the device stays powered and idle, so a unit in the field
+ * is still reachable over the serial console for logs. Every fatal path goes
+ * through here, so they all look the same in the log. */
+static void fatal_idle(const char *reason, esp_err_t err)
+{
+    ESP_LOGE(TAG, "FATAL: %s (%s); staying idle", reason, esp_err_to_name(err));
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+}
+
 /* Validate an image that was just installed by OTA.
  *
  * With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE the new image boots in
@@ -52,6 +64,8 @@ static void ota_validate_task(void *arg)
 {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(CONFIG_CPE_OTA_VALIDATE_DELAY_MS));
+    /* Best effort and expected to fail with ESP_ERR_NOT_SUPPORTED when the
+     * bootloader rollback is disabled; the call logs what it did. */
     (void)cpe_ota_mark_running_valid();
     vTaskDelete(NULL);
 }
@@ -60,7 +74,9 @@ void app_main(void)
 {
     /* Start the reset-button boot window: a double-click within the first
      * seconds after boot prints the credentials (physical-presence trigger). */
-    (void)reset_button_init();
+    if (reset_button_init() != ESP_OK) {
+        ESP_LOGW(TAG, "Reset button not available");
+    }
 
     /* The status LED works before the network stack exists: an empty status
      * reads as "no link" and shows the red blink. */
@@ -78,10 +94,7 @@ void app_main(void)
         }
     }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "FATAL: nvs_flash_init failed (%s); staying idle", esp_err_to_name(err));
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(10000));
-        }
+        fatal_idle("nvs_flash_init failed", err);
     }
 
     err = esp_netif_init();
@@ -89,10 +102,7 @@ void app_main(void)
         err = esp_event_loop_create_default();
     }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "FATAL: network stack init failed (%s); staying idle", esp_err_to_name(err));
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(10000));
-        }
+        fatal_idle("network stack init failed", err);
     }
 
     err = cpe_core_init();
@@ -105,14 +115,14 @@ void app_main(void)
         }
     }
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "FATAL: cannot initialize configuration; staying idle (no reboot loop)");
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(10000));
-        }
+        fatal_idle("cannot initialize configuration", err);
     }
 
-    /* Register the WAN link events before any driver can report them. */
-    (void)cpe_wan_events_register();
+    /* Register the WAN link events before any driver can report them. Without
+     * them the console would show a link state that never changes. */
+    if (cpe_wan_events_register() != ESP_OK) {
+        ESP_LOGE(TAG, "WAN event handlers not registered");
+    }
 
     /* SoftAP + Web first: the device is always reachable, even without 4G. */
     err = app_wifi_start();
@@ -122,7 +132,9 @@ void app_main(void)
     }
     /* Must come after app_wifi_start(): the default Wi-Fi handler that re-adds
      * the AP netif has to run before this one re-enables NAPT on it. */
-    (void)cpe_wan_ap_hook_register();
+    if (cpe_wan_ap_hook_register() != ESP_OK) {
+        ESP_LOGE(TAG, "AP netif hook not registered: NAPT/DNS may not follow the AP netif");
+    }
     err = modem_http_start();
     bool web_ok = (err == ESP_OK);
     if (!web_ok) {
@@ -131,12 +143,12 @@ void app_main(void)
 
     err = cpe_wan_start();
     if (err != ESP_OK) {
-        /* Without the link manager the CPE stays in AP-only mode instead of
-         * aborting into a reboot loop. */
-        ESP_LOGE(TAG, "Failed to create link manager task, 4G WAN disabled");
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(10000));
-        }
+        /* AP + Web are already up, so the device keeps running in AP-only mode:
+         * the console stays reachable and a scheduled reboot can still recover
+         * the 4G side later. Blocking here instead would also stop the AT
+         * telemetry, the reset button and the maintenance task below. */
+        ESP_LOGE(TAG, "4G WAN not started (%s), continuing in AP-only mode",
+                 esp_err_to_name(err));
     }
 
     /* Read-only AT telemetry on the modem AT port (second CDC port). It is
