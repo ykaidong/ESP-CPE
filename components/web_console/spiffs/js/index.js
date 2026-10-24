@@ -418,6 +418,12 @@
      * quality metric, so prefer it; RSSI is only a fallback for modems that
      * report CSQ without QCSQ. */
     function signalLevel(status) {
+        /* No SIM card: the modem can still see a cell and report CSQ/QCSQ
+         * (neither needs a SIM), but there is no service, so the reading must
+         * not be drawn as usable signal strength. */
+        if (status.sim_valid && !status.sim_inserted) {
+            return -1;
+        }
         if (status.qcsq_valid && typeof status.rsrp === 'number') {
             if (status.rsrp >= -85) {
                 return 5;
@@ -460,8 +466,8 @@
         }
         var level = signalLevel(status);
         /* SVG elements expose className as a read-only SVGAnimatedString. */
-        icon.setAttribute('class', level === 0 ? 'signal-icon' : 'signal-icon level-' + level);
-        icon.setAttribute('aria-label', SIGNAL_LABELS[level]);
+        icon.setAttribute('class', level <= 0 ? 'signal-icon' : 'signal-icon level-' + level);
+        icon.setAttribute('aria-label', level < 0 ? '未插入 SIM 卡' : SIGNAL_LABELS[level]);
     }
 
     function renderUptime() {
@@ -500,7 +506,9 @@
         setText('status-usb', status.usb_connected ? '已连接' : '未连接');
         setText('status-link', status.link_up ? '已连接' : '未连接');
         setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
-        setText('status-rssi', status.rssi_valid ? (status.rssi + ' dBm') : '未知');
+        setText('status-rssi', (status.sim_valid && !status.sim_inserted)
+            ? '未插入 SIM 卡'
+            : (status.rssi_valid ? (status.rssi + ' dBm') : '未知'));
         setText('status-rsrp', status.qcsq_valid ? (status.rsrp + ' dBm') : '未知');
         setText('status-rsrq', status.qcsq_valid ? (status.rsrq + ' dB') : '未知');
         setText('status-sinr', status.qcsq_valid ? (status.sinr + ' dB') : '未知');
