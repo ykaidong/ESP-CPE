@@ -58,7 +58,7 @@ idf.py -p COM6 flash monitor
 | 2.1 | 正常启动接模组 | 枚举成功、`ECM driver ready`、`4G WAN IP`、`CPE online` | ✅ 通过 |
 | 2.2 | 反复热插拔模组 20 次 | 每次恢复 link/IP；无 panic；无重复端口打开错误 | ✅ 初步通过（7 次，恢复 18~20s；建议补到 20 次） |
 | 2.3 | 无 RESET 线，运行中按 ESP32 复位 10 次 | 每次要么恢复枚举，要么稳定停在 FAULT；**不重启整机、不 panic** | ⛔ 受阻：软件侧修复已上板验证（不再 panic、AP/Web 可用、周期重试），但模组 USB 控制器复位后挂死属硬件限制，只有插拔恢复，见 2.w |
-| 2.4 | 无 SIM 持续 10 分钟 | `link up but no IP` → FAULT，AP/Web 可用，无重启 | ☐ 待补 |
+| 2.4 | 无 SIM 持续 10 分钟 | **预期已随 ONLINE 判据改写**（2026-10-24）：模组的 ECM DHCP 无卡也会分配地址，所以 `got_ip=true`（私网地址），**不会**出现 `link up but no IP`。期望：状态 `no mobile data (no SIM card)`；`CPE_PDP_WAIT_MS`（默认 60 s）后 `Restarting the 4G module (restart 1/2)`，最多 `CPE_IP_MODEM_RESETS` 次，之后停在 `no mobile data (no SIM card), AP/Web still available`；信号图标不点亮、`接收信号强度` 显示"未插入 SIM 卡"；AP/Web 全程可用，**不重启整机** | ☐ 待补 |
 | 2.5 | 不接模组上电 10 分钟 | no-device FAULT，AP/Web 可用，无重启 | ☐ 待补 |
 | 2.6 | 正常运行时观察 10 分钟日志 | **不出现** `Replaying the CONNECTED event for N existing device(s)` 周期刷屏；无 `CHECK_SHORT_DEV_DESC` 后卡死 | ✅ 通过（0 次刷屏） |
 | 2.7 | 在线稳定 2 分钟 | `Healthy for 120 s, boot counter cleared`（仅首次有计数时打印） | ✅ 通过 |

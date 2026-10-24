@@ -30,7 +30,7 @@
 | 1.3 `/wlan_advance` 复用 apply 任务 | 完成 | `f8556c0` |
 | 1.4 AP 重启后的 NAPT/DNS 重应用移出事件循环 | 完成 | `8e474fe` |
 | 1.5 netif action 走 TCP/IP 线程 | 完成 | `28c65d0`（`c372f83` 修返回值） |
-| 1.6 ECM 句柄并发保护 | **部分完成，锁已回退** | 见下节 |
+| 1.6 ECM 句柄并发保护 | 完成（**待真机压测**） | `876feaf` |
 | 2.1 延迟重启统一入口 | 完成 | `14af5e6` |
 | 2.2 恢复出厂统一入口 | 完成 | `5d5e5f7` |
 | 2.3 `app_wifi_sta_disconnect()` | 完成 | `6e143a7` |
@@ -64,6 +64,41 @@
 （回调只取快照且不等待，teardown 延后真正释放），方案确认后单独立项；
 当前仍保持"句柄由链路管理任务独占、回调只比较指针"的既有约束。
 `esp_netif_action_stop/connected` 走 TCP/IP 线程的部分保留。
+
+### 1.6 实现结果（已提交 `876feaf`，待真机压测）
+
+   方案：**非阻塞借用 + 引用计数 + 有界等待 + 延迟释放**，按上面的结论落地。
+
+   - 风险面重新界定（比"回调只比较指针"更精确）：事件回调里 `wan_event_handler()` 确实只做
+     指针比较，不解引用，是安全的；真正跨任务解引用的是 `ap_reapply_task`（AP 重启后补 NAPT/DNS）
+     里的 `wan_apply_upstream_dns()` → `esp_netif_get_dns_info(wan)`。它是唯一的借用者。
+   - 新接口 `wan_ecm_borrow()` / `wan_ecm_release()`（组件内私有）。**永不阻塞**：teardown 期间
+     或接口未就绪时直接失败，因此从事件回调调用也安全。借用期间 `wan_ecm_netif()` /
+     `wan_ecm_eth_handle()` 可以解引用。
+   - `wan_ecm_teardown()` 顺序：置 `closing`（停止接纳新的借用者）→ 等 `refs` 归零，**有界**
+     `ECM_RELEASE_TIMEOUT_MS = 200`（按用户 2026-10-24 决定）→ 超时则**保留句柄**返回
+     `ESP_ERR_TIMEOUT`，由下一次 `wan_ecm_bring_up()` 重试（复用已有的 uninstall-retry 路径，
+     没有新写兜底）。成功拆除后才把 `closing` 复位。
+   - 为什么不再死锁：上次（`bcca642` 撤销）的环是"回调阻塞等锁 → teardown 持锁等 TCP/IP 线程 →
+     TCP/IP 投递事件到被阻塞的事件循环"。现在借用者不等待，事件循环不会被占住；teardown 等待的
+     对象只做几个非阻塞调用，且等待有上界，最坏情况是"本次拆除推迟"，而不是卡死。
+   - 原子操作沿用项目既有写法（GCC `__atomic_*` builtins + 普通类型，与 `cpe_at.c` /
+     `link_manager.c` 一致），没有引入 `<stdatomic.h>`。
+   - **未采纳"句柄只建一次"**：那样能让生命周期问题彻底消失，但 ECM 重建就不再能拿到全新的
+     驱动实例（重建这个手段会失去一半意义），且需要真机验证反复 stop/start 不泄漏。保留为后续优化。
+   - **不覆盖驱动 RX 路径**（USB/ECM 线程进 lwIP）：那不是本项目代码，继续由 `iot_eth_stop()`
+     + `iot_eth_update_input_path(NULL)` + `ECM_GLUE_RELEASE_MS` 静置处理，已写进代码注释。
+
+   **与 2026-10-24 决定的偏差一处**：AP 重启处理里 `xTaskCreate` 失败时的内联回退，原定"只记日志
+   + 让**维护任务**补做"，实际改为**链路管理任务**消费（`wan_request_napt_reapply()` /
+   `wan_napt_reapply_take()`）。原因：`cpe_maintenance` 的 CMake 是 `REQUIRES cpe_wan`，反向依赖
+   会形成组件循环依赖。链路管理任务同样不是事件循环、同样拥有 ECM 句柄（它本来就调用
+   `wan_link_online()`），且 ≤500 ms 就会消费。若要严格回到维护任务，需要经 `main` 接一个函数
+   指针（约 3 个组件），可按需补。
+
+   **验收**（需真机）：反复触发 ECM 重建（计划内重建 + 拔插 USB）数十轮无断言/无 UAF；重建期间
+   改 AP 配置触发 `AP_START`，与 teardown 撞车不崩；日志不出现 `ECM handles still in use`
+   （偶发出现时应能自愈）；堆水位不单调下降。
 
 ### 期间的实测修复（非审计项）
 
