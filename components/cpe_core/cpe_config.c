@@ -21,6 +21,10 @@
 static const char *TAG = "cpe_config";
 
 typedef struct {
+    /* Recursive on purpose: the public setters call each other (a factory reset
+     * rewrites several fields through the same entry points), so a plain mutex
+     * would self-deadlock. Nothing outside this module is called while it is
+     * held: the lock order is cpe_auth -> cpe_config, see cpe_auth.h. */
     SemaphoreHandle_t lock;
     nvs_handle_t nvs;
     bool nvs_opened;

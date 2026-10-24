@@ -36,6 +36,10 @@ typedef struct {
 } cpe_session_t;
 
 static cpe_session_t s_sessions[CPE_MAX_SESSIONS];
+/* Plain mutex: the sections below only touch the tables above, and every
+ * cpe_config_* call is made with the lock released. Lock order is
+ * cpe_auth -> cpe_config (see cpe_auth.h): taking them the other way round
+ * can deadlock. */
 static SemaphoreHandle_t s_lock;
 static bool s_inited;
 static int s_fail_count;

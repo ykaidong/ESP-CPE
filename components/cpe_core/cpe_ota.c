@@ -28,7 +28,13 @@ static const char *TAG = "cpe_ota";
  * the same task (the HTTP server task); cpe_ota_get_info() is the only entry
  * point that may be called from another task. The flag it reports is published
  * under a critical section so the status handler never observes a torn state
- * transition. */
+ * transition.
+ *
+ * A critical section, not a mutex, because only scalars are published for a few
+ * instructions: it needs no create/destroy lifecycle (this module has none) and
+ * it cannot deadlock with anything else. The rule for this component: a critical
+ * section for a handful of scalars, a mutex as soon as a section can block,
+ * nest or call into another module. */
 static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_upload_in_progress;
 static esp_ota_handle_t s_update_handle;

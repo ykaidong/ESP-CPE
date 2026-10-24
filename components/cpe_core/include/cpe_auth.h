@@ -2,6 +2,11 @@
  * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Concurrency: the session table and the login lockout state are guarded by one
+ * mutex inside this component. Lock order when both are needed: cpe_auth first,
+ * then cpe_config. Nothing may call into cpe_auth while the cpe_config lock is
+ * held, that order can deadlock.
  */
 
 #pragma once

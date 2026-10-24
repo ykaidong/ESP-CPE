@@ -18,6 +18,8 @@
 static const char *TAG = "cpe_status";
 
 static cpe_status_t s_status;
+/* Plain mutex: every section copies a few scalars and never calls another
+ * module, so no other lock is ever taken while this one is held. */
 static SemaphoreHandle_t s_lock;
 static int64_t s_boot_us;
 static bool s_inited;

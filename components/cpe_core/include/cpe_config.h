@@ -2,6 +2,10 @@
  * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * Concurrency: the configuration and the NVS handle are guarded by one
+ * recursive mutex (recursive because the setters call each other). Lock order
+ * against cpe_auth: cpe_auth first, then cpe_config - see cpe_auth.h.
  */
 
 #pragma once
