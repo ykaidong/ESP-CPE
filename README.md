@@ -180,4 +180,6 @@ partitions_16m_ota.csv
 
 ## 8. 许可
 
+本项目自有代码版权归 Yang Kaidong，以 Apache-2.0 许可发布（见 `LICENSE`）。
 保留上游 Espressif 示例与组件的 Apache-2.0 许可；本地修改记录在各组件的 CHANGELOG.md。
+第三方组件（含 cJSON 的 MIT 许可）声明见 `NOTICE`。
