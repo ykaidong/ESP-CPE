@@ -17,7 +17,8 @@
     var NAV_ITEMS = [
         { href: 'index.html', text: '系统状态', pages: ['/', '/index.html'] },
         { href: 'wlan.html', text: 'WLAN设置', pages: ['/wlan.html'] },
-        { href: 'upgrade.html', text: '系统升级', pages: ['/upgrade.html'] }
+        { href: 'upgrade.html', text: '系统升级', pages: ['/upgrade.html'] },
+        { href: 'sms.html', text: '短信', pages: ['/sms.html'] }
     ];
 
     /* Single administrator account: the header exposes logout directly instead

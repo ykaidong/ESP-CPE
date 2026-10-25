@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>短信 - ESP-CPE 管理后台</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/cpe.css">
+  <link rel="icon" href="./img/favicon.ico">
+</head>
+<body>
+  <div class="home-base">
+    <div class="header-base flex flex-jcb" id="app-header"></div>
+    <div class="content-base flex">
+      <div class="left-base" id="leftMenu"></div>
+      <div class="right-base">
+        <div class="page-header"><span class="header-title-one active-title">短信</span></div>
+        <div class="status-banner" id="sms-banner"></div>
+        <div class="page-content">
+          <div class="page-title">发送短信</div>
+          <div class="sms-send-form">
+            <input id="sms-number" type="tel" maxlength="21" placeholder="对方号码（可含 +）">
+            <textarea id="sms-text" maxlength="160" rows="3" placeholder="短信内容"></textarea>
+            <button id="sms-send-btn" type="button" class="save-btn">发送</button>
+          </div>
+          <div class="page-title">收件箱</div>
+          <table class="sms-table">
+            <thead><tr><th>号码</th><th>内容</th><th>时间</th><th></th></tr></thead>
+            <tbody id="sms-tbody"></tbody>
+          </table>
+          <div id="sms-empty" class="sms-empty"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="js/layout.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/sms.js"></script>
+</body>
+</html>

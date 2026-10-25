@@ -275,6 +275,13 @@ var CPE = (function () {
         ota_write_failed: '固件写入失败，请重试',
         ota_finalize_failed: '固件写入完成但切换启动分区失败，请重试',
         ota_info_failed: '读取固件信息失败',
+        sms_not_supported: '当前模组不支持短信功能',
+        sms_bad_number: '号码格式不正确（可含 +，3~20 位数字）',
+        sms_text_too_long: '短信内容过长（ASCII 最多 160 字符，中文最多 70 字）',
+        sms_rate_limited: '发送过于频繁，请稍后再试',
+        sms_send_failed: '短信发送失败，请检查 SIM 卡与短信中心',
+        sms_send_timeout: '短信发送超时，请重试',
+        sms_no_prompt: '模组未就绪，无法发送短信',
         network_error: '网络连接失败，设备可能正在重启',
         bad_response: '设备响应异常'
     };
