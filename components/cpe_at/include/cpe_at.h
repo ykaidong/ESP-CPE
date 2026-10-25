@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -53,6 +54,37 @@ esp_err_t cpe_at_start(void);
  *         ESP_ERR_NOT_SUPPORTED CONFIG_CPE_AT_ENABLE is disabled.
  */
 esp_err_t cpe_at_modem_reset(uint32_t timeout_ms);
+
+/* ---- Serialized AT session (used by the optional SMS component) ---- */
+
+/** Low-level I/O the session body can use. It owns the AT port exclusively
+ *  and runs on the AT task; there is exactly one AT port, so no handle is
+ *  passed around. */
+typedef struct {
+    /** Flush stale RX, then send a command line ("\r\n" appended). */
+    esp_err_t (*send_line)(const char *line);
+    /** Send raw bytes (no terminator, no flush). */
+    esp_err_t (*write)(const uint8_t *data, size_t len);
+    /** Collect bytes until a complete final line (OK / ERROR / +CME ERROR /
+     *  +CMS ERROR) or one of the `extra` tokens appears. Copies the collected
+     *  text (NUL-terminated, truncated to resp_size-1) into resp. Returns
+     *  ESP_ERR_TIMEOUT, ESP_ERR_INVALID_SIZE or ESP_ERR_INVALID_STATE (reset
+     *  preempted). */
+    esp_err_t (*read_until)(const char *const *extra, size_t n_extra,
+                            uint32_t timeout_ms, char *resp, size_t resp_size);
+} cpe_at_io_t;
+
+typedef esp_err_t (*cpe_at_session_body_t)(const cpe_at_io_t *io, void *arg);
+
+/** Run `body` on the AT task while the port is ready and no reset is pending.
+ *  Blocks the caller for up to `timeout_ms`. Returns ESP_ERR_INVALID_STATE when
+ *  the port is not ready, a session is already in flight, or a reset is
+ *  pending; ESP_ERR_TIMEOUT when the body did not finish in time. */
+esp_err_t cpe_at_session(const cpe_at_session_body_t body, void *arg,
+                         uint32_t timeout_ms);
+
+/** True when the AT task currently holds a ready AT port. */
+bool cpe_at_ready(void);
 
 #ifdef __cplusplus
 }

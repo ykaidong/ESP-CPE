@@ -101,6 +101,21 @@ static uint32_t s_generation;
 static usbh_cdc_port_handle_t s_port;
 static uint32_t s_port_generation;
 static int s_failures;
+
+/* Serialized session slot: exactly one body may run at a time, on the AT task.
+ * `s_session_done` is a binary semaphore created in cpe_at_start(); completion
+ * is paired with `s_session_seq` so a stale give is never mistaken for a new
+ * session's completion (same pattern as the modem reset). */
+typedef struct {
+    cpe_at_session_body_t body;
+    void *arg;
+    esp_err_t result;
+} at_session_slot_t;
+
+static at_session_slot_t s_session_slot;
+static SemaphoreHandle_t s_session_done;
+static bool s_session_active;
+static uint32_t s_session_seq;
 /* Slack for the longest strings a modem answers with: model/firmware revisions
  * grow with build suffixes and the IMEI may come as a 16 digit IMEISV. */
 static char s_model[40];
@@ -359,6 +374,75 @@ static esp_err_t at_read_response(char *buf, size_t size, uint32_t timeout_ms)
     }
     return at_response_complete(buf) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
+
+static esp_err_t at_io_send_line(const char *cmd)
+{
+    char line[128];
+    int len = snprintf(line, sizeof(line), "%s\r", cmd);
+    if (len < 0 || len >= (int)sizeof(line)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    (void)usbh_cdc_flush_rx_buffer(s_port);
+    vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
+    (void)usbh_cdc_flush_rx_buffer(s_port);
+    return usbh_cdc_write_bytes(s_port, (const uint8_t *)line, (size_t)len,
+                                pdMS_TO_TICKS(AT_WRITE_TIMEOUT_MS));
+}
+
+static esp_err_t at_io_write(const uint8_t *data, size_t len)
+{
+    return usbh_cdc_write_bytes(s_port, data, len,
+                                pdMS_TO_TICKS(AT_WRITE_TIMEOUT_MS));
+}
+
+static esp_err_t at_io_read_until(const char *const *extra, size_t n_extra,
+                                  uint32_t timeout_ms, char *resp, size_t resp_size)
+{
+    size_t used = 0;
+    TickType_t start = xTaskGetTickCount();
+    resp[0] = '\0';
+
+    for (;;) {
+        if (at_reset_pending()) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        size_t avail = 0;
+        if (usbh_cdc_get_rx_buffer_size(s_port, &avail) == ESP_OK && avail > 0) {
+            if (used + 1 < resp_size) {
+                size_t want = avail;
+                if (want > resp_size - 1 - used) {
+                    want = resp_size - 1 - used;
+                }
+                size_t len = want;
+                if (usbh_cdc_read_bytes(s_port, (uint8_t *)resp + used, &len, 0) == ESP_OK) {
+                    used += len;
+                    resp[used] = '\0';
+                }
+            }
+            if (at_final_line(resp) != AT_FINAL_NONE) {
+                return ESP_OK;
+            }
+            for (size_t i = 0; i < n_extra; i++) {
+                if (strstr(resp, extra[i]) != NULL) {
+                    return ESP_OK;
+                }
+            }
+            if (used + 1 >= resp_size) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+        }
+        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS >= timeout_ms) {
+            return ESP_ERR_TIMEOUT;
+        }
+        vTaskDelay(pdMS_TO_TICKS(AT_RESPONSE_POLL_MS));
+    }
+}
+
+static const cpe_at_io_t s_at_io = {
+    .send_line = at_io_send_line,
+    .write = at_io_write,
+    .read_until = at_io_read_until,
+};
 
 static bool at_command(const char *cmd, char *resp, size_t resp_size, uint32_t timeout_ms)
 {
@@ -1074,6 +1158,34 @@ static void at_release_port(bool close)
     at_clear_status();
 }
 
+/* Runs one pending session body on the AT task. Returns true when a body ran. */
+static bool at_session_service(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool active = s_session_active;
+    cpe_at_session_body_t body = s_session_slot.body;
+    void *arg = s_session_slot.arg;
+    xSemaphoreGive(s_lock);
+    if (!active) {
+        return false;
+    }
+
+    esp_err_t r;
+    if (s_port == NULL || at_reset_pending()) {
+        r = ESP_ERR_INVALID_STATE;
+    } else {
+        r = body(&s_at_io, arg);
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_session_slot.result = r;
+    s_session_active = false;
+    s_session_seq++;
+    xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_session_done);
+    return true;
+}
+
 static void at_register_events(void)
 {
     for (int attempt = 1;; attempt++) {
@@ -1160,6 +1272,11 @@ static void at_task(void *arg)
             at_release_port(false);
         }
 
+        if (at_session_service()) {
+            /* A session ran: skip telemetry this pass. */
+            continue;
+        }
+
         if (at_reset_pending()) {
             at_reset_service();
             continue;
@@ -1232,6 +1349,58 @@ esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
     }
 }
 
+esp_err_t cpe_at_session(const cpe_at_session_body_t body, void *arg,
+                         uint32_t timeout_ms)
+{
+    if (body == NULL || s_task == NULL || s_lock == NULL || s_session_done == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_session_active || !s_port_ready || at_reset_pending()) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_session_slot.body = body;
+    s_session_slot.arg = arg;
+    s_session_slot.result = ESP_ERR_TIMEOUT;
+    s_session_active = true;
+    uint32_t seq = s_session_seq;
+    xSemaphoreGive(s_lock);
+
+    xTaskNotifyGive(s_task);
+
+    const TickType_t limit = pdMS_TO_TICKS(timeout_ms);
+    TickType_t start = xTaskGetTickCount();
+    for (;;) {
+        TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= limit) {
+            return ESP_ERR_TIMEOUT;
+        }
+        if (xSemaphoreTake(s_session_done, limit - elapsed) != pdTRUE) {
+            return ESP_ERR_TIMEOUT;
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        uint32_t now = s_session_seq;
+        esp_err_t result = s_session_slot.result;
+        xSemaphoreGive(s_lock);
+        if (now != seq) {
+            return result;
+        }
+    }
+}
+
+bool cpe_at_ready(void)
+{
+    if (s_lock == NULL) {
+        return false;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ready = s_port_ready;
+    xSemaphoreGive(s_lock);
+    return ready;
+}
+
 esp_err_t cpe_at_start(void)
 {
     if (s_started) {
@@ -1247,7 +1416,17 @@ esp_err_t cpe_at_start(void)
         s_lock = NULL;
         return ESP_ERR_NO_MEM;
     }
+    s_session_done = xSemaphoreCreateBinary();
+    if (s_session_done == NULL) {
+        vSemaphoreDelete(s_reset_done);
+        s_reset_done = NULL;
+        vSemaphoreDelete(s_lock);
+        s_lock = NULL;
+        return ESP_ERR_NO_MEM;
+    }
     if (xTaskCreate(at_task, "cpe_at", AT_TASK_STACK, NULL, AT_TASK_PRIO, &s_task) != pdPASS) {
+        vSemaphoreDelete(s_session_done);
+        s_session_done = NULL;
         vSemaphoreDelete(s_reset_done);
         s_reset_done = NULL;
         vSemaphoreDelete(s_lock);
@@ -1268,6 +1447,20 @@ esp_err_t cpe_at_start(void)
 
 esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
 {
+    (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool cpe_at_ready(void)
+{
+    return false;
+}
+
+esp_err_t cpe_at_session(const cpe_at_session_body_t body, void *arg,
+                         uint32_t timeout_ms)
+{
+    (void)body;
+    (void)arg;
     (void)timeout_ms;
     return ESP_ERR_NOT_SUPPORTED;
 }
