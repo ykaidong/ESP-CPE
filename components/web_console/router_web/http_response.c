@@ -141,6 +141,13 @@ static const cpe_web_error_t ERROR_SPECS[] = {
     { "factory_reset_failed",      CPE_WEB_HTTPD_500_STR,  false },
     { "deauth_failed",             CPE_WEB_HTTPD_500_STR,  false },
     { "ota_info_failed",           CPE_WEB_HTTPD_500_STR,  false },
+    { "sms_not_supported",        CPE_WEB_HTTPD_501_STR,  false },
+    { "sms_bad_number",           HTTPD_400,              false },
+    { "sms_text_too_long",        HTTPD_400,              false },
+    { "sms_rate_limited",         CPE_WEB_HTTPD_429_STR,  false },
+    { "sms_send_failed",          CPE_WEB_HTTPD_500_STR,  false },
+    { "sms_send_timeout",         CPE_WEB_HTTPD_500_STR,  false },
+    { "sms_no_prompt",            CPE_WEB_HTTPD_500_STR,  false },
 };
 
 esp_err_t cpe_web_send_error(httpd_req_t *req, const char *code)

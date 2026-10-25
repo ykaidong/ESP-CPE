@@ -66,6 +66,7 @@
 #define CPE_WEB_HTTPD_415_STR           "415 Unsupported Media Type"
 #define CPE_WEB_HTTPD_429_STR           "429 Too Many Requests"
 #define CPE_WEB_HTTPD_500_STR           "500 Internal Server Error"
+#define CPE_WEB_HTTPD_501_STR           "501 Not Implemented"
 
 typedef enum {
     CPE_WEB_BODY_OK = 0,
@@ -161,7 +162,7 @@ typedef struct {
 } cpe_web_route_t;
 
 /* httpd handler slots: one per table entry plus the catch-all static handler. */
-#define CPE_WEB_HTTPD_MAX_URI_HANDLERS  20
+#define CPE_WEB_HTTPD_MAX_URI_HANDLERS  24
 
 /* One slot per registered URI (registration repeats after every listener
  * re-creation, the table is reset beforehand). */
@@ -297,6 +298,9 @@ esp_err_t api_factory_reset_post_handler(httpd_req_t *req);
 esp_err_t api_system_reboot_post_handler(httpd_req_t *req);
 esp_err_t api_ota_status_get_handler(httpd_req_t *req);
 esp_err_t api_ota_upload_post_handler(httpd_req_t *req);
+esp_err_t api_sms_list_get_handler(httpd_req_t *req);
+esp_err_t api_sms_send_post_handler(httpd_req_t *req);
+esp_err_t api_sms_delete_post_handler(httpd_req_t *req);
 esp_err_t wlan_general_get_handler(httpd_req_t *req);
 esp_err_t wlan_general_post_handler(httpd_req_t *req);
 esp_err_t wlan_advance_get_handler(httpd_req_t *req);

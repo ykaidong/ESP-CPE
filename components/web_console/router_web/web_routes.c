@@ -48,6 +48,14 @@ static const cpe_web_route_t s_routes[] = {
     { .uri = "/api/ota/upload", .method = HTTP_POST,
       .handler = api_ota_upload_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
 
+    /* SMS */
+    { .uri = "/api/sms/list", .method = HTTP_GET,
+      .handler = api_sms_list_get_handler, .auth = CPE_WEB_AUTH_SESSION },
+    { .uri = "/api/sms/send", .method = HTTP_POST,
+      .handler = api_sms_send_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
+    { .uri = "/api/sms/delete", .method = HTTP_POST,
+      .handler = api_sms_delete_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
+
     /* SoftAP configuration */
     { .uri = "/wlan_general", .method = HTTP_GET,
       .handler = wlan_general_get_handler, .auth = CPE_WEB_AUTH_SESSION },
