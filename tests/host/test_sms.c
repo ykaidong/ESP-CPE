@@ -129,6 +129,36 @@ static void test_parse_cmgl(void)
     HT_CHECK_STR(list.items[1].body, "Hello");
 }
 
+/* A full-length message: the UCS2 hex for a 160-char body and a numeric sender
+ * are far longer than the decoded text, so this guards against truncating the
+ * raw hex before decoding (which leaked raw hex into the UI). */
+static void test_parse_cmgl_long(void)
+{
+    char body_hex[CPE_SMS_MAX_BODY_HEX];
+    for (int i = 0; i < 160; i++) {
+        body_hex[i * 4 + 0] = '0';
+        body_hex[i * 4 + 1] = '0';
+        body_hex[i * 4 + 2] = '4';
+        body_hex[i * 4 + 3] = '1';
+    }
+    body_hex[640] = '\0';
+
+    char raw[4096];
+    snprintf(raw, sizeof(raw),
+             "AT+CMGL=\"ALL\"\r\n\r\n"
+             "+CMGL: 1,\"REC UNREAD\",\"00310033003800300030003100330038003000300030\",,\"25/10/25,10:00:00+32\"\r\n"
+             "%s\r\n\r\nOK\r\n", body_hex);
+
+    cpe_sms_list_t list;
+    HT_CHECK(cpe_sms_parse_cmgl(raw, &list));
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_STR(list.items[0].from, "13800138000");
+    HT_CHECK_INT(strlen(list.items[0].body), 160);
+    for (int i = 0; i < 160; i++) {
+        HT_CHECK(list.items[0].body[i] == 'A');
+    }
+}
+
 void test_sms(void)
 {
     test_ucs2_encode();
@@ -137,4 +167,5 @@ void test_sms(void)
     test_text_measure();
     test_stat_unread();
     test_parse_cmgl();
+    test_parse_cmgl_long();
 }

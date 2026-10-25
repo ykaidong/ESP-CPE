@@ -38,7 +38,7 @@ static const char *TAG = "cpe_sms";
 #define CPE_SMS_LIST_TIMEOUT_MS    20000
 #define CPE_SMS_SEND_TIMEOUT_MS    60000
 #define CPE_SMS_DELETE_TIMEOUT_MS  10000
-#define CPE_SMS_RAW_CAP            4096
+#define CPE_SMS_RAW_CAP            16384
 #define CPE_SMS_SEND_MIN_INTERVAL_MS 5000
 
 static cpe_sms_state_t s_state = CPE_SMS_UNSUPPORTED;

@@ -13,6 +13,11 @@
 #define CPE_SMS_MAX_TIME     24
 #define CPE_SMS_MAX_BODY     240
 #define CPE_SMS_MAX_STAT     24
+/* The CMGL response stores text fields as UCS2 hex (4 chars per code unit)
+ * before decoding: a 21-char number -> 84 hex chars, a 160-char ASCII body ->
+ * 640 hex chars. These caps bound the raw hex buffers, not the decoded text. */
+#define CPE_SMS_MAX_ADDR_HEX 88
+#define CPE_SMS_MAX_BODY_HEX 648
 
 typedef struct {
     int index;

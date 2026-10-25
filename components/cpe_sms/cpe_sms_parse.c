@@ -138,21 +138,22 @@ static size_t next_field(const char **pp, char *dst, size_t cap)
 static void parse_cmgl_line(const char *line, const char *body, cpe_sms_msg_t *m)
 {
     const char *p = line + 6; /* skip "+CMGL:" */
-    char f[CPE_SMS_MAX_ADDR];
+    char small[CPE_SMS_MAX_ADDR];
+    char num_hex[CPE_SMS_MAX_ADDR_HEX];
 
-    next_field(&p, f, sizeof(f));
-    m->index = (int)strtol(f, NULL, 10);
+    next_field(&p, small, sizeof(small));
+    m->index = (int)strtol(small, NULL, 10);
 
-    next_field(&p, f, sizeof(f));
-    snprintf(m->stat, sizeof(m->stat), "%s", f);
+    next_field(&p, small, sizeof(small));
+    snprintf(m->stat, sizeof(m->stat), "%s", small);
 
-    next_field(&p, f, sizeof(f));
-    cpe_sms_ucs2_decode(f, m->from, sizeof(m->from));
+    next_field(&p, num_hex, sizeof(num_hex));
+    cpe_sms_ucs2_decode(num_hex, m->from, sizeof(m->from));
 
-    next_field(&p, f, sizeof(f)); /* alpha, unused */
+    next_field(&p, small, sizeof(small)); /* alpha, unused */
 
-    next_field(&p, f, sizeof(f));
-    snprintf(m->time, sizeof(m->time), "%s", f);
+    next_field(&p, small, sizeof(small));
+    snprintf(m->time, sizeof(m->time), "%s", small);
 
     if (body != NULL) {
         cpe_sms_ucs2_decode(body, m->body, sizeof(m->body));
@@ -184,7 +185,7 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
             cpe_sms_msg_t *m = &out->items[out->count];
             memset(m, 0, sizeof(*m));
 
-            char body[CPE_SMS_MAX_BODY];
+            char body[CPE_SMS_MAX_BODY_HEX];
             body[0] = '\0';
             if (eol != NULL) {
                 const char *bstart = eol + 2;
