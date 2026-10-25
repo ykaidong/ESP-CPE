@@ -36,6 +36,7 @@ $includes = @(
     "-I$here",
     "-I$root/components/cpe_core/include",
     "-I$root/components/cpe_core/private_include",
+    "-I$root/components/cpe_sms/include",
     "-I$root/components/web_console/include",
     "-I$root/components/web_console/router_web/private_include",
     "-I$cjson"
@@ -50,6 +51,9 @@ $sources = @(
     "$here/test_json_util.c",
     "$here/test_station_names.c",
     "$here/test_config_validate.c",
+    "$here/test_sms.c",
+    "$root/components/cpe_sms/cpe_sms_parse.c",
+    "$root/components/cpe_sms/cpe_sms_ucs2.c",
     "$root/components/web_console/router_web/json_util.c",
     "$root/components/web_console/router_web/station_names.c",
     "$root/components/cpe_core/cpe_config.c",
