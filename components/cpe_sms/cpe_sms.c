@@ -29,9 +29,9 @@
 #include "cpe_sms_parse.h"
 #include "cpe_sms_ucs2.h"
 
-static const char *TAG = "cpe_sms";
-
 #if CONFIG_CPE_SMS_ENABLE && CONFIG_CPE_AT_ENABLE
+
+static const char *TAG = "cpe_sms";
 
 #define CPE_SMS_PROBE_POLL_MS      2000
 #define CPE_SMS_CMD_TIMEOUT_MS     2000
@@ -180,7 +180,7 @@ static esp_err_t sms_send_body(const cpe_at_io_t *io, void *arg)
         return ESP_ERR_INVALID_ARG;
     }
 
-    char addr[128];
+    char addr[160];
     if (ascii) {
         if (io->send_line("AT+CSCS=\"GSM\"") != ESP_OK) return ESP_FAIL;
         (void)io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp));

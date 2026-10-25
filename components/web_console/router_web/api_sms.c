@@ -157,8 +157,7 @@ esp_err_t api_sms_send_post_handler(httpd_req_t *req)
     if (!cpe_sms_number_valid(number)) {
         return cpe_web_send_error(req, "sms_bad_number");
     }
-    bool ascii = false;
-    if (!cpe_sms_text_measure(text, &ascii, NULL)) {
+    if (!cpe_sms_text_measure(text, NULL, NULL)) {
         return cpe_web_send_error(req, "sms_text_too_long");
     }
     if (cpe_sms_state() != CPE_SMS_READY) {
