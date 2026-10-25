@@ -1,0 +1,43 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Yang Kaidong
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#pragma once
+
+#include <stdint.h>
+
+#include "esp_err.h"
+#include "cpe_sms_parse.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    CPE_SMS_UNSUPPORTED = 0,  /* AT port absent, or SMS commands rejected */
+    CPE_SMS_READY,            /* capability probed and usable */
+} cpe_sms_state_t;
+
+/** Start the SMS probe task. Safe to call once; a no-op afterwards. */
+esp_err_t cpe_sms_init(void);
+
+cpe_sms_state_t cpe_sms_state(void);
+
+/** List stored messages into `out` (caller allocates; ~6 KB, use heap).
+ *  Blocks up to `timeout_ms`. */
+esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms);
+
+/** Send one SMS. On failure `*err_str` (when non-NULL) receives a static
+ *  error code string ("sms_bad_number", "sms_text_too_long",
+ *  "sms_rate_limited", "sms_no_prompt", "sms_send_timeout",
+ *  "sms_send_failed"). */
+esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_str,
+                       uint32_t timeout_ms);
+
+/** Delete one message by storage index. */
+esp_err_t cpe_sms_delete(int index, uint32_t timeout_ms);
+
+#ifdef __cplusplus
+}
+#endif
