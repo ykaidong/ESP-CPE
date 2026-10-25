@@ -135,7 +135,7 @@ static size_t next_field(const char **pp, char *dst, size_t cap)
     return n;
 }
 
-static void parse_cmgl_line(const char *line, const char *body, cpe_sms_msg_t *m)
+static void parse_cmgl_header(const char *line, cpe_sms_msg_t *m)
 {
     const char *p = line + 6; /* skip "+CMGL:" */
     char small[CPE_SMS_MAX_ADDR];
@@ -154,10 +154,14 @@ static void parse_cmgl_line(const char *line, const char *body, cpe_sms_msg_t *m
 
     next_field(&p, small, sizeof(small));
     snprintf(m->time, sizeof(m->time), "%s", small);
+}
 
-    if (body != NULL) {
-        cpe_sms_ucs2_decode(body, m->body, sizeof(m->body));
-    }
+/* A line that ends the list, not part of any message body. */
+static bool is_terminal_line(const char *line)
+{
+    return strcmp(line, "OK") == 0 || strcmp(line, "ERROR") == 0 ||
+           strncmp(line, "+CME ERROR:", 11) == 0 ||
+           strncmp(line, "+CMS ERROR:", 11) == 0;
 }
 
 bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
@@ -168,39 +172,52 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
     memset(out, 0, sizeof(*out));
 
     const char *p = raw;
+    cpe_sms_msg_t *cur = NULL;
+    char hex[CPE_SMS_MAX_BODY_HEX];
+    size_t hex_len = 0;
+
     while (p != NULL && *p != '\0') {
         const char *eol = strstr(p, "\r\n");
         size_t len = eol != NULL ? (size_t)(eol - p) : strlen(p);
 
-        char line[512];
+        char line[CPE_SMS_MAX_BODY_HEX];
         size_t cl = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
         memcpy(line, p, cl);
         line[cl] = '\0';
 
         if (strncmp(line, "+CMGL:", 6) == 0) {
+            if (cur != NULL) {
+                cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
+            }
             if (out->count >= CPE_SMS_MAX_MESSAGES) {
                 out->truncated = true;
                 return true;
             }
-            cpe_sms_msg_t *m = &out->items[out->count];
-            memset(m, 0, sizeof(*m));
-
-            char body[CPE_SMS_MAX_BODY_HEX];
-            body[0] = '\0';
-            if (eol != NULL) {
-                const char *bstart = eol + 2;
-                const char *bend = strstr(bstart, "\r\n");
-                if (bend != NULL) {
-                    size_t blen = (size_t)(bend - bstart);
-                    size_t cap = blen < sizeof(body) - 1 ? blen : sizeof(body) - 1;
-                    memcpy(body, bstart, cap);
-                    body[cap] = '\0';
-                }
-            }
-            parse_cmgl_line(line, body, m);
+            cur = &out->items[out->count];
+            memset(cur, 0, sizeof(*cur));
+            parse_cmgl_header(line, cur);
+            hex[0] = '\0';
+            hex_len = 0;
             out->count++;
+        } else if (cur != NULL && is_terminal_line(line)) {
+            cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
+            cur = NULL;
+        } else if (cur != NULL && line[0] != '\0') {
+            /* Body line: accumulate the raw hex. A body with an embedded newline
+             * is emitted across several lines, so keep appending until the next
+             * header or terminal line. */
+            size_t alen = strlen(line);
+            if (hex_len + alen + 1 < sizeof(hex)) {
+                memcpy(hex + hex_len, line, alen + 1);
+                hex_len += alen;
+            }
         }
+
         p = eol != NULL ? eol + 2 : NULL;
+    }
+
+    if (cur != NULL) {
+        cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
     }
     return true;
 }

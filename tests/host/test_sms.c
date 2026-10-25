@@ -159,6 +159,30 @@ static void test_parse_cmgl_long(void)
     }
 }
 
+/* A message whose UCS2 hex body is emitted across several lines (embedded
+ * newline) must be reassembled into one entry, not dropped or split. */
+static void test_parse_cmgl_multiline(void)
+{
+    const char *raw =
+        "AT+CMGL=\"ALL\"\r\n"
+        "\r\n"
+        "+CMGL: 1,\"REC UNREAD\",\"0031\",,\"25/10/25,10:00:00+32\"\r\n"
+        "00410041\r\n"
+        "00420042\r\n"
+        "+CMGL: 2,\"REC READ\",\"0032\",,\"25/10/25,11:00:00+32\"\r\n"
+        "0043\r\n"
+        "\r\n"
+        "OK\r\n";
+
+    cpe_sms_list_t list;
+    HT_CHECK(cpe_sms_parse_cmgl(raw, &list));
+    HT_CHECK_INT(list.count, 2);
+    HT_CHECK_STR(list.items[0].from, "1");
+    HT_CHECK_STR(list.items[0].body, "AABB");
+    HT_CHECK_STR(list.items[1].from, "2");
+    HT_CHECK_STR(list.items[1].body, "C");
+}
+
 void test_sms(void)
 {
     test_ucs2_encode();
@@ -168,4 +192,5 @@ void test_sms(void)
     test_stat_unread();
     test_parse_cmgl();
     test_parse_cmgl_long();
+    test_parse_cmgl_multiline();
 }
