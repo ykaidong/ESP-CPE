@@ -1293,3 +1293,142 @@ body,
         margin-left: 0;
     }
 }
+
+/* ---- SMS page ----------------------------------------------------------- */
+.sms-send-form {
+    margin-bottom: 6px;
+}
+
+.sms-send-form .line-base {
+    align-items: flex-start;
+}
+
+.sms-send-form .title {
+    line-height: 34px;
+}
+
+.sms-text {
+    flex: 1;
+    min-width: 220px;
+    height: auto;
+    min-height: 72px;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.sms-text:focus {
+    outline: none;
+    border-color: #2468a9;
+    box-shadow: 0 0 0 2px rgba(36, 104, 169, 0.12);
+}
+
+.sms-count {
+    font-size: 12px;
+    color: #8c8c8c;
+}
+
+.sms-count.over {
+    color: #cf1322;
+}
+
+.sms-scroll {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.page-content table.sms-table {
+    width: 100%;
+    min-width: 520px;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.page-content table.sms-table th,
+.page-content table.sms-table td {
+    padding: 10px 8px;
+    border-bottom: 1px solid #eeeeee;
+    text-align: left;
+    vertical-align: top;
+}
+
+.page-content table.sms-table th {
+    background-color: #fafafa;
+    font-weight: 600;
+    color: #4a5568;
+}
+
+.sms-table th.sms-from { width: 150px; }
+.sms-table th.sms-time { width: 136px; }
+.sms-table th.sms-op   { width: 68px; }
+
+.sms-table td.sms-from,
+.sms-table td.sms-time {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sms-table td.sms-body {
+    word-break: break-all;
+    white-space: pre-wrap;
+}
+
+.sms-table td.sms-op {
+    text-align: center;
+}
+
+.sms-table tr.sms-unread td {
+    font-weight: 600;
+    background-color: #f7fbff;
+}
+
+.sms-table .sms-del {
+    height: 28px;
+    padding: 0 12px;
+    border: 1px solid #f0c4c4;
+    border-radius: 6px;
+    background-color: #fff8f8;
+    color: #cf1322;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.sms-table .sms-del:hover {
+    background-color: #ffecec;
+}
+
+.sms-empty {
+    padding: 18px 0;
+    text-align: center;
+    color: #8c8c8c;
+    font-size: 13px;
+}
+
+@media (max-width: 720px) {
+    .sms-send-form .line-base {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+    }
+
+    .sms-send-form .title {
+        width: auto;
+        text-align: left;
+        line-height: 1.4;
+    }
+
+    .sms-text {
+        width: 100%;
+        min-width: 0;
+    }
+}
