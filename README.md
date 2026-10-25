@@ -170,6 +170,7 @@ USB Host 使用 ESP32-S3 内置 PHY；若模组需要外部供电，请确保地
 main/                 应用入口：启动编排、OTA 校验、复位键、Kconfig
 components/cpe_wan/   4G WAN 域：USB Host/CDC/ECM 生命周期、NAPT/DNS、链路管理器与恢复策略
 components/cpe_core/  配置存储/校验、随机凭据、会话认证、状态、启动计数
+components/cpe_sms/   可选短信收发（复用 AT 通道，`CPE_SMS_ENABLE` 默认关闭，能力运行期探测）
 components/app_wifi/  SoftAP 生命周期（启动、运行时应用、主动去认证）
 components/web_console/  Web 管理面（会话认证、REST API、SPIFFS 前端）
 components/iot_usbh_cdc/  USB Host CDC 驱动本地 fork（已打补丁）

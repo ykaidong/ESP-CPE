@@ -32,6 +32,7 @@
 #include "cpe_core.h"
 #include "cpe_maintenance.h"
 #include "cpe_ota.h"
+#include "cpe_sms.h"
 #include "app_wifi.h"
 #include "cpe_web.h"
 #include "cpe_wan.h"
@@ -157,6 +158,13 @@ void app_main(void)
     err = cpe_at_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "AT telemetry not started (%s)", esp_err_to_name(err));
+    }
+
+    /* Optional SMS over the same AT port; no-op when disabled, and the 4G data
+     * path never depends on it. */
+    err = cpe_sms_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SMS not started (%s)", esp_err_to_name(err));
     }
 
     /* Long-press the same button to restore factory settings. */
