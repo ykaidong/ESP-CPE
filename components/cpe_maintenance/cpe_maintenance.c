@@ -9,6 +9,8 @@
  * This is NOT the fault recovery path (that stays in cpe_wan/link_manager.c):
  * the actions here are planned, they do not consume the recovery budget and
  * they never run while an OTA upload or an unvalidated OTA image is pending.
+ * A scheduled ECM rebuild is also postponed while the WAN is not online, so it
+ * cannot wipe the budget of a recovery ladder that is already running.
  *
  * The periods are runtime configuration stored in NVS ("cpe_maint"), so the
  * management console can change them; the Kconfig values are only the defaults
@@ -348,7 +350,7 @@ static void maint_check_ecm(maint_ctx_t *ctx, const cpe_status_t *st, int64_t no
     }
 }
 
-static void maint_ecm_rebuild(maint_ctx_t *ctx, int64_t now)
+static void maint_ecm_rebuild(maint_ctx_t *ctx, const cpe_status_t *st, int64_t now)
 {
     if (ota_busy()) {
         ctx->next_ecm_us = now + (int64_t)MAINT_OTA_DEFER_MS * 1000LL;
@@ -358,6 +360,16 @@ static void maint_ecm_rebuild(maint_ctx_t *ctx, int64_t now)
     if (ctx->ecm_started_us != 0) {
         /* The previous rebuild has not settled yet. */
         ctx->next_ecm_us = now + period_us(ctx->cfg.ecm_period_min);
+        return;
+    }
+    /* The link manager owns fault recovery, and its scheduled-rebuild path
+     * zeroes every recovery counter. Rebuilding now would wipe the budget of a
+     * ladder that is already running, so wait for a healthy link: refreshing an
+     * interface that has no WAN anyway buys nothing. */
+    if (st->state != CPE_STATE_ONLINE) {
+        ctx->next_ecm_us = now + period_us(ctx->cfg.ecm_period_min);
+        ESP_LOGI(TAG, "Scheduled ECM rebuild postponed: WAN not online (%s)",
+                 st->state_text);
         return;
     }
 
@@ -454,7 +466,7 @@ static void maintenance_task(void *arg)
         if (ctx.next_reboot_us != 0 && now >= ctx.next_reboot_us) {
             maint_reboot(&ctx, now);
         } else if (ctx.next_ecm_us != 0 && now >= ctx.next_ecm_us) {
-            maint_ecm_rebuild(&ctx, now);
+            maint_ecm_rebuild(&ctx, &st, now);
         }
 
         publish(&ctx);
