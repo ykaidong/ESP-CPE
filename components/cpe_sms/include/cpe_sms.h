@@ -24,19 +24,23 @@ esp_err_t cpe_sms_init(void);
 
 cpe_sms_state_t cpe_sms_state(void);
 
-/** List stored messages into `out` (caller allocates; ~6 KB, use heap).
+/** List stored messages into `out` (caller allocates; ~22 KB, use heap).
+ *  Concatenated parts are merged into one entry when the modem answers
+ *  AT+QCMGR; otherwise each storage record is returned separately.
+ *  `out->storage_used/capacity` report AT+CPMS (-1 when unknown).
  *  Blocks up to `timeout_ms`. */
 esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms);
 
 /** Send one SMS. On failure `*err_str` (when non-NULL) receives a static
  *  error code string ("sms_bad_number", "sms_text_too_long",
- *  "sms_rate_limited", "sms_no_prompt", "sms_send_timeout",
+ *  "sms_rate_limited", "sms_busy", "sms_no_prompt", "sms_send_timeout",
  *  "sms_send_failed"). */
 esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_str,
                        uint32_t timeout_ms);
 
-/** Delete one message by storage index. */
-esp_err_t cpe_sms_delete(int index, uint32_t timeout_ms);
+/** Delete several storage records in one AT session (a concatenated message
+ *  spans one record per segment). */
+esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout_ms);
 
 #ifdef __cplusplus
 }

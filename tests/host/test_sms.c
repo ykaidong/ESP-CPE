@@ -86,6 +86,17 @@ static void test_text_measure(void)
     HT_CHECK(!ascii);
     HT_CHECK_INT(units, 2);
 
+    /* A supplementary-plane code point costs two UCS2 units. */
+    HT_CHECK(cpe_sms_text_measure("\xf0\x9f\x98\x80", &ascii, &units));
+    HT_CHECK(!ascii);
+    HT_CHECK_INT(units, 2);
+
+    /* Malformed UTF-8 is rejected without reading past the terminator: a
+     * truncated sequence and a bad continuation byte. */
+    HT_CHECK(!cpe_sms_text_measure("\xe4\xb8", &ascii, &units));
+    HT_CHECK(!cpe_sms_text_measure("\xf0\x9f\x98", &ascii, &units));
+    HT_CHECK(!cpe_sms_text_measure("\xe4\x41", &ascii, &units));
+
     HT_CHECK(!cpe_sms_text_measure("", &ascii, &units));
     HT_CHECK(!cpe_sms_text_measure(NULL, &ascii, &units));
 }
@@ -183,6 +194,157 @@ static void test_parse_cmgl_multiline(void)
     HT_CHECK_STR(list.items[1].body, "C");
 }
 
+/* The modem's storage has more slots than the list used to hold, so records
+ * past the cap must flag the list as truncated instead of silently vanishing. */
+static void test_parse_cmgl_limit(void)
+{
+    char raw[4096];
+    size_t off = 0;
+
+    off += (size_t)snprintf(raw + off, sizeof(raw) - off, "AT+CMGL=\"ALL\"\r\n\r\n");
+    for (int i = 1; i <= CPE_SMS_MAX_MESSAGES + 1; i++) {
+        off += (size_t)snprintf(raw + off, sizeof(raw) - off,
+                                "+CMGL: %d,\"REC READ\",\"0031\",,\"25/10/25,10:00:00+32\"\r\n"
+                                "0041\r\n",
+                                i);
+    }
+    snprintf(raw + off, sizeof(raw) - off, "\r\nOK\r\n");
+
+    cpe_sms_list_t list;
+    HT_CHECK(cpe_sms_parse_cmgl(raw, &list));
+    HT_CHECK_INT(list.count, CPE_SMS_MAX_MESSAGES);
+    HT_CHECK(list.truncated);
+    HT_CHECK_STR(list.items[0].body, "A");
+    HT_CHECK_INT(list.items[CPE_SMS_MAX_MESSAGES - 1].index, CPE_SMS_MAX_MESSAGES);
+}
+
+static void test_parse_cpms(void)
+{
+    int used = -1;
+    int total = -1;
+
+    HT_CHECK(cpe_sms_parse_cpms("+CPMS: \"ME\",6,23,\"ME\",6,23,\"ME\",6,23\r\nOK\r\n",
+                                &used, &total));
+    HT_CHECK_INT(used, 6);
+    HT_CHECK_INT(total, 23);
+
+    HT_CHECK(cpe_sms_parse_cpms("+CPMS: 3,10,3,10,3,10", &used, &total));
+    HT_CHECK_INT(used, 3);
+    HT_CHECK_INT(total, 10);
+
+    HT_CHECK(!cpe_sms_parse_cpms("OK", &used, &total));
+    HT_CHECK(!cpe_sms_parse_cpms(NULL, &used, &total));
+}
+
+static void test_parse_qcmgr_seg(void)
+{
+    int uid = -1;
+    int seg = -1;
+    int total = -1;
+
+    /* The SCTS field contains a comma; the last three fields are still the
+     * segmentation triple. */
+    HT_CHECK(cpe_sms_parse_qcmgr_seg(
+        "+QCMGR: \"REC READ\",\"002B0038\",,\"26/10/25,16:32:59+32\",50,1,3\r\n", &uid, &seg,
+        &total));
+    HT_CHECK_INT(uid, 50);
+    HT_CHECK_INT(seg, 1);
+    HT_CHECK_INT(total, 3);
+
+    HT_CHECK(!cpe_sms_parse_qcmgr_seg("+CMGL: 1,\"REC READ\"", &uid, &seg, &total));
+    HT_CHECK(!cpe_sms_parse_qcmgr_seg("+QCMGR: \"REC READ\",\"1\",,\"t\",1,4,3\r\n", &uid, &seg,
+                                      &total)); /* seg > total */
+    /* A single message has no segment triple; the SCTS comma must not be
+     * mistaken for one. */
+    HT_CHECK(!cpe_sms_parse_qcmgr_seg(
+        "+QCMGR: \"REC READ\",\"+8613800138000\",,\"26/10/25,16:32:59+32\"\r\nbody\r\nOK\r\n",
+        &uid, &seg, &total));
+
+    /* The real response keeps going with the body line and OK: the tail check
+     * must stop at the end of the header, not at the end of the response. */
+    HT_CHECK(cpe_sms_parse_qcmgr_seg(
+        "+QCMGR: \"REC READ\",\"002B0038\",,\"26/10/25,16:32:59+32\",50,1,3\r\n"
+        "592B5929573080054E0772694E4B900665C5\r\n\r\nOK\r\n",
+        &uid, &seg, &total));
+    HT_CHECK_INT(uid, 50);
+    HT_CHECK_INT(seg, 1);
+    HT_CHECK_INT(total, 3);
+}
+
+static void add_part(cpe_sms_list_t *list, int index, const char *from,
+                     int uid, int seq, int total, const char *body)
+{
+    cpe_sms_msg_t *m = &list->items[list->count++];
+    memset(m, 0, sizeof(*m));
+    m->index = index;
+    m->indexes[0] = index;
+    m->index_count = 1;
+    m->uid = uid;
+    m->part_seq = (uint8_t)seq;
+    m->part_total = (uint8_t)total;
+    snprintf(m->stat, sizeof(m->stat), "%s", "REC READ");
+    snprintf(m->from, sizeof(m->from), "%s", from);
+    snprintf(m->body, sizeof(m->body), "%s", body);
+}
+
+static void test_merge_parts(void)
+{
+    cpe_sms_list_t list;
+
+    /* Out-of-order segments merge by seq, not by storage index. */
+    memset(&list, 0, sizeof(list));
+    add_part(&list, 0, "+8618609412300", 50, 1, 3, "A");
+    add_part(&list, 1, "+8618609412300", 50, 3, 3, "C");
+    add_part(&list, 2, "+8618609412300", 50, 2, 3, "B");
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_INT(list.items[0].index, 0);
+    HT_CHECK_INT(list.items[0].index_count, 3);
+    HT_CHECK_INT(list.items[0].indexes[0], 0);
+    HT_CHECK_INT(list.items[0].indexes[1], 2);
+    HT_CHECK_INT(list.items[0].indexes[2], 1);
+    HT_CHECK_STR(list.items[0].body, "ABC");
+    HT_CHECK(!list.items[0].truncated);
+
+    /* A missing segment still merges what is there and flags the gap. */
+    memset(&list, 0, sizeof(list));
+    add_part(&list, 4, "+861", 51, 1, 3, "A");
+    add_part(&list, 5, "+861", 51, 3, 3, "C");
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_STR(list.items[0].body, "AC");
+    HT_CHECK(list.items[0].truncated);
+
+    /* Different references, senders or totals never merge together. */
+    memset(&list, 0, sizeof(list));
+    add_part(&list, 0, "+861", 60, 1, 2, "A");
+    add_part(&list, 1, "+862", 60, 2, 2, "B");
+    add_part(&list, 2, "+861", 61, 2, 2, "C");
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 3);
+
+    /* Unread on any part marks the merged message unread. */
+    memset(&list, 0, sizeof(list));
+    add_part(&list, 0, "+861", 70, 1, 2, "A");
+    add_part(&list, 1, "+861", 70, 2, 2, "B");
+    snprintf(list.items[1].stat, sizeof(list.items[1].stat), "REC UNREAD");
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK(cpe_sms_stat_unread(list.items[0].stat));
+
+    /* Concatenation stops on a UTF-8 boundary and flags truncation. */
+    memset(&list, 0, sizeof(list));
+    char big[500];
+    memset(big, 'x', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    add_part(&list, 0, "+861", 80, 1, 2, big);
+    add_part(&list, 1, "+861", 80, 2, 2, big);
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_INT(strlen(list.items[0].body), CPE_SMS_MAX_BODY - 1);
+    HT_CHECK(list.items[0].truncated);
+}
+
 void test_sms(void)
 {
     test_ucs2_encode();
@@ -193,4 +355,8 @@ void test_sms(void)
     test_parse_cmgl();
     test_parse_cmgl_long();
     test_parse_cmgl_multiline();
+    test_parse_cmgl_limit();
+    test_parse_cpms();
+    test_parse_qcmgr_seg();
+    test_merge_parts();
 }

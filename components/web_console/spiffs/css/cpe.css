@@ -1295,45 +1295,99 @@ body,
 }
 
 /* ---- SMS page ----------------------------------------------------------- */
+/* The send form is its own inset card: labels above the fields, a count plus
+ * one primary action on the bottom bar. */
 .sms-send-form {
-    margin-bottom: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 2px 0 6px;
+    padding: 16px 18px;
+    border: 1px solid #e8eef5;
+    border-radius: 8px;
+    background-color: #fbfcfe;
 }
 
-.sms-send-form .line-base {
-    align-items: flex-start;
+.sms-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
 }
 
-.sms-send-form .title {
-    line-height: 34px;
+.sms-label {
+    font-size: 13px;
+    color: #4a5568;
+}
+
+.sms-input,
+.sms-text {
+    width: 100%;
+    max-width: 480px;
+    box-sizing: border-box;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #1f2d3d;
+    font-family: inherit;
+    font-size: 14px;
+}
+
+.sms-input {
+    height: 38px;
+    padding: 0 12px;
 }
 
 .sms-text {
-    flex: 1;
-    min-width: 220px;
-    height: auto;
-    min-height: 72px;
-    padding: 8px 10px;
-    box-sizing: border-box;
-    border: 1px solid #d9d9d9;
-    border-radius: 4px;
-    font-family: inherit;
-    font-size: 14px;
-    line-height: 1.5;
+    max-width: 720px;
+    min-height: 96px;
+    padding: 10px 12px;
+    line-height: 1.6;
     resize: vertical;
 }
 
+.sms-input:focus,
 .sms-text:focus {
     outline: none;
     border-color: #2468a9;
-    box-shadow: 0 0 0 2px rgba(36, 104, 169, 0.12);
+    box-shadow: 0 0 0 3px rgba(36, 104, 169, 0.12);
+}
+
+.sms-form-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.sms-form-foot .sms-send-btn {
+    width: 120px;
+    height: 38px;
+    border-radius: 6px;
 }
 
 .sms-count {
     font-size: 12px;
     color: #8c8c8c;
+    font-variant-numeric: tabular-nums;
 }
 
 .sms-count.over {
+    color: #cf1322;
+    font-weight: 600;
+}
+
+.sms-storage {
+    min-height: 18px;
+    margin: -4px 0 8px;
+    font-size: 12px;
+    color: #8c8c8c;
+}
+
+.sms-storage.warn {
+    color: #d46b08;
+}
+
+.sms-storage.over {
     color: #cf1322;
 }
 
@@ -1353,21 +1407,29 @@ body,
 
 .page-content table.sms-table th,
 .page-content table.sms-table td {
-    padding: 10px 8px;
-    border-bottom: 1px solid #eeeeee;
+    padding: 12px 10px;
+    border-bottom: 1px solid #eef2f8;
     text-align: left;
     vertical-align: top;
 }
 
 .page-content table.sms-table th {
-    background-color: #fafafa;
+    background-color: #f7f9fc;
     font-weight: 600;
     color: #4a5568;
+    font-size: 13px;
+    white-space: nowrap;
 }
 
-.sms-table th.sms-from { width: 150px; }
-.sms-table th.sms-time { width: 136px; }
-.sms-table th.sms-op   { width: 68px; }
+@media (min-width: 721px) {
+    .page-content table.sms-table tbody tr:hover td {
+        background-color: #fafcff;
+    }
+}
+
+.sms-table th.sms-from { width: 170px; }
+.sms-table th.sms-time { width: 140px; }
+.sms-table th.sms-op   { width: 84px; }
 
 .sms-table td.sms-from,
 .sms-table td.sms-time {
@@ -1376,9 +1438,34 @@ body,
     text-overflow: ellipsis;
 }
 
+/* Unread marker: the dot is always laid out, only revealed on unread rows, so
+ * the sender column does not shift when a message is read. */
+.sms-table td.sms-from::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background-color: #2468a9;
+    vertical-align: 1px;
+    opacity: 0;
+}
+
+.sms-table tr.sms-unread td.sms-from::before {
+    opacity: 1;
+}
+
 .sms-table td.sms-body {
-    word-break: break-all;
+    word-break: break-word;
     white-space: pre-wrap;
+    line-height: 1.6;
+    color: #2d3748;
+}
+
+.sms-table td.sms-time {
+    color: #8c8c8c;
+    font-size: 13px;
 }
 
 .sms-table td.sms-op {
@@ -1391,6 +1478,7 @@ body,
 }
 
 .sms-table .sms-del {
+    box-sizing: border-box;
     height: 28px;
     padding: 0 12px;
     border: 1px solid #f0c4c4;
@@ -1414,21 +1502,132 @@ body,
     font-size: 13px;
 }
 
+/* ---- SMS page on phones: full-width form, one card per message --------- */
 @media (max-width: 720px) {
-    .sms-send-form .line-base {
+    .sms-send-form {
+        padding: 14px;
+    }
+
+    .sms-input {
+        max-width: none;
+    }
+
+    /* 16px stops iOS Safari from zooming into the focused field. */
+    .sms-input,
+    .sms-text {
+        font-size: 16px;
+    }
+
+    .sms-form-foot {
         flex-direction: column;
         align-items: stretch;
-        gap: 6px;
+        gap: 10px;
     }
 
-    .sms-send-form .title {
-        width: auto;
-        text-align: left;
-        line-height: 1.4;
-    }
-
-    .sms-text {
+    .sms-form-foot .sms-send-btn {
+        order: 1;
         width: 100%;
+        height: 44px;
+        font-size: 15px;
+    }
+
+    .sms-count {
+        order: 2;
+        text-align: right;
+    }
+
+    .sms-scroll {
+        overflow-x: visible;
+    }
+
+    .page-content table.sms-table {
+        display: block;
         min-width: 0;
+        table-layout: auto;
+        border-collapse: separate;
+    }
+
+    .sms-table thead {
+        display: none;
+    }
+
+    .sms-table tbody {
+        display: block;
+    }
+
+    /* The modem timestamp is long ("25/10/25,10:00:00+32"), so it gets its own
+     * line instead of competing with the sender for width. */
+    .page-content table.sms-table tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas:
+            "from"
+            "time"
+            "body"
+            "op";
+        gap: 4px;
+        margin: 0 0 10px;
+        padding: 12px 14px;
+        border: 1px solid #e8eef5;
+        border-radius: 10px;
+        background-color: #ffffff;
+    }
+
+    .page-content table.sms-table tr td {
+        height: auto !important;
+        padding: 0;
+        border: 0;
+        background-color: transparent;
+        text-align: left;
+    }
+
+    .sms-table tr td.sms-from {
+        grid-area: from;
+        font-size: 15px;
+        line-height: 20px;
+        color: #1f2d3d;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .sms-table tr td.sms-time {
+        grid-area: time;
+        font-weight: 400;
+        font-size: 12px;
+        line-height: 18px;
+        color: #8c8c8c;
+        text-align: left;
+        white-space: nowrap;
+    }
+
+    .sms-table tr td.sms-body {
+        grid-area: body;
+        padding: 10px 0;
+        border-top: 1px dashed #eef2f8;
+        border-bottom: 1px dashed #eef2f8;
+        font-weight: 400;
+        font-size: 14px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .sms-table tr td.sms-op {
+        grid-area: op;
+        display: flex;
+    }
+
+    .sms-table .sms-del {
+        width: 100%;
+        height: 38px;
+        border-radius: 8px;
+        font-size: 13px;
+    }
+
+    /* The unread tint belongs to the card, not to each cell. */
+    .page-content table.sms-table tr.sms-unread {
+        border-color: #cfe3f7;
+        background-color: #f7fbff;
     }
 }

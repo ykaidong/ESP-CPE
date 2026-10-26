@@ -282,6 +282,7 @@ var CPE = (function () {
         sms_send_failed: '短信发送失败，请检查 SIM 卡与短信中心',
         sms_send_timeout: '短信发送超时，请重试',
         sms_no_prompt: '模组未就绪，无法发送短信',
+        sms_busy: '模组正忙，请稍后重试',
         network_error: '网络连接失败，设备可能正在重启',
         bad_response: '设备响应异常'
     };

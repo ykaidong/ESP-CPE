@@ -3,9 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * SMS endpoints. Listing and sending can take seconds (CMGL up to 20 s, CMGS
- * up to 60 s), so the AT work runs on a helper task with an async copy of the
- * request - the single HTTP server task must never be blocked.
+ * SMS endpoints. Listing (CMGL plus one QCMGR per record) and sending can take
+ * seconds (CMGL up to 20 s, CMGS up to 60 s), so the AT work runs on a helper
+ * task with an async copy of the request - the single HTTP server task must
+ * never be blocked.
  */
 
 #include <stdio.h>
@@ -30,7 +31,8 @@ typedef struct {
 
 typedef struct {
     httpd_req_t *req;
-    int index;
+    int indexes[CPE_SMS_MAX_PARTS];
+    size_t count;
 } sms_delete_job_t;
 
 /* --------------------------------- list ---------------------------------- */
@@ -65,14 +67,29 @@ static void sms_list_task(void *arg)
 
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 512);
-    cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"supported\":true,\"messages\":[");
+    cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"storage\":{");
+    if (list->storage_capacity > 0) {
+        bool near_full = (int64_t)list->storage_used * 10 >=
+                         (int64_t)list->storage_capacity * 9;
+        cpe_web_sbuf_appendf(&sb,
+                             "\"used\":%d,\"capacity\":%d,\"near_full\":%s},\"messages\":[",
+                             list->storage_used, list->storage_capacity,
+                             near_full ? "true" : "false");
+    } else {
+        cpe_web_sbuf_append(&sb, "\"used\":-1,\"capacity\":-1,\"near_full\":false},\"messages\":[");
+    }
     for (size_t i = 0; i < list->count; i++) {
         cpe_sms_msg_t *m = &list->items[i];
         if (i > 0) {
             cpe_web_sbuf_append(&sb, ",");
         }
-        cpe_web_sbuf_appendf(&sb, "{\"index\":%d,\"unread\":%s,\"from\":",
-                             m->index, cpe_sms_stat_unread(m->stat) ? "true" : "false");
+        cpe_web_sbuf_appendf(&sb, "{\"index\":%d,\"unread\":%s,\"truncated\":%s,\"indexes\":[",
+                             m->index, cpe_sms_stat_unread(m->stat) ? "true" : "false",
+                             m->truncated ? "true" : "false");
+        for (uint8_t k = 0; k < m->index_count; k++) {
+            cpe_web_sbuf_appendf(&sb, "%s%d", k > 0 ? "," : "", m->indexes[k]);
+        }
+        cpe_web_sbuf_append(&sb, "],\"from\":");
         cpe_web_sbuf_append_json_string(&sb, m->from);
         cpe_web_sbuf_append(&sb, ",\"time\":");
         cpe_web_sbuf_append_json_string(&sb, m->time);
@@ -80,7 +97,7 @@ static void sms_list_task(void *arg)
         cpe_web_sbuf_append_json_string(&sb, m->body);
         cpe_web_sbuf_append(&sb, "}");
     }
-    cpe_web_sbuf_appendf(&sb, "],\"truncated\":%s}", list->truncated ? "true" : "false");
+    cpe_web_sbuf_append(&sb, "]}");
     free(list);
 
     cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
@@ -192,7 +209,7 @@ esp_err_t api_sms_send_post_handler(httpd_req_t *req)
 static void sms_delete_task(void *arg)
 {
     sms_delete_job_t *job = (sms_delete_job_t *)arg;
-    esp_err_t err = cpe_sms_delete(job->index, SMS_DELETE_TIMEOUT_MS);
+    esp_err_t err = cpe_sms_delete_many(job->indexes, job->count, SMS_DELETE_TIMEOUT_MS);
 
     if (err == ESP_OK) {
         cpe_web_sbuf_t sb;
@@ -221,22 +238,37 @@ esp_err_t api_sms_delete_post_handler(httpd_req_t *req)
         return err;
     }
 
-    int index = -1;
-    bool present = false;
-    err = cpe_web_json_get_int_flexible(ctx.parser, "index", &index, &present);
+    sms_delete_job_t *job = calloc(1, sizeof(*job));
+    if (job == NULL) {
+        cpe_web_post_end(&ctx);
+        return cpe_web_send_error(req, "out_of_memory");
+    }
+
+    const cJSON *indexes = cJSON_GetObjectItemCaseSensitive(ctx.parser, "indexes");
+    err = ESP_ERR_INVALID_ARG;
+    if (cJSON_IsArray(indexes)) {
+        const cJSON *it = NULL;
+        cJSON_ArrayForEach(it, indexes) {
+            if (!cJSON_IsNumber(it) || it->valueint < 0 ||
+                job->count >= CPE_SMS_MAX_PARTS) {
+                job->count = 0;
+                break;
+            }
+            job->indexes[job->count++] = it->valueint;
+        }
+        if (job->count > 0) {
+            err = ESP_OK;
+        }
+    }
     cpe_web_post_end(&ctx);
-    if (err != ESP_OK || !present || index < 0) {
+    if (err != ESP_OK) {
+        free(job);
         return cpe_web_send_error(req, "invalid_request_body");
     }
     if (cpe_sms_state() != CPE_SMS_READY) {
+        free(job);
         return cpe_web_send_error(req, "sms_not_supported");
     }
-
-    sms_delete_job_t *job = calloc(1, sizeof(*job));
-    if (job == NULL) {
-        return cpe_web_send_error(req, "out_of_memory");
-    }
-    job->index = index;
 
     httpd_req_t *async_req = NULL;
     err = httpd_req_async_handler_begin(req, &async_req);

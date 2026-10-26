@@ -23,23 +23,24 @@
             <div class="page-content">
                 <div class="page-title">发送短信</div>
                 <div class="sms-send-form">
-                    <div class="line-base">
-                        <span class="title">号码:</span>
-                        <input class="content" id="sms-number" type="tel" maxlength="21"
+                    <div class="sms-field">
+                        <label class="sms-label" for="sms-number">接收号码</label>
+                        <input class="sms-input" id="sms-number" type="tel" maxlength="21"
                                placeholder="可含 +，3~20 位数字" autocomplete="off">
                     </div>
-                    <div class="line-base">
-                        <span class="title">内容:</span>
-                        <textarea class="content sms-text" id="sms-text" maxlength="160" rows="3"
+                    <div class="sms-field">
+                        <label class="sms-label" for="sms-text">短信内容</label>
+                        <textarea class="sms-text" id="sms-text" maxlength="160" rows="4"
                                   placeholder="ASCII 最多 160 字符，中文最多 70 字"></textarea>
                     </div>
-                    <div class="line-base-btn">
-                        <button class="save-btn" type="button" id="sms-send-btn">发送</button>
-                        <span class="sms-count" id="sms-count"></span>
+                    <div class="sms-form-foot">
+                        <span class="sms-count" id="sms-count">0 / 160</span>
+                        <button class="save-btn sms-send-btn" type="button" id="sms-send-btn">发送短信</button>
                     </div>
                 </div>
 
                 <div class="page-title">收件箱</div>
+                <div class="sms-storage" id="sms-storage"></div>
                 <div class="sms-scroll">
                     <table class="sms-table">
                         <thead>

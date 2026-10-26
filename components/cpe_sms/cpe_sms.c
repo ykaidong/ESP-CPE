@@ -38,11 +38,25 @@ static const char *TAG = "cpe_sms";
 #define CPE_SMS_LIST_TIMEOUT_MS    20000
 #define CPE_SMS_SEND_TIMEOUT_MS    60000
 #define CPE_SMS_DELETE_TIMEOUT_MS  10000
-#define CPE_SMS_RAW_CAP            16384
+/* Worst case is a full 23-slot inbox of 160-char ASCII messages: each body is
+ * 640 UCS2 hex chars on one line plus a ~60-char header. */
+#define CPE_SMS_RAW_CAP            20480
+#define CPE_SMS_CMD_RESP           128
+/* A QCMGR answer repeats the whole record body as UCS2 hex. It is not only the
+ * 268 chars of one concatenated segment: a single 160-unit message is 640
+ * chars, plus the header and the final OK. Too small a buffer makes read_until
+ * report ESP_ERR_INVALID_SIZE, which used to disable merging for the whole
+ * inbox. */
+#define CPE_SMS_QCMGR_RESP         1024
+_Static_assert(CPE_SMS_QCMGR_RESP >= CPE_SMS_MAX_BODY_HEX + 256,
+               "QCMGR response buffer must hold a full message body plus header");
 #define CPE_SMS_SEND_MIN_INTERVAL_MS 5000
+#define CPE_SMS_MAINT_INTERVAL_MS  60000
+#define CPE_SMS_REPROBE_MS         300000
 
 static cpe_sms_state_t s_state = CPE_SMS_UNSUPPORTED;
 static SemaphoreHandle_t s_lock;
+static SemaphoreHandle_t s_op_lock;
 static int64_t s_last_send_us;
 static TaskHandle_t s_task;
 
@@ -77,6 +91,29 @@ static void sms_mark_sent(void)
     xSemaphoreGive(s_lock);
 }
 
+/* cpe_at_session refuses a second body rather than queuing it, so serialize
+ * the SMS operations here: a list poll that lands during a send then waits for
+ * it instead of surfacing a spurious failure. The wait comes out of the
+ * caller's budget, which the session call below also uses. */
+static bool sms_op_begin(uint32_t timeout_ms)
+{
+    return xSemaphoreTake(s_op_lock, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+static void sms_op_end(void)
+{
+    xSemaphoreGive(s_op_lock);
+}
+
+static uint32_t sms_remaining_ms(int64_t start_us, uint32_t budget_ms)
+{
+    int64_t spent_ms = (esp_timer_get_time() - start_us) / 1000;
+    if (spent_ms < 0 || spent_ms >= (int64_t)budget_ms) {
+        return 0;
+    }
+    return budget_ms - (uint32_t)spent_ms;
+}
+
 static void sms_restore_gsm(const cpe_at_io_t *io)
 {
     char resp[64];
@@ -89,34 +126,122 @@ static void sms_restore_gsm(const cpe_at_io_t *io)
 static esp_err_t sms_probe_body(const cpe_at_io_t *io, void *arg)
 {
     (void)arg;
-    char resp[64];
+    char resp[CPE_SMS_CMD_RESP];
     if (io->send_line("AT+CMGF=1") != ESP_OK) {
         return ESP_FAIL;
     }
-    if (io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK) {
+    if (io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK ||
+        strstr(resp, "OK") == NULL) {
         return ESP_FAIL;
     }
-    return strstr(resp, "OK") != NULL ? ESP_OK : ESP_FAIL;
+
+    /* Pin all three storage areas (read/list, write/send, receive) to the
+     * modem's own memory so reception never silently depends on the SIM. */
+    if (io->send_line("AT+CPMS=\"ME\",\"ME\",\"ME\"") != ESP_OK ||
+        io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK ||
+        strstr(resp, "OK") == NULL) {
+        ESP_LOGW(TAG, "AT+CPMS ME rejected; keeping modem default storage");
+    }
+    return ESP_OK;
 }
 
-static void sms_probe(void)
+/* Returns false when another SMS operation owns the AT session; the caller
+ * retries later. */
+static bool sms_probe(void)
 {
+    if (!sms_op_begin(0)) {
+        return false;
+    }
     esp_err_t r = cpe_at_session(sms_probe_body, NULL, CPE_SMS_CMD_TIMEOUT_MS + 1000);
+    sms_op_end();
     sms_set_state(r == ESP_OK ? CPE_SMS_READY : CPE_SMS_UNSUPPORTED);
     ESP_LOGI(TAG, "SMS capability %s", r == ESP_OK ? "ready" : "unsupported");
+    return true;
 }
 
 /* -------------------------------- list ---------------------------------- */
 
 typedef struct {
+    cpe_sms_list_t *out;
     char *raw;
     size_t cap;
 } sms_list_ctx_t;
 
-static esp_err_t sms_list_body(const cpe_at_io_t *io, void *arg)
+static bool sms_cpms_query(const cpe_at_io_t *io, int *used, int *total)
 {
-    sms_list_ctx_t *ctx = arg;
-    char resp[64];
+    char resp[CPE_SMS_CMD_RESP];
+    if (io->send_line("AT+CPMS?") != ESP_OK) {
+        return false;
+    }
+    if (io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK) {
+        return false;
+    }
+    return cpe_sms_parse_cpms(resp, used, total);
+}
+
+/* Ask the Quectel-private QCMGR for each record's <uid>,<seg>,<total>. The
+ * body it also returns duplicates the CMGL one, so only the header is used.
+ * A non-concatenated message omits the triple, so a missing +QCMGR header
+ * (not a missing triple) is what marks the command unsupported; in that case
+ * the plain multi-record view is restored, since a hidden message is worse
+ * than a split one. */
+static void sms_query_parts(const cpe_at_io_t *io, cpe_sms_list_t *list)
+{
+    /* Kept on the heap: the AT task only has a 4 KB stack, and the reply has to
+     * carry the full body so nothing is left in the RX buffer for the next
+     * command. */
+    char *resp = malloc(CPE_SMS_QCMGR_RESP);
+    if (resp == NULL) {
+        ESP_LOGW(TAG, "No memory for QCMGR; showing raw records");
+        return;
+    }
+    bool supported = true;
+
+    for (size_t i = 0; i < list->count; i++) {
+        cpe_sms_msg_t *m = &list->items[i];
+        char cmd[24];
+        snprintf(cmd, sizeof(cmd), "AT+QCMGR=%d", m->index);
+        int uid = 0;
+        int seg = 0;
+        int total = 0;
+        esp_err_t r = io->send_line(cmd);
+        if (r == ESP_OK) {
+            r = io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp,
+                               CPE_SMS_QCMGR_RESP);
+        }
+        if (r != ESP_OK || strstr(resp, "+QCMGR:") == NULL) {
+            ESP_LOGW(TAG, "AT+QCMGR=%d unusable (%s); showing raw records", m->index,
+                     r != ESP_OK ? esp_err_to_name(r) : "no +QCMGR header");
+            supported = false;
+            break;
+        }
+        if (cpe_sms_parse_qcmgr_seg(resp, &uid, &seg, &total)) {
+            m->uid = uid;
+            m->part_seq = (uint8_t)seg;
+            m->part_total = (uint8_t)total;
+        }
+        /* A non-concatenated message omits the triple; the defaults from the
+         * CMGL parse (part_total = 1) already describe it. */
+    }
+    free(resp);
+
+    if (!supported) {
+        for (size_t i = 0; i < list->count; i++) {
+            cpe_sms_msg_t *m = &list->items[i];
+            m->uid = 0;
+            m->part_seq = 0;
+            m->part_total = 1;
+            m->index_count = 1;
+            m->indexes[0] = m->index;
+        }
+        return;
+    }
+    cpe_sms_merge_parts(list);
+}
+
+static esp_err_t sms_fetch(const cpe_at_io_t *io, sms_list_ctx_t *ctx)
+{
+    char resp[CPE_SMS_CMD_RESP];
 
     if (io->send_line("AT+CSCS=\"UCS2\"") != ESP_OK) {
         return ESP_FAIL;
@@ -136,8 +261,30 @@ static esp_err_t sms_list_body(const cpe_at_io_t *io, void *arg)
         }
         r = io->read_until(NULL, 0, CPE_SMS_LIST_TIMEOUT_MS, ctx->raw, ctx->cap);
     }
+    if (r != ESP_OK) {
+        sms_restore_gsm(io);
+        return r;
+    }
+    /* An ERROR final line parses as an empty list; surface it instead of
+     * showing the inbox as empty. */
+    if (strstr(ctx->raw, "ERROR") != NULL) {
+        sms_restore_gsm(io);
+        return ESP_FAIL;
+    }
+    if (!cpe_sms_parse_cmgl(ctx->raw, ctx->out)) {
+        sms_restore_gsm(io);
+        return ESP_FAIL;
+    }
+
+    sms_query_parts(io, ctx->out);
     sms_restore_gsm(io);
-    return r;
+    (void)sms_cpms_query(io, &ctx->out->storage_used, &ctx->out->storage_capacity);
+    return ESP_OK;
+}
+
+static esp_err_t sms_list_body(const cpe_at_io_t *io, void *arg)
+{
+    return sms_fetch(io, arg);
 }
 
 esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms)
@@ -148,16 +295,20 @@ esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms)
     if (sms_get_state() != CPE_SMS_READY) {
         return ESP_ERR_NOT_SUPPORTED;
     }
+    int64_t start_us = esp_timer_get_time();
+    if (!sms_op_begin(timeout_ms)) {
+        return ESP_ERR_TIMEOUT;
+    }
     char *raw = malloc(CPE_SMS_RAW_CAP);
     if (raw == NULL) {
+        sms_op_end();
         return ESP_ERR_NO_MEM;
     }
-    sms_list_ctx_t ctx = { .raw = raw, .cap = CPE_SMS_RAW_CAP };
-    esp_err_t err = cpe_at_session(sms_list_body, &ctx, timeout_ms);
-    if (err == ESP_OK && !cpe_sms_parse_cmgl(raw, out)) {
-        err = ESP_FAIL;
-    }
+    sms_list_ctx_t ctx = { .out = out, .raw = raw, .cap = CPE_SMS_RAW_CAP };
+    esp_err_t err = cpe_at_session(sms_list_body, &ctx,
+                                   sms_remaining_ms(start_us, timeout_ms));
     free(raw);
+    sms_op_end();
     return err;
 }
 
@@ -169,10 +320,29 @@ typedef struct {
     const char **err_str;
 } sms_send_ctx_t;
 
+/* One short control command; it succeeds only on a plain OK. */
+static bool sms_cmd(const cpe_at_io_t *io, const char *cmd)
+{
+    char resp[CPE_SMS_CMD_RESP];
+    if (io->send_line(cmd) != ESP_OK ||
+        io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK) {
+        return false;
+    }
+    return strstr(resp, "OK") != NULL;
+}
+
+/* Leave text-entry mode and put the character set back for telemetry. */
+static void sms_abort_send(const cpe_at_io_t *io)
+{
+    const uint8_t esc = 0x1B;
+    (void)io->write(&esc, 1);
+    sms_restore_gsm(io);
+}
+
 static esp_err_t sms_send_body(const cpe_at_io_t *io, void *arg)
 {
     sms_send_ctx_t *ctx = arg;
-    char resp[128];
+    char resp[CPE_SMS_CMD_RESP];
 
     bool ascii = false;
     if (!cpe_sms_text_measure(ctx->text, &ascii, NULL)) {
@@ -180,24 +350,24 @@ static esp_err_t sms_send_body(const cpe_at_io_t *io, void *arg)
         return ESP_ERR_INVALID_ARG;
     }
 
-    char addr[160];
+    char num_hex[CPE_SMS_MAX_ADDR_HEX];
+    const char *addr = ctx->number;
     if (ascii) {
-        if (io->send_line("AT+CSCS=\"GSM\"") != ESP_OK) return ESP_FAIL;
-        (void)io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp));
-        if (io->send_line("AT+CSMP=17,167,0,0") != ESP_OK) return ESP_FAIL;
-        (void)io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp));
-        snprintf(addr, sizeof(addr), "%s", ctx->number);
+        if (!sms_cmd(io, "AT+CSCS=\"GSM\"") || !sms_cmd(io, "AT+CSMP=17,167,0,0")) {
+            sms_restore_gsm(io);
+            return ESP_FAIL;
+        }
     } else {
-        if (io->send_line("AT+CSCS=\"UCS2\"") != ESP_OK) return ESP_FAIL;
-        (void)io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp));
-        if (io->send_line("AT+CSMP=17,167,0,8") != ESP_OK) return ESP_FAIL;
-        (void)io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp));
-        char num_hex[160];
+        if (!sms_cmd(io, "AT+CSCS=\"UCS2\"") || !sms_cmd(io, "AT+CSMP=17,167,0,8")) {
+            sms_restore_gsm(io);
+            return ESP_FAIL;
+        }
         if (cpe_sms_ucs2_encode(ctx->number, num_hex, sizeof(num_hex)) == 0) {
+            sms_restore_gsm(io);
             if (ctx->err_str) *ctx->err_str = "sms_bad_number";
             return ESP_ERR_INVALID_ARG;
         }
-        snprintf(addr, sizeof(addr), "%s", num_hex);
+        addr = num_hex;
     }
 
     char cmd[192];
@@ -207,9 +377,7 @@ static esp_err_t sms_send_body(const cpe_at_io_t *io, void *arg)
 
     static const char *prompt[] = { ">" };
     if (io->read_until(prompt, 1, 8000, resp, sizeof(resp)) != ESP_OK) {
-        uint8_t esc = 0x1B;
-        (void)io->write(&esc, 1);
-        sms_restore_gsm(io);
+        sms_abort_send(io);
         if (ctx->err_str) *ctx->err_str = "sms_no_prompt";
         return ESP_ERR_TIMEOUT;
     }
@@ -223,9 +391,7 @@ static esp_err_t sms_send_body(const cpe_at_io_t *io, void *arg)
     } else {
         size_t hl = cpe_sms_ucs2_encode(ctx->text, body_hex, sizeof(body_hex));
         if (hl == 0) {
-            uint8_t esc = 0x1B;
-            (void)io->write(&esc, 1);
-            sms_restore_gsm(io);
+            sms_abort_send(io);
             if (ctx->err_str) *ctx->err_str = "sms_bad_text";
             return ESP_ERR_INVALID_ARG;
         }
@@ -234,14 +400,12 @@ static esp_err_t sms_send_body(const cpe_at_io_t *io, void *arg)
     }
 
     if (io->write(payload, payload_len) != ESP_OK) {
-        uint8_t esc = 0x1B;
-        (void)io->write(&esc, 1);
-        sms_restore_gsm(io);
+        sms_abort_send(io);
         return ESP_FAIL;
     }
     uint8_t ctrl_z = 0x1A;
     if (io->write(&ctrl_z, 1) != ESP_OK) {
-        sms_restore_gsm(io);
+        sms_abort_send(io);
         return ESP_FAIL;
     }
 
@@ -275,8 +439,15 @@ esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_st
         if (err_str) *err_str = "sms_rate_limited";
         return ESP_ERR_INVALID_STATE;
     }
+    int64_t start_us = esp_timer_get_time();
+    if (!sms_op_begin(timeout_ms)) {
+        if (err_str) *err_str = "sms_busy";
+        return ESP_ERR_TIMEOUT;
+    }
     sms_send_ctx_t ctx = { .number = number, .text = text, .err_str = err_str };
-    esp_err_t err = cpe_at_session(sms_send_body, &ctx, timeout_ms);
+    esp_err_t err = cpe_at_session(sms_send_body, &ctx,
+                                   sms_remaining_ms(start_us, timeout_ms));
+    sms_op_end();
     if (err == ESP_OK) {
         sms_mark_sent();
     }
@@ -286,35 +457,141 @@ esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_st
 /* ------------------------------- delete --------------------------------- */
 
 typedef struct {
-    int index;
+    const int *indexes;
+    size_t count;
 } sms_del_ctx_t;
 
 static esp_err_t sms_del_body(const cpe_at_io_t *io, void *arg)
 {
     sms_del_ctx_t *ctx = arg;
-    char cmd[32];
-    snprintf(cmd, sizeof(cmd), "AT+CMGD=%d", ctx->index);
-    if (io->send_line(cmd) != ESP_OK) {
-        return ESP_FAIL;
-    }
     char resp[64];
-    esp_err_t r = io->read_until(NULL, 0, CPE_SMS_DELETE_TIMEOUT_MS, resp, sizeof(resp));
-    if (r != ESP_OK) {
-        return r;
+    for (size_t i = 0; i < ctx->count; i++) {
+        char cmd[32];
+        snprintf(cmd, sizeof(cmd), "AT+CMGD=%d", ctx->indexes[i]);
+        if (io->send_line(cmd) != ESP_OK) {
+            return ESP_FAIL;
+        }
+        esp_err_t r = io->read_until(NULL, 0, CPE_SMS_DELETE_TIMEOUT_MS, resp, sizeof(resp));
+        if (r != ESP_OK) {
+            return r;
+        }
+        if (strstr(resp, "ERROR") != NULL) {
+            return ESP_FAIL;
+        }
     }
-    return strstr(resp, "ERROR") != NULL ? ESP_FAIL : ESP_OK;
+    return ESP_OK;
 }
 
-esp_err_t cpe_sms_delete(int index, uint32_t timeout_ms)
+esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout_ms)
 {
-    if (index < 0) {
+    if (indexes == NULL || count == 0) {
         return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (indexes[i] < 0) {
+            return ESP_ERR_INVALID_ARG;
+        }
     }
     if (sms_get_state() != CPE_SMS_READY) {
         return ESP_ERR_NOT_SUPPORTED;
     }
-    sms_del_ctx_t ctx = { .index = index };
-    return cpe_at_session(sms_del_body, &ctx, timeout_ms);
+    int64_t start_us = esp_timer_get_time();
+    if (!sms_op_begin(timeout_ms)) {
+        return ESP_ERR_TIMEOUT;
+    }
+    sms_del_ctx_t ctx = { .indexes = indexes, .count = count };
+    esp_err_t err = cpe_at_session(sms_del_body, &ctx,
+                                   sms_remaining_ms(start_us, timeout_ms));
+    sms_op_end();
+    return err;
+}
+
+/* ------------------------------ maintenance ----------------------------- */
+
+/* Keep reception alive when the inbox is full: the modem rejects new messages
+ * once <mem3> has no free slot and the SMSC only retries for the validity
+ * period. Free one complete old read message (all of its parts) so the next
+ * retry lands. Unread messages are never touched. */
+static esp_err_t sms_prune_body(const cpe_at_io_t *io, void *arg)
+{
+    (void)arg;
+    int used = -1;
+    int total = -1;
+    if (!sms_cpms_query(io, &used, &total) || used < 0 || total <= 0) {
+        return ESP_FAIL;
+    }
+    if (used < total) {
+        return ESP_OK;
+    }
+
+    char *raw = malloc(CPE_SMS_RAW_CAP);
+    cpe_sms_list_t *list = calloc(1, sizeof(*list));
+    if (raw == NULL || list == NULL) {
+        free(raw);
+        free(list);
+        return ESP_ERR_NO_MEM;
+    }
+
+    sms_list_ctx_t ctx = { .out = list, .raw = raw, .cap = CPE_SMS_RAW_CAP };
+    esp_err_t err = sms_fetch(io, &ctx);
+    if (err != ESP_OK) {
+        free(raw);
+        free(list);
+        return err;
+    }
+
+    int oldest = -1;
+    for (size_t i = 0; i < list->count; i++) {
+        cpe_sms_msg_t *m = &list->items[i];
+        if (cpe_sms_stat_unread(m->stat)) {
+            continue;
+        }
+        if (oldest < 0) {
+            oldest = (int)i;
+            continue;
+        }
+        const char *when = m->time;
+        const char *prev = list->items[oldest].time;
+        if (when[0] != '\0' && (prev[0] == '\0' || strcmp(when, prev) < 0)) {
+            oldest = (int)i;
+        }
+    }
+
+    if (oldest < 0) {
+        ESP_LOGW(TAG, "SMS storage full (%d/%d) but every message is unread", used, total);
+        free(raw);
+        free(list);
+        return ESP_OK;
+    }
+
+    cpe_sms_msg_t *victim = &list->items[oldest];
+    sms_del_ctx_t del = { .indexes = victim->indexes, .count = victim->index_count };
+    err = sms_del_body(io, &del);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to delete SMS index %d", victim->index);
+        free(raw);
+        free(list);
+        return err;
+    }
+    ESP_LOGI(TAG, "SMS storage full (%d/%d), deleted oldest read message (%u part(s))",
+             used, total, (unsigned)victim->index_count);
+
+    free(raw);
+    free(list);
+    return ESP_OK;
+}
+
+/* Returns false when the AT session is busy; the task retries on its next
+ * tick. */
+static bool sms_maintain(void)
+{
+    if (!sms_op_begin(0)) {
+        return false;
+    }
+    /* Scanning the inbox costs one QCMGR per record in the worst (full) case. */
+    (void)cpe_at_session(sms_prune_body, NULL, CPE_SMS_LIST_TIMEOUT_MS * 3);
+    sms_op_end();
+    return true;
 }
 
 /* -------------------------------- task ---------------------------------- */
@@ -323,12 +600,37 @@ static void sms_task(void *arg)
 {
     (void)arg;
     bool was_ready = false;
+    int64_t last_maint_us = 0;
+    int64_t last_probe_us = 0;
     for (;;) {
         bool ready = cpe_at_ready();
-        if (ready && !was_ready) {
-            sms_probe();
-        } else if (!ready) {
+        int64_t now = esp_timer_get_time();
+        if (!ready) {
             sms_set_state(CPE_SMS_UNSUPPORTED);
+            last_probe_us = 0;
+        } else if (!was_ready) {
+            last_probe_us = sms_probe() ? now : 0;
+            last_maint_us = 0;
+        } else if (sms_get_state() != CPE_SMS_READY &&
+                   (last_probe_us == 0 ||
+                    now - last_probe_us >= (int64_t)CPE_SMS_REPROBE_MS * 1000)) {
+            /* A rejection while the modem is still booting must not keep SMS
+             * disabled until the next replug. */
+            if (sms_probe()) {
+                last_probe_us = now;
+                if (sms_get_state() == CPE_SMS_READY) {
+                    last_maint_us = 0;
+                }
+            }
+        }
+        if (ready && sms_get_state() == CPE_SMS_READY) {
+            int64_t t = esp_timer_get_time();
+            if (last_maint_us == 0 ||
+                t - last_maint_us >= (int64_t)CPE_SMS_MAINT_INTERVAL_MS * 1000) {
+                if (sms_maintain()) {
+                    last_maint_us = t;
+                }
+            }
         }
         was_ready = ready;
         vTaskDelay(pdMS_TO_TICKS(CPE_SMS_PROBE_POLL_MS));
@@ -341,12 +643,23 @@ esp_err_t cpe_sms_init(void)
         return ESP_OK;
     }
     s_lock = xSemaphoreCreateMutex();
-    if (s_lock == NULL) {
+    s_op_lock = xSemaphoreCreateMutex();
+    if (s_lock == NULL || s_op_lock == NULL) {
+        if (s_lock != NULL) {
+            vSemaphoreDelete(s_lock);
+            s_lock = NULL;
+        }
+        if (s_op_lock != NULL) {
+            vSemaphoreDelete(s_op_lock);
+            s_op_lock = NULL;
+        }
         return ESP_ERR_NO_MEM;
     }
     if (xTaskCreate(sms_task, "cpe_sms", 3072, NULL, 3, &s_task) != pdPASS) {
         vSemaphoreDelete(s_lock);
+        vSemaphoreDelete(s_op_lock);
         s_lock = NULL;
+        s_op_lock = NULL;
         s_task = NULL;
         return ESP_ERR_NO_MEM;
     }
@@ -366,7 +679,7 @@ esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms)
 { (void)out; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_str, uint32_t timeout_ms)
 { (void)number; (void)text; (void)err_str; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t cpe_sms_delete(int index, uint32_t timeout_ms)
-{ (void)index; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout_ms)
+{ (void)indexes; (void)count; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
 
 #endif /* CONFIG_CPE_SMS_ENABLE */

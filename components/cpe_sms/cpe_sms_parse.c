@@ -32,26 +32,36 @@ bool cpe_sms_number_valid(const char *num)
     return n >= 3 && n <= 20;
 }
 
+/* Count UCS2 code units in UTF-8 text. Invalid input (including a truncated
+ * sequence at the end of the buffer) returns 0 instead of walking past the
+ * terminator. */
 static size_t utf8_codepoints(const char *s)
 {
     size_t n = 0;
     while (*s != '\0') {
         unsigned char c = (unsigned char)*s;
+        size_t cont;
         if (c < 0x80) {
             n++;
             s += 1;
-        } else if ((c & 0xE0) == 0xC0) {
-            n++;
-            s += 2;
-        } else if ((c & 0xF0) == 0xE0) {
-            n++;
-            s += 3;
-        } else if ((c & 0xF8) == 0xF0) {
-            n += 2; /* supplementary plane -> 2 UCS2 units */
-            s += 4;
+            continue;
+        }
+        if (c >= 0xC2 && c <= 0xDF) {
+            cont = 1;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            cont = 2;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            cont = 3;
         } else {
             return 0;
         }
+        for (size_t k = 1; k <= cont; k++) {
+            if (((unsigned char)s[k] & 0xC0) != 0x80) {
+                return 0; /* truncated or not a continuation byte */
+            }
+        }
+        n += cont == 3 ? 2 : 1; /* supplementary plane -> 2 UCS2 units */
+        s += cont + 1;
     }
     return n;
 }
@@ -170,6 +180,8 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
         return false;
     }
     memset(out, 0, sizeof(*out));
+    out->storage_used = -1;
+    out->storage_capacity = -1;
 
     const char *p = raw;
     cpe_sms_msg_t *cur = NULL;
@@ -196,6 +208,9 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
             cur = &out->items[out->count];
             memset(cur, 0, sizeof(*cur));
             parse_cmgl_header(line, cur);
+            cur->part_total = 1;
+            cur->index_count = 1;
+            cur->indexes[0] = cur->index;
             hex[0] = '\0';
             hex_len = 0;
             out->count++;
@@ -220,4 +235,232 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
         cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
     }
     return true;
+}
+
+bool cpe_sms_parse_cpms(const char *resp, int *used, int *total)
+{
+    if (resp == NULL) {
+        return false;
+    }
+    const char *p = strstr(resp, "+CPMS:");
+    if (p == NULL) {
+        return false;
+    }
+    p += 6;
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p == '"') { /* "+CPMS: \"ME\",<used>,<total>,... */
+        p++;
+        while (*p != '\0' && *p != '"') {
+            p++;
+        }
+        if (*p != '"') {
+            return false;
+        }
+        p++;
+        if (*p != ',') {
+            return false;
+        }
+        p++;
+    }
+    char *end = NULL;
+    long u = strtol(p, &end, 10);
+    if (end == p || *end != ',') {
+        return false;
+    }
+    p = end + 1;
+    long t = strtol(p, &end, 10);
+    if (end == p || u < 0 || t <= 0) {
+        return false;
+    }
+    if (used != NULL) {
+        *used = (int)u;
+    }
+    if (total != NULL) {
+        *total = (int)t;
+    }
+    return true;
+}
+
+bool cpe_sms_parse_qcmgr_seg(const char *line, int *uid, int *seg, int *total)
+{
+    if (line == NULL) {
+        return false;
+    }
+    const char *p = strstr(line, "+QCMGR:");
+    if (p == NULL) {
+        return false;
+    }
+    /* The tail is always ",<uid>,<seg>,<total>"; the SCTS field may itself
+     * contain a comma, so walk back from the end of the header line instead of
+     * splitting fields. Only the header is considered: a body line may contain
+     * anything. */
+    const char *end = p;
+    while (*end != '\0' && *end != '\r' && *end != '\n') {
+        end++;
+    }
+    const char *comma[3] = { NULL, NULL, NULL };
+    int found = 0;
+    for (const char *q = end - 1; q >= p && found < 3; q--) {
+        if (*q == ',') {
+            comma[found++] = q;
+        }
+    }
+    if (found < 3) {
+        return false;
+    }
+    char *e = NULL;
+    long v_uid = strtol(comma[2] + 1, &e, 10);
+    if (e == comma[2] + 1 || v_uid < 0) {
+        return false;
+    }
+    long v_seg = strtol(comma[1] + 1, &e, 10);
+    if (e == comma[1] + 1 || v_seg < 1) {
+        return false;
+    }
+    long v_total = strtol(comma[0] + 1, &e, 10);
+    if (e == comma[0] + 1 || v_total < 1 || v_seg > v_total) {
+        return false;
+    }
+    while (e < end && *e == ' ') {
+        e++;
+    }
+    if (e != end) { /* a single message's SCTS tail, not a segment triple */
+        return false;
+    }
+    if (uid != NULL) {
+        *uid = (int)v_uid;
+    }
+    if (seg != NULL) {
+        *seg = (int)v_seg;
+    }
+    if (total != NULL) {
+        *total = (int)v_total;
+    }
+    return true;
+}
+
+/* Append `src` to dst+*len, stopping at a UTF-8 boundary when it no longer
+ * fits. Returns false (and leaves any partial code point out) when cut. */
+static bool append_utf8(char *dst, size_t cap, size_t *len, const char *src)
+{
+    while (*src != '\0') {
+        unsigned char c = (unsigned char)*src;
+        size_t clen;
+        if (c < 0x80) {
+            clen = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            clen = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            clen = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            clen = 4;
+        } else {
+            clen = 1;
+        }
+        if (*len + clen + 1 > cap) {
+            dst[*len] = '\0';
+            return false;
+        }
+        memcpy(dst + *len, src, clen);
+        *len += clen;
+        src += clen;
+    }
+    dst[*len] = '\0';
+    return true;
+}
+
+void cpe_sms_merge_parts(cpe_sms_list_t *list)
+{
+    if (list == NULL) {
+        return;
+    }
+    bool drop[CPE_SMS_MAX_MESSAGES] = { false };
+    bool done[CPE_SMS_MAX_MESSAGES] = { false };
+
+    for (size_t i = 0; i < list->count; i++) {
+        if (done[i]) {
+            continue;
+        }
+        cpe_sms_msg_t *m = &list->items[i];
+        m->index_count = 1;
+        m->indexes[0] = m->index;
+        if (m->part_total <= 1 || m->part_seq < 1 || m->part_seq > m->part_total) {
+            done[i] = true;
+            continue;
+        }
+
+        size_t order[CPE_SMS_MAX_PARTS];
+        size_t n = 0;
+        for (size_t j = i; j < list->count; j++) {
+            cpe_sms_msg_t *p = &list->items[j];
+            if (done[j] || p->part_total != m->part_total ||
+                p->uid != m->uid || strcmp(p->from, m->from) != 0 ||
+                p->part_seq < 1 || p->part_seq > p->part_total) {
+                continue;
+            }
+            bool dup = false;
+            for (size_t k = 0; k < n; k++) {
+                if (list->items[order[k]].part_seq == p->part_seq) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup && n < CPE_SMS_MAX_PARTS) {
+                order[n++] = j;
+            }
+        }
+        if (n == 0) {
+            done[i] = true;
+            continue;
+        }
+        for (size_t a = 1; a < n; a++) { /* insertion sort by part_seq */
+            size_t key = order[a];
+            size_t b = a;
+            while (b > 0 &&
+                   list->items[order[b - 1]].part_seq > list->items[key].part_seq) {
+                order[b] = order[b - 1];
+                b--;
+            }
+            order[b] = key;
+        }
+
+        size_t base_i = order[0];
+        cpe_sms_msg_t *base = &list->items[base_i];
+        size_t len = strlen(base->body);
+        bool cut = false;
+        bool unread = false;
+        for (size_t k = 0; k < n; k++) {
+            cpe_sms_msg_t *p = &list->items[order[k]];
+            if (cpe_sms_stat_unread(p->stat)) {
+                unread = true;
+            }
+            if (k > 0 && !append_utf8(base->body, sizeof(base->body), &len, p->body)) {
+                cut = true;
+            }
+            base->indexes[k] = p->index;
+            done[order[k]] = true;
+            drop[order[k]] = true;
+        }
+        drop[base_i] = false;
+        base->index_count = (uint8_t)n;
+        base->index = base->indexes[0];
+        base->truncated = cut || n < (size_t)base->part_total || base->truncated;
+        if (unread) {
+            snprintf(base->stat, sizeof(base->stat), "REC UNREAD");
+        }
+    }
+
+    size_t w = 0;
+    for (size_t r = 0; r < list->count; r++) {
+        if (drop[r]) {
+            continue;
+        }
+        if (w != r) {
+            list->items[w] = list->items[r];
+        }
+        w++;
+    }
+    list->count = w;
 }

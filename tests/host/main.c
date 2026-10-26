@@ -22,6 +22,6 @@ int main(void)
     ht_run_suite("json_util: buffer, escaping, depth guard, field getters", test_json_util);
     ht_run_suite("station_names: MAC parsing, nickname whitelist", test_station_names);
     ht_run_suite("cpe_config: configuration validation", test_config_validate);
-    ht_run_suite("cpe_sms: UCS2, CMGL parsing, validation", test_sms);
+    ht_run_suite("cpe_sms: UCS2, CMGL/QCMGR/CPMS parsing, concatenation", test_sms);
     return ht_report();
 }

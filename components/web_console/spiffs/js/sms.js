@@ -14,6 +14,7 @@
 
     var timer = null;
     var inFlight = false;
+    var sending = false;
     var rows = {};
 
     function byId(id) {
@@ -28,6 +29,9 @@
     }
 
     function setFormEnabled(enabled) {
+        /* A poll that was already in flight when the send started must not
+         * re-enable the button underneath it. */
+        if (sending) enabled = false;
         var num = byId('sms-number');
         var text = byId('sms-text');
         var btn = byId('sms-send-btn');
@@ -65,6 +69,31 @@
         return td;
     }
 
+    function renderStorage(data) {
+        var el = byId('sms-storage');
+        if (!el) return;
+        var s = data.storage || {};
+        if (!(s.capacity > 0) || !(s.used >= 0)) {
+            el.textContent = '';
+            el.className = 'sms-storage';
+            return;
+        }
+        el.textContent = '存储用量 ' + s.used + ' / ' + s.capacity;
+        if (s.used >= s.capacity) {
+            el.textContent += '（已满，将自动清理最旧的已读短信）';
+            el.className = 'sms-storage over';
+        } else if (s.near_full) {
+            el.textContent += '（接近满，请及时清理）';
+            el.className = 'sms-storage warn';
+        } else {
+            el.className = 'sms-storage';
+        }
+    }
+
+    function displayBody(m) {
+        return (m.body || '') + (m.truncated ? '…' : '');
+    }
+
     function renderList(data) {
         var body = byId('sms-tbody');
         if (!body) return;
@@ -81,7 +110,7 @@
             if (!row) {
                 row = document.createElement('tr');
                 row.appendChild(makeCell(m.from || '', 'sms-from'));
-                row.appendChild(makeCell(m.body || '', 'sms-body'));
+                row.appendChild(makeCell(displayBody(m), 'sms-body'));
                 row.appendChild(makeCell(m.time || '', 'sms-time'));
 
                 var opCell = document.createElement('td');
@@ -90,16 +119,19 @@
                 del.type = 'button';
                 del.className = 'sms-del';
                 del.textContent = '删除';
-                del.addEventListener('click', function () { remove(m.index); });
+                /* Read the indexes off the row, not the poll's message object:
+                 * a reused row must delete every part of the current message. */
+                del.addEventListener('click', function () { remove(row.smsIndexes); });
                 opCell.appendChild(del);
                 row.appendChild(opCell);
 
                 rows[key] = row;
             } else {
                 row.children[0].textContent = m.from || '';
-                row.children[1].textContent = m.body || '';
+                row.children[1].textContent = displayBody(m);
                 row.children[2].textContent = m.time || '';
             }
+            row.smsIndexes = m.indexes || [m.index];
             row.className = m.unread ? 'sms-unread' : '';
             order.push(row);
         });
@@ -144,7 +176,9 @@
     }
 
     function load() {
-        if (inFlight) {
+        /* Sending owns the modem for a few seconds; a list request started
+         * meanwhile would only fight it for the single AT session. */
+        if (sending || inFlight) {
             scheduleNext();
             return;
         }
@@ -152,6 +186,7 @@
         CPE.getJson(LIST_URL).then(function (data) {
             setFormEnabled(true);
             setBanner('');
+            renderStorage(data);
             renderList(data);
         }).catch(function (error) {
             if (error.status === 501 || error.code === 'sms_not_supported') {
@@ -166,9 +201,9 @@
         });
     }
 
-    function remove(index) {
+    function remove(indexes) {
         if (!window.confirm('确定删除这条短信吗？')) return;
-        CPE.postJson(DELETE_URL, { index: index }).then(function () {
+        CPE.postJson(DELETE_URL, { indexes: indexes || [] }).then(function () {
             refreshNow();
         }).catch(function (error) {
             window.alert(CPE.errorText(error));
@@ -183,17 +218,24 @@
             setBanner('号码和内容都不能为空。', 'status-banner-warn');
             return;
         }
-        var btn = byId('sms-send-btn');
-        if (btn) btn.disabled = true;
+        sending = true;
+        setFormEnabled(false);
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
         CPE.postJson(SEND_URL, { number: num.value, text: text.value }, 70000).then(function () {
             setBanner('发送成功。', 'status-banner-info');
             text.value = '';
             updateCount();
+            sending = false;
+            setFormEnabled(true);
             refreshNow();
         }).catch(function (error) {
             setBanner(CPE.errorText(error), 'status-banner-warn');
-        }).then(function () {
-            if (btn) btn.disabled = false;
+            sending = false;
+            setFormEnabled(true);
+            scheduleNext();
         });
     }
 
