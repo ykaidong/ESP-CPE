@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>ESP-CPE 管理后台</title>
+    <title>WLAN设置 - ESP-CPE 管理后台</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="stylesheet" href="css/cpe.css">
     <link rel="icon" href="./img/favicon.ico">
@@ -16,35 +16,29 @@
     <div class="content-base flex">
         <div class="left-base" id="leftMenu"></div>
         <div class="right-base">
-            <div class="page-header">
-                <span class="header-title-one active-title" id="tab-basic">基本设置</span>
-                <span>/</span>
-                <span class="header-title-two" id="tab-advance">高级设置</span>
-            </div>
+            <div class="page-header"></div>
             <div class="wlan-msg" id="wlan-msg"></div>
-            <div class="page-content" id="baseShow">
-                <div class="page-title">以下您可以对 WLAN 进行基本设置</div>
+            <div class="page-content">
+                <div class="page-title">基本设置</div>
                 <div class="page-detail">
                     <div class="line-base">
-                        <span class="title">WLAN 名称:</span>
+                        <label class="title" for="wlanName">WLAN 名称:</label>
                         <input class="content" id="wlanName" maxlength="32" placeholder="请输入 WLAN 名称" autocomplete="off">
                     </div>
                     <div class="line-base">
                         <span class="title">安全模式:</span>
-                        <select class="content" id="model" name="model" disabled>
-                            <option value="WPA2_PSK" selected>WPA2-PSK（强制）</option>
-                        </select>
+                        <span class="content-static">WPA2-PSK（强制）</span>
                     </div>
                     <div class="line-base">
-                        <span class="title">密码:</span>
+                        <label class="title" for="password">密码:</label>
                         <input class="content" id="password" type="password" maxlength="63" autocomplete="new-password" placeholder="留空表示不修改（8~63 位）">
                     </div>
                     <div class="line-base">
-                        <span class="title">设备名称:</span>
+                        <label class="title" for="deviceName">设备名称:</label>
                         <input class="content" id="deviceName" maxlength="32" placeholder="请输入设备名称（1~32 个字符）" autocomplete="off">
                     </div>
                     <div class="line-base">
-                        <span class="title">最大设备数:</span>
+                        <label class="title" for="maxSta">最大设备数:</label>
                         <select class="content" id="maxSta" name="maxSta">
                             <option value="1">1</option>
                             <option value="2">2</option>
@@ -69,9 +63,8 @@
                         <button class="save-btn" type="button" id="btn-save-basic">保存</button>
                     </div>
                 </div>
-            </div>
-            <div class="page-content" id="highShow" hidden>
-                <div class="page-title">您可以对 WLAN 设置以下两项个性化设置</div>
+
+                <div class="page-title">高级设置</div>
                 <div class="page-detail">
                     <div class="line-base">
                         <span class="title">带宽:</span>

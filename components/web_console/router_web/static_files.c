@@ -103,7 +103,8 @@ static bool path_is_public(const char *uri)
         }
     }
 
-    /* Root-level pages: login.html, index.html, wlan.html, upgrade.html. */
+    /* Any root-level page (login.html, index.html, system.html, sms.html,
+     * upgrade.html, ...) is public; nested assets keep their directory rule. */
     if (strchr(uri + 1, '/') == NULL) {
         const char *dot = strrchr(uri, '.');
         return dot != NULL && strcasecmp(dot, ".html") == 0;

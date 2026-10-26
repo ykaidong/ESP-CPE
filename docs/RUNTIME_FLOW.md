@@ -274,7 +274,7 @@ AP/Web 全程可用。设置 `CPE_IP_MAX_ECM_REBUILDS=0` 即回到"每次超时�
 
 - SoftAP 与 Web 在 4G 之前启动，任何链路状态下都可访问 `http://192.168.4.1`；
 - Web 服务器的监听 socket **只绑定 SoftAP 网口**（`httpd_config_t.if_name`），4G WAN 侧无法访问管理面；
-- Web 状态页每 5s 轮询一次 `/status`；客户端列表在页签激活时每 4s 轮询；
+- Web 状态页每 5s 轮询一次 `/status`，并每 4s 轮询一次客户端列表；系统设置页打开时每 30s 刷新一次定时维护状态；
 - 只读 AT 遥测（`components/cpe_at/`）在 ECM 数据端口之外再打开模组的 AT 接口
   （vendor-specific 或 CDC-ACM），连接时读取 `ATI` / `AT+CGSN`，之后每
   `CPE_AT_POLL_INTERVAL_S`（默认 5s）轮询 `AT+CSQ` / `AT+COPS?` / `AT+CEREG?` /

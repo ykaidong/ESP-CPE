@@ -11,12 +11,6 @@
     var STATION_URL = '/system/station_state';
     var CHANGE_NAME_URL = '/system/station_state/change_name';
     var DELETE_DEVICE_URL = '/system/station_state/delete_device';
-    var MAINT_URL = '/api/system/maintenance';
-    /* Keep in sync with CPE_MAINT_PERIOD_MAX_MIN (cpe_maintenance.h). */
-    var MAINT_PERIOD_MAX_MIN = 43200;
-    /* Refresh the "next run" countdown; the input fields are only filled when
-     * the page loads or after saving, so a poll never overwrites typing. */
-    var MAINT_POLL_MS = 30000;
     /* Keep in sync with cpe_status.h (CPE_STATE_FAULT). */
     var STATE_FAULT = 4;
 
@@ -43,13 +37,6 @@
      * lags the local estimate slightly. Only correct clearly conflicting
      * values; re-basing every poll makes the seconds repeat. */
     var UPTIME_RESYNC_THRESHOLD_S = 3;
-
-    function setText(id, text) {
-        var node = CPE.byId(id);
-        if (node) {
-            node.textContent = text;
-        }
-    }
 
     function pad2(value) {
         return value < 10 ? '0' + value : String(value);
@@ -137,17 +124,11 @@
         var ipCell = createCell('', 'IP 地址');
         var timeCell = createCell('', '连接时间');
 
+        /* Renaming starts from the host name button above; the actions cell
+         * only holds the destructive action. */
         var actionCell = createCell('', '操作', 'client-cell-actions');
         var actionWrap = document.createElement('div');
         actionWrap.className = 'client-actions';
-
-        var editButton = document.createElement('button');
-        editButton.type = 'button';
-        editButton.className = 'edit-btn';
-        editButton.textContent = '重命名';
-        editButton.addEventListener('click', function () {
-            openRenameDialog(mac);
-        });
 
         var deleteButton = document.createElement('button');
         deleteButton.type = 'button';
@@ -159,10 +140,6 @@
             }
         });
 
-        actionWrap.appendChild(editButton);
-        var divider = document.createElement('div');
-        divider.className = 'edit-line';
-        actionWrap.appendChild(divider);
         actionWrap.appendChild(deleteButton);
         actionCell.appendChild(actionWrap);
 
@@ -186,9 +163,9 @@
     function updateStationCounts(data) {
         var list = Array.isArray(data.station_list) ? data.station_list : [];
         var maxSta = Number(data.max_sta) || 10;
-        setText('connect-count', list.length + '台');
-        setText('remain-count', Math.max(0, maxSta - list.length) + '台');
-        setText('client-count-top', list.length + '台');
+        CPE.setText('client-count-top', list.length + '台');
+        CPE.setText('client-list-title',
+            '在线客户端（' + list.length + ' / ' + maxSta + '）');
         return list;
     }
 
@@ -199,30 +176,6 @@
             }
         }
         return null;
-    }
-
-    /* Rows are only re-appended when the order really changed: moving nodes on
-     * every poll drops the focus and the scroll anchor on a phone. */
-    function syncRows(body, order) {
-        var current = [];
-        for (var i = 0; i < body.children.length; i++) {
-            var child = body.children[i];
-            if (child.className !== 'client-empty-row') {
-                current.push(child);
-            }
-        }
-        var changed = current.length !== order.length;
-        for (var j = 0; !changed && j < order.length; j++) {
-            if (current[j] !== order[j]) {
-                changed = true;
-            }
-        }
-        if (!changed) {
-            return;
-        }
-        order.forEach(function (row) {
-            body.appendChild(row);
-        });
     }
 
     function updateEmptyState(body, isEmpty) {
@@ -281,18 +234,8 @@
             }
         });
 
-        syncRows(body, order);
+        CPE.syncRows(body, order, 'client-empty-row');
         updateEmptyState(body, order.length === 0);
-    }
-
-    /* Fetch the counts once at page load so the network tab shows meaningful
-     * client numbers without starting the (hidden-tab) polling. */
-    function loadStationCounts() {
-        CPE.getJson(STATION_URL).then(function (data) {
-            updateStationCounts(data);
-        }).catch(function () {
-            /* 401 already redirected to the login page. */
-        });
     }
 
     function refreshStations() {
@@ -309,9 +252,8 @@
         });
     }
 
-    /* Rename dialog. A modal works on every viewport, keeps both buttons within
-     * reach of the thumb on a phone (the inline editor lived in the last table
-     * column, which is off-screen there) and leaves the polling untouched. */
+    /* Rename dialog. A modal works on every viewport, keeps the buttons within
+     * reach of the thumb on a phone and leaves the polling untouched. */
     function openRenameDialog(mac) {
         var station = findStation(mac);
         if (!station) {
@@ -320,87 +262,40 @@
             return;
         }
 
-        var overlay = CPE.createElement('div', { className: 'modal-overlay' });
-        var panel = CPE.createElement('div', { className: 'modal-panel' });
-        var title = CPE.createElement('div', { className: 'modal-title', text: '重命名客户端' });
-
         var hintText = 'MAC ' + mac;
         if (stationField(station, 'ip_str')) {
             hintText += ' · IP ' + stationField(station, 'ip_str');
         }
-        var hint = CPE.createElement('div', {
-            className: 'modal-hint',
-            text: hintText + '（主机名 1~32 个字符）'
-        });
 
-        var input = CPE.createElement('input', {
-            type: 'text',
-            className: 'modal-input',
-            maxlength: '32',
-            autocomplete: 'off',
-            enterkeyhint: 'done'
-        });
-        /* value assignment (not innerHTML) keeps host names inert. */
-        input.value = stationField(station, 'name_str');
-
-        var errorBox = CPE.createElement('div', { className: 'modal-error' });
-        var actions = CPE.createElement('div', { className: 'modal-actions' });
-        var submit = CPE.createElement('button', { className: 'save-btn', type: 'button', text: '保存' });
-        var cancel = CPE.createElement('button', { className: 'cancel-btn', type: 'button', text: '取消' });
-
-        function close() {
-            if (overlay.parentNode) {
-                overlay.parentNode.removeChild(overlay);
+        CPE.openFormDialog({
+            title: '重命名客户端',
+            hint: hintText + '（主机名 1~32 个字符）',
+            inputs: [{
+                type: 'text',
+                placeholder: '请输入主机名',
+                maxlength: '32',
+                value: stationField(station, 'name_str')
+            }],
+            submitText: '保存',
+            cancelText: '取消',
+            selectValue: true,
+            validate: function (values) {
+                if (values[0].length === 0 || values[0].length > 32) {
+                    return '主机名长度必须为 1~32 个字符';
+                }
+                return null;
+            },
+            submit: function (values) {
+                return CPE.postJson(CHANGE_NAME_URL, {
+                    name_str: values[0],
+                    mac_str: mac
+                }).then(function () {
+                    refreshStations();
+                });
             }
-        }
-
-        function save() {
-            var name = input.value;
-            if (name.length === 0 || name.length > 32) {
-                errorBox.textContent = '主机名长度必须为 1~32 个字符';
-                input.focus();
-                return;
-            }
-            errorBox.textContent = '';
-            submit.disabled = true;
-            cancel.disabled = true;
-            CPE.postJson(CHANGE_NAME_URL, {
-                name_str: name,
-                mac_str: mac
-            }).then(function () {
-                close();
-                refreshStations();
-            }).catch(function (error) {
-                submit.disabled = false;
-                cancel.disabled = false;
-                errorBox.textContent = CPE.errorText(error);
-            });
-        }
-
-        submit.addEventListener('click', save);
-        cancel.addEventListener('click', close);
-        input.addEventListener('keydown', function (event) {
-            if (event.key === 'Enter') {
-                save();
-            }
+        }).catch(function () {
+            /* Cancelled. */
         });
-        overlay.addEventListener('click', function (event) {
-            if (event.target === overlay) {
-                close();
-            }
-        });
-
-        actions.appendChild(cancel);
-        actions.appendChild(submit);
-        panel.appendChild(title);
-        panel.appendChild(hint);
-        panel.appendChild(input);
-        panel.appendChild(errorBox);
-        panel.appendChild(actions);
-        overlay.appendChild(panel);
-        document.body.appendChild(overlay);
-        input.focus();
-        input.select();
     }
 
     function deleteStation(mac) {
@@ -475,7 +370,7 @@
             return;
         }
         var elapsedMs = performance.now() - uptimeBaseMs;
-        setText('connect-time', formatDuration(uptimeBaseS + elapsedMs / 1000));
+        CPE.setText('connect-time', formatDuration(uptimeBaseS + elapsedMs / 1000));
         /* Re-arm against the next whole second instead of using a fixed 1 s
          * interval: interval drift can skip or repeat a second, which reads as
          * the clock stuttering. */
@@ -502,43 +397,43 @@
     function renderStatus(status) {
         renderSignalIcon(status);
         syncUptime(status);
-        setText('status-state', status.state_text || '未知');
-        setText('status-usb', status.usb_connected ? '已连接' : '未连接');
-        setText('status-link', status.link_up ? '已连接' : '未连接');
-        setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
-        setText('status-rssi', (status.sim_valid && !status.sim_inserted)
+        CPE.setText('status-state', status.state_text || '未知');
+        CPE.setText('status-usb', status.usb_connected ? '已连接' : '未连接');
+        CPE.setText('status-link', status.link_up ? '已连接' : '未连接');
+        CPE.setText('status-ip', (status.got_ip && status.ip) ? status.ip : '未获取');
+        CPE.setText('status-rssi', (status.sim_valid && !status.sim_inserted)
             ? '未插入 SIM 卡'
             : (status.rssi_valid ? (status.rssi + ' dBm') : '未知'));
-        setText('status-rsrp', status.qcsq_valid ? (status.rsrp + ' dBm') : '未知');
-        setText('status-rsrq', status.qcsq_valid ? (status.rsrq + ' dB') : '未知');
-        setText('status-sinr', status.qcsq_valid ? (status.sinr + ' dB') : '未知');
-        setText('status-carrier', status.carrier || '未知');
-        setText('status-registered', status.sim_valid
+        CPE.setText('status-rsrp', status.qcsq_valid ? (status.rsrp + ' dBm') : '未知');
+        CPE.setText('status-rsrq', status.qcsq_valid ? (status.rsrq + ' dB') : '未知');
+        CPE.setText('status-sinr', status.qcsq_valid ? (status.sinr + ' dB') : '未知');
+        CPE.setText('status-carrier', status.carrier || '未知');
+        CPE.setText('status-registered', status.sim_valid
             ? (status.modem_registered ? '已注册' : '未注册')
             : '未知');
-        setText('status-ps', status.ps_valid
+        CPE.setText('status-ps', status.ps_valid
             ? (status.ps_attached ? '已附着' : '未附着')
             : '未知');
-        setText('status-pdp', status.pdp_valid
+        CPE.setText('status-pdp', status.pdp_valid
             ? (status.pdp_active ? '已激活' : '未激活')
             : '未知');
-        setText('status-temp', status.modem_temp_valid
+        CPE.setText('status-temp', status.modem_temp_valid
             ? (status.modem_temp + ' °C')
             : '未知');
-        setText('status-modem-model', status.modem_model || '未知');
-        setText('status-modem-fw', status.modem_fw || '未知');
-        setText('status-imei', status.imei || '未知');
-        setText('status-sim', status.sim_valid
+        CPE.setText('status-modem-model', status.modem_model || '未知');
+        CPE.setText('status-modem-fw', status.modem_fw || '未知');
+        CPE.setText('status-imei', status.imei || '未知');
+        CPE.setText('status-sim', status.sim_valid
             ? (status.sim_inserted ? '已安装' : '未安装')
             : '未知');
         /* Only meaningful when the modem reported a card as present. */
-        setText('status-phone', (status.sim_valid && !status.sim_inserted)
+        CPE.setText('status-phone', (status.sim_valid && !status.sim_inserted)
             ? '--'
             : (status.phone_number || '未知'));
-        setText('status-recovery', String(status.recovery_attempts || 0));
-        setText('status-boot', String(status.boot_count || 0));
-        setText('status-device-name', status.device_name || '-');
-        setText('status-last-error', status.last_error || '无');
+        CPE.setText('status-recovery', String(status.recovery_attempts || 0));
+        CPE.setText('status-boot', String(status.boot_count || 0));
+        CPE.setText('status-device-name', status.device_name || '-');
+        CPE.setText('status-last-error', status.last_error || '无');
 
         /* AT telemetry tells whether the WAN can actually work: got_ip alone
          * is misleading, the modem's DHCP server may answer without a SIM. */
@@ -555,10 +450,10 @@
         } else {
             internetState = '未检测到 4G 模块';
         }
-        setText('internet-state', internetState);
+        CPE.setText('internet-state', internetState);
 
         var apSsid = status.ap && typeof status.ap.ssid === 'string' ? status.ap.ssid : '';
-        setText('wifi-state', apSsid ? ('2.4 GHz Wi-Fi 正常（' + apSsid + '）') : '2.4 GHz Wi-Fi 正常');
+        CPE.setText('wifi-state', apSsid ? ('2.4 GHz Wi-Fi 正常（' + apSsid + '）') : '2.4 GHz Wi-Fi 正常');
 
         var banner = CPE.byId('status-banner');
         if (banner) {
@@ -597,11 +492,15 @@
         banner.className = 'status-banner status-banner-warn';
     }
 
-    function refreshStatus() {
+    function scheduleStatusPoll() {
         if (statusTimer) {
             clearTimeout(statusTimer);
-            statusTimer = null;
         }
+        statusTimer = setTimeout(refreshStatus, 5000);
+    }
+
+    function refreshStatus() {
+        statusTimer = null;
         CPE.getStatus().then(function (status) {
             statusStale = false;
             lastStatusAt = new Date();
@@ -617,157 +516,11 @@
                 uptimeTimer = null;
             }
             showStaleStatus();
-        }).then(function () {
-            statusTimer = setTimeout(refreshStatus, 5000);
-        });
-    }
-
-    function switchTab(showNetwork) {
-        if (!CPE.showTab(showNetwork, 'networkShow', 'customerShow',
-                         'tab-network', 'tab-clients')) {
-            return;
-        }
-        if (showNetwork) {
-            /* Leaving the client tab stops polling. */
-            if (stationTimer) {
-                clearTimeout(stationTimer);
-                stationTimer = null;
-            }
-        } else {
-            refreshStations();
-        }
-    }
-
-    function formatRemain(seconds) {
-        var total = Math.max(0, Math.floor(seconds));
-        var hours = Math.floor(total / 3600);
-        var minutes = Math.floor((total % 3600) / 60);
-        if (hours > 0) {
-            return hours + ' 小时 ' + minutes + ' 分钟';
-        }
-        if (minutes > 0) {
-            return minutes + ' 分钟';
-        }
-        return total + ' 秒';
-    }
-
-    function formatPeriod(minutes) {
-        if (minutes <= 0) {
-            return '已关闭';
-        }
-        if (minutes % 1440 === 0) {
-            return '每 ' + (minutes / 1440) + ' 天';
-        }
-        if (minutes % 60 === 0) {
-            return '每 ' + (minutes / 60) + ' 小时';
-        }
-        if (minutes > 60) {
-            return '每 ' + Math.floor(minutes / 60) + ' 小时 ' + (minutes % 60) + ' 分钟';
-        }
-        return '每 ' + minutes + ' 分钟';
-    }
-
-    function renderMaintenance(data, fillInputs) {
-        var ecmPeriod = Number(data.ecm_period_min) || 0;
-        var rebootPeriod = Number(data.reboot_period_min) || 0;
-        var nextEcm = Number(data.next_ecm_in_s);
-        var nextReboot = Number(data.next_reboot_in_s);
-        var count = Number(data.sched_reboot_count) || 0;
-
-        if (fillInputs) {
-            var ecmInput = CPE.byId('maint-ecm');
-            var rebootInput = CPE.byId('maint-reboot');
-            if (ecmInput) {
-                ecmInput.value = String(ecmPeriod);
-            }
-            if (rebootInput) {
-                rebootInput.value = String(rebootPeriod);
-            }
-        }
-
-        setText('maint-ecm-value', formatPeriod(ecmPeriod));
-        setText('maint-ecm-hint', ecmPeriod > 0
-            ? (nextEcm >= 0 ? '下次：' + formatRemain(nextEcm) + '后' : '正在排期')
-            : '不重建 ECM 网卡');
-
-        setText('maint-reboot-value', formatPeriod(rebootPeriod));
-        setText('maint-reboot-hint', rebootPeriod > 0
-            ? (nextReboot >= 0 ? '下次：' + formatRemain(nextReboot) + '后' : '正在排期')
-            : '不自动重启设备');
-
-        if (data.reboot_frozen) {
-            setText('maint-state', '已冻结');
-            setText('maint-state-hint', '连续 ' + count + ' 次重启未恢复正常');
-        } else if (count > 0) {
-            setText('maint-state', '恢复观察中');
-            setText('maint-state-hint', '已连续重启 ' + count + ' 次');
-        } else {
-            setText('maint-state', '正常');
-            setText('maint-state-hint', '无异常重启记录');
-        }
-    }
-
-    function loadMaintenance(fillInputs) {
-        return CPE.getJson(MAINT_URL).then(function (data) {
-            renderMaintenance(data, fillInputs);
-            return data;
-        }).catch(function () {
-            /* 401 already redirected to the login page. */
-        });
-    }
-
-    function saveMaintenance() {
-        var ecmInput = CPE.byId('maint-ecm');
-        var rebootInput = CPE.byId('maint-reboot');
-        if (!ecmInput || !rebootInput) {
-            return;
-        }
-        var ecmPeriod = parseInt(ecmInput.value, 10);
-        var rebootPeriod = parseInt(rebootInput.value, 10);
-        if (isNaN(ecmPeriod) || ecmPeriod < 0 || ecmPeriod > MAINT_PERIOD_MAX_MIN ||
-                isNaN(rebootPeriod) || rebootPeriod < 0 || rebootPeriod > MAINT_PERIOD_MAX_MIN) {
-            window.alert('周期必须为 0~43200 的整数（分钟，0 表示关闭）');
-            return;
-        }
-        CPE.postJson(MAINT_URL, {
-            ecm_period_min: ecmPeriod,
-            reboot_period_min: rebootPeriod
-        }).then(function (data) {
-            /* Reflect what the device actually stored and when it will run. */
-            renderMaintenance(data, true);
-        }).catch(function (error) {
-            window.alert(CPE.errorText(error));
-        });
-    }
-
-    function bindActions() {
-        var changePassword = CPE.byId('btn-change-password');
-        if (changePassword) {
-            changePassword.addEventListener('click', function () {
-                CPE.openPasswordModal(false).catch(function () {});
-            });
-        }
-        var factoryReset = CPE.byId('btn-factory-reset');
-        if (factoryReset) {
-            factoryReset.addEventListener('click', function () {
-                CPE.factoryReset().catch(function () {});
-            });
-        }
-        var saveMaint = CPE.byId('btn-save-maint');
-        if (saveMaint) {
-            saveMaint.addEventListener('click', saveMaintenance);
-        }
+        }).then(scheduleStatusPoll);
     }
 
     function init() {
-        /* Without a CSRF token this browser has no session to probe; go to the
-         * login page directly instead of triggering a 401 on /api/status. */
-        if (!CPE.getCsrf()) {
-            window.location.href = '/login.html';
-            return;
-        }
         CPE.bindMenu();
-        bindActions();
         /* Background tabs throttle timers; catch up as soon as the page is
          * visible again instead of leaving a stale time on screen. */
         document.addEventListener('visibilitychange', function () {
@@ -775,30 +528,15 @@
                 renderUptime();
             }
         });
-        var networkTab = CPE.byId('tab-network');
-        var clientTab = CPE.byId('tab-clients');
-        if (networkTab) {
-            networkTab.addEventListener('click', function () {
-                switchTab(true);
-            });
-        }
-        if (clientTab) {
-            clientTab.addEventListener('click', function () {
-                switchTab(false);
-            });
-        }
 
-        CPE.bootstrap().then(function (status) {
+        /* The first status call has already been made by the session guard,
+         * so render that answer and only poll from here on. */
+        CPE.guardSession().then(function (status) {
             renderStatus(status);
-            switchTab(true);
-            loadStationCounts();
-            refreshStatus();
-            loadMaintenance(true);
-            window.setInterval(function () {
-                loadMaintenance(false);
-            }, MAINT_POLL_MS);
+            scheduleStatusPoll();
+            refreshStations();
         }).catch(function () {
-            /* Forced password change already redirected to the login page. */
+            /* Forced password change or missing session: already redirected. */
         });
     }
 

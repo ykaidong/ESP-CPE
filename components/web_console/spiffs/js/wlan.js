@@ -100,8 +100,8 @@
             return;
         }
         var deviceName = deviceNameInput ? deviceNameInput.value.trim() : '';
-        if (deviceName.length > 32) {
-            showMessage('设备名称长度不能超过 32 个字符', true);
+        if (deviceName.length < 1 || deviceName.length > 32) {
+            showMessage('设备名称必须为 1~32 个字符', true);
             return;
         }
         var maxStaInput = CPE.byId('maxSta');
@@ -115,11 +115,9 @@
             ssid: ssid,
             password: password,
             if_hide_ssid: !!(hiddenInput && hiddenInput.checked),
+            device_name: deviceName,
             max_sta: maxSta
         };
-        if (deviceName.length > 0) {
-            body.device_name = deviceName;
-        }
 
         CPE.postJson(GENERAL_URL, body, SAVE_TIMEOUT_MS).then(function () {
             currentMaxSta = maxSta;
@@ -170,26 +168,10 @@
         });
     }
 
-    function switchTab(showBasic) {
-        CPE.showTab(showBasic, 'baseShow', 'highShow', 'tab-basic', 'tab-advance');
-    }
-
     function init() {
         CPE.bindMenu();
-        var basicTab = CPE.byId('tab-basic');
-        var advanceTab = CPE.byId('tab-advance');
         var saveBasicButton = CPE.byId('btn-save-basic');
         var saveAdvanceButton = CPE.byId('btn-save-advance');
-        if (basicTab) {
-            basicTab.addEventListener('click', function () {
-                switchTab(true);
-            });
-        }
-        if (advanceTab) {
-            advanceTab.addEventListener('click', function () {
-                switchTab(false);
-            });
-        }
         if (saveBasicButton) {
             saveBasicButton.addEventListener('click', saveBasic);
         }
@@ -197,11 +179,10 @@
             saveAdvanceButton.addEventListener('click', saveAdvance);
         }
 
-        CPE.bootstrap().then(function () {
-            switchTab(true);
+        CPE.guardSession().then(function () {
             return loadGeneral().then(loadAdvance);
         }).catch(function () {
-            /* Forced password change already redirected to the login page. */
+            /* Forced password change or missing session: already redirected. */
         });
     }
 

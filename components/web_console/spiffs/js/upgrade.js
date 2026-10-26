@@ -63,7 +63,6 @@
         uploading = busy;
         CPE.byId('btn-upload').disabled = busy;
         CPE.byId('ota-file').disabled = busy;
-        CPE.byId('btn-reboot').disabled = busy;
         var picker = CPE.byId('file-picker');
         if (picker) {
             picker.className = busy ? 'file-picker disabled' : 'file-picker';
@@ -197,7 +196,8 @@
                 }
             }
             if (xhr.status >= 200 && xhr.status < 300) {
-                setBusy(false);
+                /* Stay busy: the device is rebooting, a second upload must not
+                 * be possible before the page is reloaded. */
                 CPE.byId('progress-bar').style.width = '100%';
                 CPE.byId('progress-text').textContent = '100%';
                 setStatus('升级包已写入并通过校验，设备正在重启… 请等待约 1 分钟，重新连接 Wi-Fi 后刷新页面。', false);
@@ -220,24 +220,6 @@
         xhr.send(file);
     }
 
-    function reboot() {
-        if (uploading) {
-            return;
-        }
-        if (!window.confirm('确定要重启设备吗？重启期间 Wi-Fi 会断开约 20 秒。')) {
-            return;
-        }
-        CPE.postJson('/api/system/reboot', {}).then(function () {
-            setStatus('设备正在重启，请等待约 20 秒后刷新页面。', false);
-        }).catch(function (error) {
-            if (error && error.message === 'network_error') {
-                setStatus('设备正在重启，请等待约 20 秒后刷新页面。', false);
-                return;
-            }
-            setStatus('重启失败：' + CPE.errorText(error), true);
-        });
-    }
-
     function init() {
         CPE.bindMenu();
         bindFilePicker();
@@ -245,20 +227,10 @@
         if (uploadButton) {
             uploadButton.addEventListener('click', upload);
         }
-        var rebootButton = CPE.byId('btn-reboot');
-        if (rebootButton) {
-            rebootButton.addEventListener('click', reboot);
-        }
-        var backButton = CPE.byId('btn-back');
-        if (backButton) {
-            backButton.addEventListener('click', function () {
-                window.location.href = '/index.html';
-            });
-        }
-        CPE.bootstrap().then(function () {
+        CPE.guardSession().then(function () {
             refreshInfo();
         }).catch(function () {
-            /* Forced password change already redirected to the login page. */
+            /* Forced password change or missing session: already redirected. */
         });
     }
 

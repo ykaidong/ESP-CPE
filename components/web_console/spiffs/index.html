@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ESP-CPE 管理后台</title>
+  <title>系统状态 - ESP-CPE 管理后台</title>
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/cpe.css">
   <link rel="icon" href="./img/favicon.ico">
@@ -16,13 +16,9 @@
     <div class="content-base flex">
       <div class="left-base" id="leftMenu"></div>
       <div class="right-base">
-        <div class="page-header">
-          <span class="header-title-one active-title" id="tab-network">网络状态</span>
-          <span>/</span>
-          <span class="header-title-two" id="tab-clients">客户端列表</span>
-        </div>
+        <div class="page-header"></div>
         <div class="status-banner" id="status-banner"></div>
-        <div class="page-content" id="networkShow">
+        <div class="page-content">
           <div class="page-title">基本状态</div>
           <div class="stat-grid">
             <div class="stat-card">
@@ -55,26 +51,10 @@
                 <span class="stat-value" id="client-count-top">--</span>
               </div>
             </div>
-          </div>
-
-          <div class="page-title">设备状态</div>
-          <div class="stat-grid stat-grid-compact">
             <div class="stat-card stat-card-plain">
               <div class="stat-body">
                 <span class="stat-label">运行时长</span>
                 <span class="stat-value" id="connect-time">--</span>
-              </div>
-            </div>
-            <div class="stat-card stat-card-plain">
-              <div class="stat-body">
-                <span class="stat-label">已连接数</span>
-                <span class="stat-value" id="connect-count">--</span>
-              </div>
-            </div>
-            <div class="stat-card stat-card-plain">
-              <div class="stat-body">
-                <span class="stat-label">剩余连接数</span>
-                <span class="stat-value" id="remain-count">--</span>
               </div>
             </div>
           </div>
@@ -105,61 +85,7 @@
             <div class="detail-item detail-item-wide"><span class="detail-label">最近错误</span><span class="detail-value" id="status-last-error">--</span></div>
           </div>
 
-          <div class="page-title">定时维护</div>
-          <div class="stat-grid">
-            <div class="stat-card stat-card-plain">
-              <div class="stat-body">
-                <span class="stat-label">ECM 网卡重建</span>
-                <span class="stat-value" id="maint-ecm-value">--</span>
-                <span class="stat-hint" id="maint-ecm-hint">--</span>
-              </div>
-            </div>
-            <div class="stat-card stat-card-plain">
-              <div class="stat-body">
-                <span class="stat-label">整机重启</span>
-                <span class="stat-value" id="maint-reboot-value">--</span>
-                <span class="stat-hint" id="maint-reboot-hint">--</span>
-              </div>
-            </div>
-            <div class="stat-card stat-card-plain">
-              <div class="stat-body">
-                <span class="stat-label">维护状态</span>
-                <span class="stat-value" id="maint-state">--</span>
-                <span class="stat-hint" id="maint-state-hint">--</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="maint-editor">
-            <label class="maint-field" for="maint-ecm">
-              <span class="maint-field-label">ECM 重建周期</span>
-              <span class="maint-input-wrap">
-                <input id="maint-ecm" type="number" min="0" max="43200" step="1"
-                       inputmode="numeric" autocomplete="off">
-                <span class="maint-unit">分钟</span>
-              </span>
-            </label>
-            <label class="maint-field" for="maint-reboot">
-              <span class="maint-field-label">整机重启周期</span>
-              <span class="maint-input-wrap">
-                <input id="maint-reboot" type="number" min="0" max="43200" step="1"
-                       inputmode="numeric" autocomplete="off">
-                <span class="maint-unit">分钟</span>
-              </span>
-            </label>
-            <button class="save-btn" type="button" id="btn-save-maint">保存</button>
-          </div>
-          <p class="maint-note">0 表示关闭。ECM 重建只重建 4G 网卡，不重启设备；整机重启前会尝试复位模组。保存后倒计时从当前时刻重新开始。</p>
-
-          <div class="page-title">系统管理</div>
-          <div class="system-actions">
-            <button class="save-btn" type="button" id="btn-change-password">修改管理员密码</button>
-            <button class="danger-btn" type="button" id="btn-factory-reset">恢复出厂设置</button>
-          </div>
-        </div>
-
-        <div class="page-content" id="customerShow" hidden>
-          <div class="page-title">在线客户端</div>
+          <div class="page-title" id="client-list-title">在线客户端</div>
           <div class="page-detail">
             <div class="client-list-scroll">
               <table class="tableStyle tCenter client-list">

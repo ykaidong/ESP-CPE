@@ -224,6 +224,12 @@ var CPE = (function () {
         return postJson('/api/factory_reset', {}).then(function () {
             clearCsrf();
             window.alert('已恢复出厂设置（Wi-Fi 名称与口令保留），设备正在重启，请重新登录。');
+            /* The AP restarts with the factory settings; go back to the login
+             * page once it has had time to come back instead of leaving a dead
+             * session on screen. */
+            window.setTimeout(function () {
+                window.location.href = '/login.html';
+            }, 15000);
         });
     }
 
@@ -298,6 +304,38 @@ var CPE = (function () {
         return document.getElementById(id);
     }
 
+    function setText(id, text) {
+        var node = byId(id);
+        if (node) {
+            node.textContent = text;
+        }
+    }
+
+    /* Re-append rows only when the order really changed: moving nodes on every
+     * poll drops the focus and the scroll anchor on a phone. Rows carrying
+     * ignoreClass (the placeholder row) are left where they are. */
+    function syncRows(container, rows, ignoreClass) {
+        var current = [];
+        for (var i = 0; i < container.children.length; i++) {
+            var child = container.children[i];
+            if (!ignoreClass || child.className !== ignoreClass) {
+                current.push(child);
+            }
+        }
+        var changed = current.length !== rows.length;
+        for (var j = 0; !changed && j < rows.length; j++) {
+            if (current[j] !== rows[j]) {
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return;
+        }
+        rows.forEach(function (row) {
+            container.appendChild(row);
+        });
+    }
+
     /* Collapsible left menu, shared by every console page. */
     function bindMenu() {
         var menuButton = byId('menuBtn');
@@ -324,24 +362,6 @@ var CPE = (function () {
         }
     }
 
-    /* Show one of two tab panels and mark the matching tab as active. Returns
-     * false when any of the elements is missing. Page-specific side effects
-     * (polling, pending edits) stay in the caller. */
-    function showTab(showFirst, firstPanelId, secondPanelId, firstTabId, secondTabId) {
-        var firstPanel = byId(firstPanelId);
-        var secondPanel = byId(secondPanelId);
-        var firstTab = byId(firstTabId);
-        var secondTab = byId(secondTabId);
-        if (!firstPanel || !secondPanel || !firstTab || !secondTab) {
-            return false;
-        }
-        firstPanel.style.display = showFirst ? 'block' : 'none';
-        secondPanel.style.display = showFirst ? 'none' : 'block';
-        firstTab.className = showFirst ? 'header-title-one active-title' : 'header-title-one';
-        secondTab.className = showFirst ? 'header-title-two' : 'header-title-two active-title';
-        return true;
-    }
-
     function createElement(tag, props) {
         var node = document.createElement(tag);
         if (props) {
@@ -361,46 +381,37 @@ var CPE = (function () {
         return node;
     }
 
-    /* Password change modal, shared by the forced first-login flow and the
-     * voluntary "change password" action in the system panel. */
-    function openPasswordModal(mandatory) {
+    /* Shared modal: title, hint, one or more inputs and an error line.
+     * options.submit(values) returns a promise; a rejection is shown in the
+     * dialog, which stays open. Without cancelText the dialog is mandatory:
+     * it cannot be dismissed by clicking outside or pressing a cancel button. */
+    function openFormDialog(options) {
         return new Promise(function (resolve, reject) {
             var overlay = createElement('div', { className: 'modal-overlay' });
             var panel = createElement('div', { className: 'modal-panel' });
-            var title = createElement('div', {
-                className: 'modal-title',
-                text: mandatory ? '首次登录，请修改初始密码' : '修改管理员密码'
-            });
-            var hint = createElement('div', {
-                className: 'modal-hint',
-                text: mandatory
-                    ? '为保障设备安全，必须修改初始密码后才能继续使用管理后台。'
-                    : '密码长度必须为 8~63 个字符。'
-            });
-            var oldInput = createElement('input', {
-                type: 'password',
-                className: 'modal-input',
-                placeholder: '当前密码',
-                autocomplete: 'current-password',
-                maxlength: '63'
-            });
-            var newInput = createElement('input', {
-                type: 'password',
-                className: 'modal-input',
-                placeholder: '新密码（8~63 位）',
-                autocomplete: 'new-password',
-                maxlength: '63'
-            });
-            var confirmInput = createElement('input', {
-                type: 'password',
-                className: 'modal-input',
-                placeholder: '确认新密码',
-                autocomplete: 'new-password',
-                maxlength: '63'
-            });
+            var title = createElement('div', { className: 'modal-title', text: options.title });
+            var hint = createElement('div', { className: 'modal-hint', text: options.hint || '' });
             var errorBox = createElement('div', { className: 'modal-error' });
             var actions = createElement('div', { className: 'modal-actions' });
-            var submit = createElement('button', { className: 'save-btn', type: 'button', text: '确认修改' });
+            var submit = createElement('button', {
+                className: 'save-btn',
+                type: 'button',
+                text: options.submitText || '确定'
+            });
+            var inputs = (options.inputs || []).map(function (spec) {
+                var input = createElement('input', {
+                    type: spec.type || 'text',
+                    className: 'modal-input',
+                    placeholder: spec.placeholder || '',
+                    autocomplete: spec.autocomplete || 'off',
+                    maxlength: spec.maxlength
+                });
+                if (spec.value) {
+                    input.value = spec.value;
+                }
+                return input;
+            });
+            var cancel = null;
 
             function close() {
                 if (overlay.parentNode) {
@@ -408,73 +419,152 @@ var CPE = (function () {
                 }
             }
 
-            function finish() {
+            function dismiss() {
                 close();
-                resolve();
+                reject(new Error('cancelled'));
             }
 
-            function submitChange() {
+            function values() {
+                return inputs.map(function (input) {
+                    return input.value;
+                });
+            }
+
+            function setBusy(busy) {
+                submit.disabled = busy;
+                if (cancel) {
+                    cancel.disabled = busy;
+                }
+                inputs.forEach(function (input) {
+                    input.disabled = busy;
+                });
+            }
+
+            function submitDialog() {
+                var message = options.validate ? options.validate(values()) : null;
+                if (message) {
+                    errorBox.textContent = message;
+                    if (inputs[0]) {
+                        inputs[0].focus();
+                    }
+                    return;
+                }
                 errorBox.textContent = '';
-                var oldPassword = oldInput.value;
-                var newPassword = newInput.value;
-                if (newPassword.length < 8 || newPassword.length > 63) {
-                    errorBox.textContent = '新密码长度必须为 8~63 个字符';
-                    return;
-                }
-                if (newPassword !== confirmInput.value) {
-                    errorBox.textContent = '两次输入的新密码不一致';
-                    return;
-                }
-                submit.disabled = true;
-                postJson('/api/password', {
-                    old_password: oldPassword,
-                    new_password: newPassword
-                }).then(function () {
-                    clearCsrf();
-                    window.alert('密码修改成功，请使用新密码重新登录。');
-                    window.location.href = '/login.html';
-                    finish();
+                setBusy(true);
+                options.submit(values()).then(function () {
+                    close();
+                    resolve();
                 }).catch(function (error) {
-                    submit.disabled = false;
+                    setBusy(false);
                     errorBox.textContent = errorText(error);
                 });
             }
 
-            submit.addEventListener('click', submitChange);
-            [oldInput, newInput, confirmInput].forEach(function (input) {
+            if (options.cancelText) {
+                cancel = createElement('button', {
+                    className: 'cancel-btn',
+                    type: 'button',
+                    text: options.cancelText
+                });
+                cancel.addEventListener('click', dismiss);
+                overlay.addEventListener('click', function (event) {
+                    if (event.target === overlay) {
+                        dismiss();
+                    }
+                });
+            }
+
+            submit.addEventListener('click', submitDialog);
+            inputs.forEach(function (input) {
                 input.addEventListener('keydown', function (event) {
                     if (event.key === 'Enter') {
-                        submitChange();
+                        submitDialog();
                     }
                 });
             });
 
-            actions.appendChild(submit);
-            if (!mandatory) {
-                var cancel = createElement('button', { className: 'cancel-btn', type: 'button', text: '取消' });
-                cancel.addEventListener('click', function () {
-                    close();
-                    reject(new Error('cancelled'));
-                });
+            if (cancel) {
                 actions.appendChild(cancel);
             }
-
+            actions.appendChild(submit);
             panel.appendChild(title);
             panel.appendChild(hint);
-            panel.appendChild(oldInput);
-            panel.appendChild(newInput);
-            panel.appendChild(confirmInput);
+            inputs.forEach(function (input) {
+                panel.appendChild(input);
+            });
             panel.appendChild(errorBox);
             panel.appendChild(actions);
             overlay.appendChild(panel);
             document.body.appendChild(overlay);
-            oldInput.focus();
+            if (inputs[0]) {
+                inputs[0].focus();
+                if (options.selectValue) {
+                    inputs[0].select();
+                }
+            }
         });
     }
 
-    /* Fetch the status once; force the password change when the server says
-     * the initial password is still in use. */
-    function bootstrap() {
+    /* Password change modal, shared by the forced first-login flow and the
+     * voluntary "change password" action in the system panel. */
+    function openPasswordModal(mandatory) {
+        return openFormDialog({
+            title: mandatory ? '首次登录，请修改初始密码' : '修改管理员密码',
+            hint: mandatory
+                ? '为保障设备安全，必须修改初始密码后才能继续使用管理后台。'
+                : '密码长度必须为 8~63 个字符。',
+            inputs: [
+                {
+                    type: 'password',
+                    placeholder: '当前密码',
+                    autocomplete: 'current-password',
+                    maxlength: '63'
+                },
+                {
+                    type: 'password',
+                    placeholder: '新密码（8~63 位）',
+                    autocomplete: 'new-password',
+                    maxlength: '63'
+                },
+                {
+                    type: 'password',
+                    placeholder: '确认新密码',
+                    autocomplete: 'new-password',
+                    maxlength: '63'
+                }
+            ],
+            submitText: '确认修改',
+            cancelText: mandatory ? null : '取消',
+            validate: function (values) {
+                if (values[1].length < 8 || values[1].length > 63) {
+                    return '新密码长度必须为 8~63 个字符';
+                }
+                if (values[1] !== values[2]) {
+                    return '两次输入的新密码不一致';
+                }
+                return null;
+            },
+            submit: function (values) {
+                return postJson('/api/password', {
+                    old_password: values[0],
+                    new_password: values[1]
+                }).then(function () {
+                    clearCsrf();
+                    window.alert('密码修改成功，请使用新密码重新登录。');
+                    window.location.href = '/login.html';
+                });
+            }
+        });
+    }
+
+    /* Entry point of every console page: without a CSRF token this browser has
+     * no session to probe, so go to the login page instead of firing a 401.
+     * The status call doubles as the forced-first-login password gate. */
+    function guardSession() {
+        if (!getCsrf()) {
+            redirectToLogin();
+            return Promise.reject(new Error('unauthorized'));
+        }
         return getStatus().then(function (status) {
             if (status.must_change) {
                 return openPasswordModal(true).then(function () {
@@ -492,14 +582,16 @@ var CPE = (function () {
         getJson: getJson,
         postJson: postJson,
         getStatus: getStatus,
-        bootstrap: bootstrap,
+        guardSession: guardSession,
         logout: logout,
         factoryReset: factoryReset,
         openPasswordModal: openPasswordModal,
+        openFormDialog: openFormDialog,
         errorText: errorText,
         createElement: createElement,
         byId: byId,
-        bindMenu: bindMenu,
-        showTab: showTab
+        setText: setText,
+        syncRows: syncRows,
+        bindMenu: bindMenu
     };
 }());

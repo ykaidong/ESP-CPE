@@ -17,6 +17,7 @@
     var NAV_ITEMS = [
         { href: 'index.html', text: '系统状态', pages: ['/', '/index.html'] },
         { href: 'wlan.html', text: 'WLAN设置', pages: ['/wlan.html'] },
+        { href: 'system.html', text: '系统设置', pages: ['/system.html'] },
         { href: 'upgrade.html', text: '系统升级', pages: ['/upgrade.html'] },
         { href: 'sms.html', text: '短信', pages: ['/sms.html'] }
     ];
@@ -74,27 +75,51 @@
         }
     }
 
-    function renderNav() {
+    function activeItem() {
+        var path = window.location.pathname;
+        for (var i = 0; i < NAV_ITEMS.length; i++) {
+            if (NAV_ITEMS[i].pages.indexOf(path) !== -1) {
+                return NAV_ITEMS[i];
+            }
+        }
+        return null;
+    }
+
+    function renderNav(item) {
         var nav = document.getElementById('leftMenu');
         if (!nav) {
             return;
         }
-        var path = window.location.pathname;
         var list = document.createElement('ul');
-        NAV_ITEMS.forEach(function (item) {
-            var entry = document.createElement('li');
+        NAV_ITEMS.forEach(function (entry) {
+            var element = document.createElement('li');
             var link = document.createElement('a');
-            link.href = item.href;
-            link.textContent = item.text;
-            if (item.pages.indexOf(path) !== -1) {
+            link.href = entry.href;
+            link.textContent = entry.text;
+            if (entry === item) {
                 link.className = 'content';
             }
-            entry.appendChild(link);
-            list.appendChild(entry);
+            element.appendChild(link);
+            list.appendChild(element);
         });
         nav.appendChild(list);
     }
 
+    /* The page title above the content is generated from the same NAV_ITEMS
+     * entry, so renaming a page only touches this file. */
+    function renderPageTitle(item) {
+        var header = document.querySelector('.page-header');
+        if (!header || !item || header.children.length > 0) {
+            return;
+        }
+        var title = document.createElement('span');
+        title.className = 'header-title-one';
+        title.textContent = item.text;
+        header.appendChild(title);
+    }
+
+    var current = activeItem();
     renderHeader(document.getElementById('leftMenu') !== null);
-    renderNav();
+    renderNav(current);
+    renderPageTitle(current);
 }());

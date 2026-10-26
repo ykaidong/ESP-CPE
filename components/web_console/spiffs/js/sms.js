@@ -16,6 +16,7 @@
     var inFlight = false;
     var sending = false;
     var rows = {};
+    var bannerKind = '';
 
     function byId(id) {
         return CPE.byId(id);
@@ -26,6 +27,7 @@
         if (!b) return;
         b.textContent = text || '';
         b.className = cls ? ('status-banner ' + cls) : 'status-banner';
+        bannerKind = cls || '';
     }
 
     function setFormEnabled(enabled) {
@@ -40,24 +42,30 @@
         if (btn) btn.disabled = !enabled;
     }
 
-    /* Rough client-side length hint; the server is authoritative. JS strings are
-     * UTF-16, so text.length already equals the UCS2 unit count the server
-     * enforces (160 for pure ASCII, 70 code units otherwise). */
+    /* The server applies 160 UCS2 units for pure ASCII and 70 otherwise; JS
+     * strings are UTF-16, so text.length is already the unit count. */
+    function textLimit(value) {
+        for (var i = 0; i < value.length; i++) {
+            if (value.charCodeAt(i) >= 128) {
+                return 70;
+            }
+        }
+        return 160;
+    }
+
     function updateCount() {
         var text = byId('sms-text');
         var count = byId('sms-count');
         if (!text || !count) return;
 
         var value = text.value;
-        var ascii = true;
-        for (var i = 0; i < value.length; i++) {
-            if (value.charCodeAt(i) >= 128) {
-                ascii = false;
-                break;
-            }
-        }
-        var limit = ascii ? 160 : 70;
+        var limit = textLimit(value);
         var units = value.length;
+        /* Follow the active limit so the field stops accepting text instead of
+         * letting the server reject it; a paste can still overshoot. */
+        if (text.maxLength !== limit) {
+            text.maxLength = limit;
+        }
         count.textContent = units + ' / ' + limit;
         count.className = units > limit ? 'sms-count over' : 'sms-count';
     }
@@ -144,21 +152,7 @@
             }
         });
 
-        /* Only re-append when the order really changed: moving nodes on every
-         * poll drops the focus and makes the table jump. */
-        var current = [];
-        for (var i = 0; i < body.children.length; i++) {
-            current.push(body.children[i]);
-        }
-        var changed = current.length !== order.length;
-        for (var j = 0; !changed && j < order.length; j++) {
-            if (current[j] !== order[j]) {
-                changed = true;
-            }
-        }
-        if (changed) {
-            order.forEach(function (row) { body.appendChild(row); });
-        }
+        CPE.syncRows(body, order);
 
         var empty = byId('sms-empty');
         if (empty) empty.textContent = list.length === 0 ? '收件箱为空' : '';
@@ -185,7 +179,11 @@
         inFlight = true;
         CPE.getJson(LIST_URL).then(function (data) {
             setFormEnabled(true);
-            setBanner('');
+            /* A successful read only retires a connection error; an explicit
+             * result message ("发送成功") must stay until the next action. */
+            if (bannerKind === 'status-banner-warn') {
+                setBanner('');
+            }
             renderStorage(data);
             renderList(data);
         }).catch(function (error) {
@@ -218,6 +216,10 @@
             setBanner('号码和内容都不能为空。', 'status-banner-warn');
             return;
         }
+        if (text.value.length > textLimit(text.value)) {
+            setBanner('短信内容过长（ASCII 最多 160 字符，中文最多 70 字）。', 'status-banner-warn');
+            return;
+        }
         sending = true;
         setFormEnabled(false);
         if (timer) {
@@ -240,10 +242,6 @@
     }
 
     function init() {
-        if (!CPE.getCsrf()) {
-            window.location.href = '/login.html';
-            return;
-        }
         CPE.bindMenu();
 
         var btn = byId('sms-send-btn');
@@ -258,10 +256,10 @@
             if (!document.hidden) refreshNow();
         });
 
-        CPE.bootstrap().then(function () {
+        CPE.guardSession().then(function () {
             load();
         }).catch(function () {
-            /* Forced password change already redirected to the login page. */
+            /* Forced password change or missing session: already redirected. */
         });
     }
 
