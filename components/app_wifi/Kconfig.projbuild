@@ -1,5 +1,15 @@
 menu "CPE SoftAP"
 
+    config CPE_WIFI_COUNTRY_CODE
+        string "Wi-Fi country code"
+        default "CN"
+        help
+            ISO/IEC 3166-1 alpha-2 code passed to esp_wifi_set_country_code(),
+            e.g. "CN", "US", "JP". Espressif's default "01" (world safe) only
+            allows 2.4 GHz channels 1-11, so channels 12 and 13 require a
+            country code that permits them. Supported codes are listed in
+            esp_wifi.h.
+
     config SERVER_IP
         string "WiFi AP IP Address"
         default "192.168.4.1"

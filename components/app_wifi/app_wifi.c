@@ -370,6 +370,17 @@ esp_err_t app_wifi_start(void)
         goto fail;
     }
 
+    /* The IDF default country is "01" (world safe), which only allows channels
+     * 1-11. The console accepts 1-13, so the regulatory domain must be widened
+     * explicitly or the driver rejects 12/13 with ESP_ERR_INVALID_ARG. */
+    esp_err_t cc_err = esp_wifi_set_country_code(CONFIG_CPE_WIFI_COUNTRY_CODE, true);
+    if (cc_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set Wi-Fi country code \"%s\": %s; channels 12/13 stay unavailable",
+                 CONFIG_CPE_WIFI_COUNTRY_CODE, esp_err_to_name(cc_err));
+    } else {
+        ESP_LOGI(TAG, "Wi-Fi country code set to \"%s\"", CONFIG_CPE_WIFI_COUNTRY_CODE);
+    }
+
     err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to apply AP configuration: %s", esp_err_to_name(err));
