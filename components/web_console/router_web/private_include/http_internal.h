@@ -298,6 +298,7 @@ esp_err_t api_factory_reset_post_handler(httpd_req_t *req);
 esp_err_t api_system_reboot_post_handler(httpd_req_t *req);
 esp_err_t api_ota_status_get_handler(httpd_req_t *req);
 esp_err_t api_ota_upload_post_handler(httpd_req_t *req);
+esp_err_t api_sms_notify_get_handler(httpd_req_t *req);
 esp_err_t api_sms_list_get_handler(httpd_req_t *req);
 esp_err_t api_sms_send_post_handler(httpd_req_t *req);
 esp_err_t api_sms_delete_post_handler(httpd_req_t *req);

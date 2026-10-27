@@ -1,12 +1,16 @@
 /*
  * SMS page. Device data is rendered with textContent only, never innerHTML.
- * The list is polled while the page is visible; rows are reused between polls
- * so the table no longer flickers, and an in-flight guard stops a slow CMGL
- * from overlapping with the next poll (the AT port rejects concurrent calls).
+ * Polling is two-tier while the page is visible: a cheap notification endpoint
+ * (no AT session) carries a generation counter, and only a changed counter
+ * triggers the full listing, which runs CMGL over the modem. Rows are reused
+ * between listings so the table no longer flickers, and an in-flight guard
+ * stops a slow CMGL from overlapping with the next poll (the AT port rejects
+ * concurrent calls).
  */
 'use strict';
 
 (function () {
+    var NOTIFY_URL = '/api/sms/notify';
     var LIST_URL = '/api/sms/list';
     var SEND_URL = '/api/sms/send';
     var DELETE_URL = '/api/sms/delete';
@@ -17,6 +21,13 @@
     var sending = false;
     var rows = {};
     var bannerKind = '';
+    /* Generation and readiness of the last listing that succeeded; null until
+     * then, so the first poll always lists. */
+    var lastGeneration = null;
+    var lastReady = null;
+    /* Set by refreshNow(): list even when the generation did not move (a sent
+     * or deleted message changes storage without raising an indication). */
+    var forceList = false;
 
     function byId(id) {
         return CPE.byId(id);
@@ -166,24 +177,22 @@
 
     function scheduleNext() {
         if (timer) clearTimeout(timer);
-        timer = setTimeout(load, POLL_MS);
+        timer = setTimeout(poll, POLL_MS);
     }
 
     function refreshNow() {
         if (timer) clearTimeout(timer);
         timer = null;
-        load();
+        forceList = true;
+        poll();
     }
 
-    function load() {
-        /* Sending owns the modem for a few seconds; a list request started
-         * meanwhile would only fight it for the single AT session. */
-        if (sending || inFlight) {
-            scheduleNext();
-            return;
-        }
-        inFlight = true;
-        CPE.getJson(LIST_URL).then(function (data) {
+    /* Full listing. Resolves only on success, so the caller keeps the old
+     * generation and tries again on the next poll if this one fails. */
+    function loadList(generation, ready) {
+        return CPE.getJson(LIST_URL).then(function (data) {
+            lastGeneration = generation;
+            lastReady = ready;
             setFormEnabled(true);
             /* A successful read only retires a connection error; an explicit
              * result message ("发送成功") must stay until the next action. */
@@ -192,13 +201,35 @@
             }
             renderStorage(data);
             renderList(data);
-        }).catch(function (error) {
-            if (error.status === 501 || error.code === 'sms_not_supported') {
+        });
+    }
+
+    function poll() {
+        /* Sending owns the modem for a few seconds; a request started
+         * meanwhile would only fight it for the single AT session. */
+        if (sending || inFlight) {
+            scheduleNext();
+            return;
+        }
+        inFlight = true;
+        CPE.getJson(NOTIFY_URL).then(function (data) {
+            var ready = data.ready === true;
+            var generation = data.generation;
+            if (!ready) {
+                lastGeneration = generation;
+                lastReady = false;
                 setFormEnabled(false);
                 setBanner('当前模组不支持短信功能（4G 数据不受影响）。', 'status-banner-info');
-            } else {
-                setBanner('读取短信失败，正在重试。', 'status-banner-warn');
+                return;
             }
+            if (!forceList && lastReady === true && lastGeneration === generation) {
+                setFormEnabled(true);
+                return;
+            }
+            forceList = false;
+            return loadList(generation, ready);
+        }).catch(function () {
+            setBanner('读取短信失败，正在重试。', 'status-banner-warn');
         }).then(function () {
             inFlight = false;
             scheduleNext();
@@ -263,7 +294,7 @@
         });
 
         CPE.guardSession().then(function () {
-            load();
+            poll();
         }).catch(function () {
             /* Forced password change or missing session: already redirected. */
         });

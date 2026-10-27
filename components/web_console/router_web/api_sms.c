@@ -35,6 +35,20 @@ typedef struct {
     size_t count;
 } sms_delete_job_t;
 
+/* -------------------------------- notify --------------------------------- */
+
+/* Cheap poll: no AT session, so the console can check for changes often and
+ * only pay for a full listing when there is something new. */
+esp_err_t api_sms_notify_get_handler(httpd_req_t *req)
+{
+    cpe_web_sbuf_t sb;
+    cpe_web_sbuf_init(&sb, 64);
+    cpe_web_sbuf_appendf(&sb, "{\"status\":\"ok\",\"generation\":%u,\"ready\":%s}",
+                         (unsigned)cpe_sms_inbox_generation(),
+                         cpe_sms_state() == CPE_SMS_READY ? "true" : "false");
+    return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
+}
+
 /* --------------------------------- list ---------------------------------- */
 
 /* Storage status as the UI needs it: unread styling and the direction of the

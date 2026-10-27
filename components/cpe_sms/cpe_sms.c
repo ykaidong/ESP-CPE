@@ -52,6 +52,14 @@ static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_op_lock;
 static int64_t s_last_send_us;
 static TaskHandle_t s_task;
+/* Bumped for every change the console must notice (a +CMTI, a prune delete).
+ * The console polls this instead of re-reading the whole list each time. */
+static uint32_t s_inbox_gen;
+
+static void sms_touch_inbox(void)
+{
+    (void)__atomic_add_fetch(&s_inbox_gen, 1, __ATOMIC_RELAXED);
+}
 
 static cpe_sms_state_t sms_get_state(void)
 {
@@ -525,6 +533,7 @@ static esp_err_t sms_prune_body(const cpe_at_io_t *io, void *arg)
     }
     ESP_LOGI(TAG, "SMS storage full (%d/%d), deleted oldest read message (%u part(s))",
              used, total, (unsigned)victim->index_count);
+    sms_touch_inbox();
 
     free(raw);
     free(list);
@@ -546,13 +555,14 @@ static bool sms_maintain(void)
 /* -------------------------------- task ---------------------------------- */
 
 /* New-message indications name the storage slot only; the body is fetched by
- * the regular list operation. */
+ * the list operation the console runs once the generation changes. */
 static void sms_urc_new_message(const char *line, void *ctx)
 {
     (void)ctx;
     int index = 0;
     if (cpe_sms_parse_cmti(line, &index)) {
         ESP_LOGI(TAG, "New SMS at storage index %d", index);
+        sms_touch_inbox();
     }
 }
 
@@ -642,6 +652,11 @@ cpe_sms_state_t cpe_sms_state(void)
     return sms_get_state();
 }
 
+uint32_t cpe_sms_inbox_generation(void)
+{
+    return __atomic_load_n(&s_inbox_gen, __ATOMIC_RELAXED);
+}
+
 #else /* !(CONFIG_CPE_SMS_ENABLE && CONFIG_CPE_AT_ENABLE) */
 
 esp_err_t cpe_sms_init(void) { return ESP_OK; }
@@ -652,5 +667,6 @@ esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_st
 { (void)number; (void)text; (void)err_str; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout_ms)
 { (void)indexes; (void)count; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
+uint32_t cpe_sms_inbox_generation(void) { return 0; }
 
 #endif /* CONFIG_CPE_SMS_ENABLE */
