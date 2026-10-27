@@ -114,12 +114,18 @@
             var key = String(m.index);
             seen[key] = true;
 
+            /* 2 and 3 are submits stored by this device: the address is the
+             * recipient and there is no delivery timestamp. */
+            var outgoing = m.stat === 'sent' || m.stat === 'unsent';
+            var from = (outgoing ? '→ ' : '') + (m.from || '');
+            var when = outgoing ? (m.stat === 'sent' ? '已发送' : '草稿') : (m.time || '');
+
             var row = rows[key];
             if (!row) {
                 row = document.createElement('tr');
-                row.appendChild(makeCell(m.from || '', 'sms-from'));
+                row.appendChild(makeCell(from, 'sms-from'));
                 row.appendChild(makeCell(displayBody(m), 'sms-body'));
-                row.appendChild(makeCell(m.time || '', 'sms-time'));
+                row.appendChild(makeCell(when, 'sms-time'));
 
                 var opCell = document.createElement('td');
                 opCell.className = 'sms-op';
@@ -135,12 +141,12 @@
 
                 rows[key] = row;
             } else {
-                row.children[0].textContent = m.from || '';
+                row.children[0].textContent = from;
                 row.children[1].textContent = displayBody(m);
-                row.children[2].textContent = m.time || '';
+                row.children[2].textContent = when;
             }
             row.smsIndexes = m.indexes || [m.index];
-            row.className = m.unread ? 'sms-unread' : '';
+            row.className = m.stat === 'unread' ? 'sms-unread' : '';
             order.push(row);
         });
 
@@ -155,7 +161,7 @@
         CPE.syncRows(body, order);
 
         var empty = byId('sms-empty');
-        if (empty) empty.textContent = list.length === 0 ? '收件箱为空' : '';
+        if (empty) empty.textContent = list.length === 0 ? '暂无短信' : '';
     }
 
     function scheduleNext() {

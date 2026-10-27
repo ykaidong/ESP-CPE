@@ -5,7 +5,7 @@
  *
  * Tests for components/cpe_sms/cpe_sms_pdu.c. Vectors are SMS-DELIVER PDUs
  * (SMSC address included) with SCA absent and SCTS 25/10/25,10:00:00+32 unless
- * stated otherwise.
+ * stated otherwise; SMS-SUBMIT vectors carry no timestamp by definition.
  */
 
 #include <stdio.h>
@@ -38,6 +38,16 @@
 #define PDU_WITH_SCA \
     "07919730071111F0040D91683108108300F000005201520100002302C834"
 
+/* SMS-SUBMIT records: stored messages written by this device. */
+#define PDU_SUBMIT_7BIT \
+    "0001000D91683108108300F0000002C834"
+#define PDU_SUBMIT_UCS2_VP \
+    "0009000D91683108108300F00008A7044E2D6587"
+#define PDU_SUBMIT_CONCAT1 \
+    "0059000D91683108108300F000086210100000002309060804123403014E2D"
+#define PDU_SUBMIT_CONCAT2 \
+    "0059000D91683108108300F000086210100000002309060804123403026587"
+
 /* Full 140-octet user data (a concatenation segment of 16-bit reference). */
 #define PDU_FULL_UCS2_CONCAT \
     "00440D91683108108300F00008520152010000238D0608041234030100410041" \
@@ -66,7 +76,7 @@
 static void decode_ok(const char *hex, cpe_sms_msg_t *m)
 {
     memset(m, 0, sizeof(*m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(hex, m), CPE_SMS_PDU_OK);
+    HT_CHECK_INT(cpe_sms_pdu_decode(hex, m), CPE_SMS_PDU_OK);
 }
 
 static void test_ucs2_body(void)
@@ -203,31 +213,31 @@ static void test_malformed(void)
     cpe_sms_msg_t m;
 
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(NULL, &m), CPE_SMS_PDU_MALFORMED);
+    HT_CHECK_INT(cpe_sms_pdu_decode(NULL, &m), CPE_SMS_PDU_MALFORMED);
 
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver("", &m), CPE_SMS_PDU_MALFORMED);
+    HT_CHECK_INT(cpe_sms_pdu_decode("", &m), CPE_SMS_PDU_MALFORMED);
 
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver("0004ZZ", &m), CPE_SMS_PDU_MALFORMED);
+    HT_CHECK_INT(cpe_sms_pdu_decode("0004ZZ", &m), CPE_SMS_PDU_MALFORMED);
 
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver("000", &m), CPE_SMS_PDU_MALFORMED);
+    HT_CHECK_INT(cpe_sms_pdu_decode("000", &m), CPE_SMS_PDU_MALFORMED);
 
     /* SMSC length announces octets that are not there. */
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver("0799", &m), CPE_SMS_PDU_MALFORMED);
+    HT_CHECK_INT(cpe_sms_pdu_decode("0799", &m), CPE_SMS_PDU_MALFORMED);
 
     /* UDL says six 7-bit octets, the PDU carries five. */
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(
+    HT_CHECK_INT(cpe_sms_pdu_decode(
                      "00040D91683108108300F000005201520100002306C8329BFD0E", &m),
                  CPE_SMS_PDU_MALFORMED);
     HT_CHECK_STR(m.body, "");
 
     /* UCS2 with an odd byte count cannot be decoded. */
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(
+    HT_CHECK_INT(cpe_sms_pdu_decode(
                      "00040D91683108108300F000085201520100002303616263", &m),
                  CPE_SMS_PDU_MALFORMED);
 }
@@ -238,20 +248,41 @@ static void test_unsupported(void)
 
     /* 8-bit user data is not SMS text; the caller keeps the raw hex. */
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(PDU_8BIT, &m), CPE_SMS_PDU_UNSUPPORTED);
+    HT_CHECK_INT(cpe_sms_pdu_decode(PDU_8BIT, &m), CPE_SMS_PDU_UNSUPPORTED);
     HT_CHECK_STR(m.body, "");
 
     /* Compressed user data (DCS bit 5) is not decoded either. */
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(
+    HT_CHECK_INT(cpe_sms_pdu_decode(
                      "00040D91683108108300F000285201520100002306C8329BFD0E01", &m),
                  CPE_SMS_PDU_UNSUPPORTED);
 
-    /* Not an SMS-DELIVER (MTI 1 = SMS-SUBMIT). */
+    /* A status report is not user text. */
     memset(&m, 0, sizeof(m));
-    HT_CHECK_INT(cpe_sms_pdu_decode_deliver(
-                     "00010D91683108108300F000005201520100002306C8329BFD0E01", &m),
-                 CPE_SMS_PDU_UNSUPPORTED);
+    HT_CHECK_INT(cpe_sms_pdu_decode("0002", &m), CPE_SMS_PDU_UNSUPPORTED);
+}
+
+static void test_submit_pdus(void)
+{
+    cpe_sms_msg_t m;
+
+    /* No validity period: MR is skipped, the destination goes to `from`. */
+    decode_ok(PDU_SUBMIT_7BIT, &m);
+    HT_CHECK_STR(m.from, "+8613800138000");
+    HT_CHECK_STR(m.time, "");
+    HT_CHECK_STR(m.body, "Hi");
+    HT_CHECK_INT(m.part_total, 1);
+
+    /* Relative validity period: exactly one octet is skipped. */
+    decode_ok(PDU_SUBMIT_UCS2_VP, &m);
+    HT_CHECK_STR(m.body, "\xe4\xb8\xad\xe6\x96\x87");
+
+    /* Absolute validity period (seven octets) with a concatenation UDH. */
+    decode_ok(PDU_SUBMIT_CONCAT2, &m);
+    HT_CHECK_INT(m.uid, 0x1234);
+    HT_CHECK_INT(m.part_seq, 2);
+    HT_CHECK_INT(m.part_total, 3);
+    HT_CHECK_STR(m.body, "\xe6\x96\x87");
 }
 
 static void test_parse_cmgl_pdu(void)
@@ -332,6 +363,33 @@ static void test_parse_cmgl_pdu_merge(void)
     HT_CHECK_INT(list.items[0].index_count, 2);
 }
 
+static void test_parse_cmgl_pdu_sent(void)
+{
+    /* Status 3 is a stored submit: the destination is the address shown and
+     * the two parts still merge into one message. */
+    const char *raw =
+        "AT+CMGL=4\r\n"
+        "+CMGL: 5,3,,30\r\n"
+        PDU_SUBMIT_CONCAT2 "\r\n"
+        "+CMGL: 6,3,,30\r\n"
+        PDU_SUBMIT_CONCAT1 "\r\n"
+        "OK\r\n";
+
+    cpe_sms_list_t list;
+    HT_CHECK(cpe_sms_parse_cmgl_pdu(raw, &list));
+    HT_CHECK_INT(list.count, 2);
+    HT_CHECK_INT(list.items[0].stat, CPE_SMS_STAT_SENT);
+    HT_CHECK_STR(list.items[0].from, "+8613800138000");
+    HT_CHECK_STR(list.items[0].time, "");
+
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_STR(list.items[0].body, "\xe4\xb8\xad\xe6\x96\x87");
+    HT_CHECK_INT(list.items[0].index_count, 2);
+    HT_CHECK_INT(list.items[0].stat, CPE_SMS_STAT_SENT);
+    HT_CHECK(list.items[0].truncated); /* part 3 of 3 is not in the list */
+}
+
 static void test_parse_cmgl_pdu_limit(void)
 {
     static char raw[8192];
@@ -371,9 +429,11 @@ void test_sms_pdu(void)
     test_empty_body();
     test_malformed();
     test_unsupported();
+    test_submit_pdus();
     test_parse_cmgl_pdu();
     test_parse_cmgl_pdu_undecodable();
     test_parse_cmgl_pdu_merge();
+    test_parse_cmgl_pdu_sent();
     test_parse_cmgl_pdu_limit();
     test_parse_cmgl_pdu_no_terminal();
 }

@@ -37,6 +37,19 @@ typedef struct {
 
 /* --------------------------------- list ---------------------------------- */
 
+/* Storage status as the UI needs it: unread styling and the direction of the
+ * message (2 and 3 are stored submits, i.e. written from this device). */
+static const char *sms_stat_name(cpe_sms_stat_t stat)
+{
+    switch (stat) {
+    case CPE_SMS_STAT_UNREAD: return "unread";
+    case CPE_SMS_STAT_READ:   return "read";
+    case CPE_SMS_STAT_UNSENT: return "unsent";
+    case CPE_SMS_STAT_SENT:   return "sent";
+    default:                  return "unknown";
+    }
+}
+
 static void sms_list_task(void *arg)
 {
     httpd_req_t *req = (httpd_req_t *)arg;
@@ -83,8 +96,8 @@ static void sms_list_task(void *arg)
         if (i > 0) {
             cpe_web_sbuf_append(&sb, ",");
         }
-        cpe_web_sbuf_appendf(&sb, "{\"index\":%d,\"unread\":%s,\"truncated\":%s,\"indexes\":[",
-                             m->index, m->stat == CPE_SMS_STAT_UNREAD ? "true" : "false",
+        cpe_web_sbuf_appendf(&sb, "{\"index\":%d,\"stat\":\"%s\",\"truncated\":%s,\"indexes\":[",
+                             m->index, sms_stat_name(m->stat),
                              m->truncated ? "true" : "false");
         for (uint8_t k = 0; k < m->index_count; k++) {
             cpe_web_sbuf_appendf(&sb, "%s%d", k > 0 ? "," : "", m->indexes[k]);

@@ -3,10 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * SMS-DELIVER PDU decoding: address, DCS, SCTS, UDH concatenation and the
- * three user-data alphabets we care about (7-bit, UCS2). 8-bit user data and
- * compressed text are reported as unsupported so the caller can keep the raw
- * hex instead of inventing text.
+ * SMS-DELIVER and SMS-SUBMIT PDU decoding: address, DCS, timestamp/validity,
+ * UDH concatenation and the user-data alphabets we care about (7-bit, UCS2).
+ * 8-bit user data and compressed text are reported as unsupported so the
+ * caller can keep the raw hex instead of inventing text.
  */
 
 #include <stdio.h>
@@ -239,6 +239,16 @@ static bool decode_alpha(uint8_t toa, const uint8_t *p, size_t octets,
     return true;
 }
 
+/* TP-OA in a deliver, TP-DA in a submit: both use the same encoding. */
+static bool decode_addr(uint8_t toa, const uint8_t *p, size_t octets,
+                        size_t semi_octets, char *dst, size_t cap, bool *truncated)
+{
+    if ((toa & 0x70) == 0x50) {
+        return decode_alpha(toa, p, octets, semi_octets, dst, cap, truncated);
+    }
+    return decode_number(toa, p, octets, semi_octets, dst, cap);
+}
+
 /* Concatenation IE 0x00 (8-bit reference) or 0x08 (16-bit reference). */
 static bool parse_udh(const uint8_t *udh, size_t len, cpe_sms_msg_t *out)
 {
@@ -288,7 +298,7 @@ static int bcd_digit(uint8_t octet, bool high, int *value)
 
 static bool format_scts(const uint8_t *s, char *dst, size_t cap)
 {
-    int d[6];
+    int d[6] = { 0 };
 
     for (int i = 0; i < 6; i++) {
         int tens;
@@ -334,7 +344,7 @@ static int dcs_alphabet(uint8_t dcs)
     return -1; /* reserved 1000xxxx */
 }
 
-cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *out)
+cpe_sms_pdu_status_t cpe_sms_pdu_decode(const char *hex, cpe_sms_msg_t *out)
 {
     uint8_t pdu[PDU_OCTET_MAX];
     size_t n = 0;
@@ -347,7 +357,8 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *
         return CPE_SMS_PDU_MALFORMED;
     }
 
-    /* SMSC address, unused: the phone number that matters is TP-OA. */
+    /* SMSC address, unused: the number that matters is the originator or the
+     * destination. */
     size_t sca = pdu[0];
     if (sca > 12 || 1 + sca >= n) {
         return CPE_SMS_PDU_MALFORMED;
@@ -355,14 +366,23 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *
     pos = 1 + sca;
 
     uint8_t fo = pdu[pos++];
-    if ((fo & 0x03) != 0x00) {
-        return CPE_SMS_PDU_UNSUPPORTED; /* not SMS-DELIVER */
+    uint8_t mti = fo & 0x03;
+    if (mti != 0x00 && mti != 0x01) {
+        return CPE_SMS_PDU_UNSUPPORTED; /* status report, command, reserved */
     }
+    bool submit = (mti == 0x01);
     bool has_udh = (fo & 0x40) != 0;
 
     out->uid = 0;
     out->part_seq = 1;
     out->part_total = 1;
+
+    if (submit) {
+        if (pos >= n) {
+            return CPE_SMS_PDU_MALFORMED;
+        }
+        pos++; /* TP-MR */
+    }
 
     if (pos >= n) {
         return CPE_SMS_PDU_MALFORMED;
@@ -374,20 +394,13 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *
     }
     uint8_t toa = pdu[pos];
     bool truncated = false;
-    if ((toa & 0x70) == 0x50) {
-        if (!decode_alpha(toa, pdu + pos + 1, addr_octets, addr_len, out->from,
-                          sizeof(out->from), &truncated)) {
-            return CPE_SMS_PDU_MALFORMED;
-        }
-    } else {
-        if (!decode_number(toa, pdu + pos + 1, addr_octets, addr_len,
-                           out->from, sizeof(out->from))) {
-            return CPE_SMS_PDU_MALFORMED;
-        }
+    if (!decode_addr(toa, pdu + pos + 1, addr_octets, addr_len, out->from,
+                     sizeof(out->from), &truncated)) {
+        return CPE_SMS_PDU_MALFORMED;
     }
     pos += 1 + addr_octets;
 
-    if (pos + 2 + 7 + 1 > n) {
+    if (pos + 2 > n) {
         return CPE_SMS_PDU_MALFORMED;
     }
     pos++; /* TP-PID */
@@ -399,10 +412,35 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *
     if (alphabet == 1) {
         return CPE_SMS_PDU_UNSUPPORTED; /* 8-bit data, caller keeps the hex */
     }
-    if (!format_scts(pdu + pos, out->time, sizeof(out->time))) {
-        return CPE_SMS_PDU_MALFORMED;
+
+    if (submit) {
+        /* TP-VPF says whether a validity period follows and how long it is. */
+        size_t vp;
+        switch ((fo >> 3) & 0x03) {
+        case 0:
+            vp = 0;
+            break;
+        case 3:
+            vp = 7; /* absolute */
+            break;
+        default:
+            vp = 1; /* relative, either flavour */
+            break;
+        }
+        if (pos + vp + 1 > n) {
+            return CPE_SMS_PDU_MALFORMED;
+        }
+        pos += vp;
+        out->time[0] = '\0'; /* a submit PDU carries no timestamp */
+    } else {
+        if (pos + 7 + 1 > n) {
+            return CPE_SMS_PDU_MALFORMED;
+        }
+        if (!format_scts(pdu + pos, out->time, sizeof(out->time))) {
+            return CPE_SMS_PDU_MALFORMED;
+        }
+        pos += 7;
     }
-    pos += 7;
 
     uint8_t udl = pdu[pos++];
     const uint8_t *ud = pdu + pos;

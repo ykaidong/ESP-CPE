@@ -3,7 +3,8 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * SMS-DELIVER PDU decoding (3GPP TS 23.040), independent of the AT layers.
+ * SMS-DELIVER and SMS-SUBMIT PDU decoding (3GPP TS 23.040), independent of the
+ * AT layers.
  */
 #pragma once
 
@@ -15,12 +16,15 @@ typedef enum {
     CPE_SMS_PDU_UNSUPPORTED, /* valid but not text we can decode (8-bit, ...) */
 } cpe_sms_pdu_status_t;
 
-/* Decode one SMS-DELIVER PDU (SMSC address included, as `AT+CMGL=4` returns it)
- * into `out`. The caller zero-initializes `out`; `stat` is left untouched.
+/* Decode one SMS-DELIVER or SMS-SUBMIT PDU (SMSC address included, as
+ * `AT+CMGL=4` returns it) into `out`. The caller zero-initializes `out`; `stat`
+ * is left untouched.
  *
  * Fills `from`, `time`, `body`, `truncated` and the concatenation fields
- * (`uid`, `part_seq`, `part_total`; 1/1 for a single message). `body` is left
- * empty on failure so the caller can keep the raw hex instead.
+ * (`uid`, `part_seq`, `part_total`; 1/1 for a single message). For a submit,
+ * `from` holds the destination address and `time` stays empty because the PDU
+ * carries no timestamp. `body` is left empty on failure so the caller can keep
+ * the raw hex instead.
  *
  * Returns CPE_SMS_PDU_OK when the text (possibly empty) was decoded. */
-cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *out);
+cpe_sms_pdu_status_t cpe_sms_pdu_decode(const char *hex, cpe_sms_msg_t *out);

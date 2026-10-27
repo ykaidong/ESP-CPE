@@ -157,7 +157,7 @@ static bool parse_cmgl_pdu_header(const char *line, int *index, cpe_sms_stat_t *
  * can still be shown and deleted. */
 static void finish_cmgl_pdu(cpe_sms_msg_t *m, const char *hex)
 {
-    cpe_sms_pdu_status_t status = cpe_sms_pdu_decode_deliver(hex, m);
+    cpe_sms_pdu_status_t status = cpe_sms_pdu_decode(hex, m);
     if (status != CPE_SMS_PDU_OK) {
         m->from[0] = '\0';
         m->time[0] = '\0';

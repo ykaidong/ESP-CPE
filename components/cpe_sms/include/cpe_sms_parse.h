@@ -59,9 +59,9 @@ typedef struct {
 } cpe_sms_list_t;
 
 /* Parse a raw AT+CMGL=4 (PDU mode) response into `out`. Each record is decoded
- * with cpe_sms_pdu_decode_deliver(); a record that cannot be decoded is kept
- * with its raw hex as `body` and `truncated` set. Returns false only for a
- * NULL argument. */
+ * with cpe_sms_pdu_decode(); a record that cannot be decoded is kept with its
+ * raw hex as `body` and `truncated` set. Returns false only for a NULL
+ * argument. */
 bool cpe_sms_parse_cmgl_pdu(const char *raw, cpe_sms_list_t *out);
 
 /* Parse a `+CPMS: "ME",<used>,<total>,"ME",...` response (or the equivalent
