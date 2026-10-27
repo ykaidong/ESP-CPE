@@ -6,10 +6,11 @@ menu "CPE SMS Configuration"
         help
             Adds a management-console page to list/send/delete SMS messages
             using the modem AT interface. Requires AT telemetry (CPE_AT_ENABLE)
-            and a modem that exposes a usable AT port and supports text-mode SMS
-            (AT+CMGF=1). Capability is probed at runtime; on a modem without SMS
-            support the page reports "unsupported" and the 4G data path is
-            unaffected. Sending is rate limited and requires a valid admin
-            session. Disabled by default.
+            and a modem that exposes a usable AT port and supports PDU-mode
+            reception (AT+CMGF=0, AT+CMGL=4) plus text-mode sending
+            (AT+CMGF=1, AT+CMGS). Capability is probed at runtime; on a modem
+            without SMS support the page reports "unsupported" and the 4G data
+            path is unaffected. Sending is rate limited and requires a valid
+            admin session. Disabled by default.
 
 endmenu

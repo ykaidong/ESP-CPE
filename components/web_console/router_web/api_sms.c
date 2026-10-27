@@ -3,10 +3,10 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * SMS endpoints. Listing (CMGL plus one QCMGR per record) and sending can take
- * seconds (CMGL up to 20 s, CMGS up to 60 s), so the AT work runs on a helper
- * task with an async copy of the request - the single HTTP server task must
- * never be blocked.
+ * SMS endpoints. Listing (CMGL in PDU mode) and sending can take seconds (CMGL
+ * up to 20 s, CMGS up to 60 s), so the AT work runs on a helper task with an
+ * async copy of the request - the single HTTP server task must never be
+ * blocked.
  */
 
 #include <stdio.h>
@@ -84,7 +84,7 @@ static void sms_list_task(void *arg)
             cpe_web_sbuf_append(&sb, ",");
         }
         cpe_web_sbuf_appendf(&sb, "{\"index\":%d,\"unread\":%s,\"truncated\":%s,\"indexes\":[",
-                             m->index, cpe_sms_stat_unread(m->stat) ? "true" : "false",
+                             m->index, m->stat == CPE_SMS_STAT_UNREAD ? "true" : "false",
                              m->truncated ? "true" : "false");
         for (uint8_t k = 0; k < m->index_count; k++) {
             cpe_web_sbuf_appendf(&sb, "%s%d", k > 0 ? "," : "", m->indexes[k]);

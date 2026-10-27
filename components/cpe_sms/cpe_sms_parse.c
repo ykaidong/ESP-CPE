@@ -3,16 +3,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Pure parsing/validation for SMS text mode, host-tested.
+ * Pure parsing/validation for SMS, host-tested.
  */
 
-#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "cpe_sms_parse.h"
-#include "cpe_sms_ucs2.h"
+#include "cpe_sms_pdu.h"
+
+_Static_assert(CPE_SMS_MAX_BODY >= CPE_SMS_MAX_PARTS * 201 + 1,
+               "body buffer must hold one full UCS2 segment per part");
+_Static_assert(CPE_SMS_PDU_MAX_HEX >= 2 * (12 + 1 + 140),
+               "PDU hex buffer must hold an SMSC address plus a full TPDU");
 
 bool cpe_sms_number_valid(const char *num)
 {
@@ -95,77 +99,6 @@ bool cpe_sms_text_measure(const char *text, bool *is_ascii, int *units)
     return cp > 0 && cp <= 70;
 }
 
-bool cpe_sms_stat_unread(const char *stat)
-{
-    if (stat == NULL) {
-        return false;
-    }
-    const char *p = stat;
-    while (*p != '\0') {
-        if (tolower((unsigned char)p[0]) == 'u' &&
-            tolower((unsigned char)p[1]) == 'n' &&
-            tolower((unsigned char)p[2]) == 'r' &&
-            tolower((unsigned char)p[3]) == 'e' &&
-            tolower((unsigned char)p[4]) == 'a' &&
-            tolower((unsigned char)p[5]) == 'd') {
-            return true;
-        }
-        p++;
-    }
-    return false;
-}
-
-/* Copy the next comma-separated field of *pp (advancing *pp past the field and
- * its trailing comma) into dst, quotes removed. Returns the field length. */
-static size_t next_field(const char **pp, char *dst, size_t cap)
-{
-    const char *p = *pp;
-    while (*p == ' ') {
-        p++;
-    }
-    bool quoted = (*p == '"');
-    if (quoted) {
-        p++;
-    }
-    size_t n = 0;
-    while (*p != '\0' && (quoted ? *p != '"' : *p != ',')) {
-        if (n + 1 < cap) {
-            dst[n++] = *p;
-        }
-        p++;
-    }
-    if (quoted && *p == '"') {
-        p++;
-    }
-    if (*p == ',') {
-        p++;
-    }
-    *pp = p;
-    dst[n] = '\0';
-    return n;
-}
-
-static void parse_cmgl_header(const char *line, cpe_sms_msg_t *m)
-{
-    const char *p = line + 6; /* skip "+CMGL:" */
-    char small[CPE_SMS_MAX_ADDR];
-    char num_hex[CPE_SMS_MAX_ADDR_HEX];
-
-    next_field(&p, small, sizeof(small));
-    m->index = (int)strtol(small, NULL, 10);
-
-    next_field(&p, small, sizeof(small));
-    snprintf(m->stat, sizeof(m->stat), "%s", small);
-
-    next_field(&p, num_hex, sizeof(num_hex));
-    cpe_sms_ucs2_decode(num_hex, m->from, sizeof(m->from));
-
-    next_field(&p, small, sizeof(small)); /* alpha, unused */
-
-    next_field(&p, small, sizeof(small));
-    snprintf(m->time, sizeof(m->time), "%s", small);
-}
-
 /* A line that ends the list, not part of any message body. The response reader
  * may stop at the "\r" of the final line, so a trailing "\r" is allowed. */
 static bool is_terminal_line(const char *line)
@@ -180,7 +113,68 @@ static bool is_terminal_line(const char *line)
                           strncmp(line, "+CMS ERROR:", 11) == 0));
 }
 
-bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
+/* "+CMGL: <index>,<stat>,[<alpha>],<length>" in PDU mode. The fields after
+ * <stat> are informational, so only the first two are parsed. */
+static bool parse_cmgl_pdu_header(const char *line, int *index, cpe_sms_stat_t *stat)
+{
+    const char *p = line + 6;
+    char *end = NULL;
+
+    while (*p == ' ') {
+        p++;
+    }
+    long idx = strtol(p, &end, 10);
+    if (end == p || idx < 0 || idx > 1000000) {
+        return false;
+    }
+    p = end;
+    while (*p == ' ') {
+        p++;
+    }
+    if (*p != ',') {
+        return false;
+    }
+    p++;
+    while (*p == ' ') {
+        p++;
+    }
+    long st = strtol(p, &end, 10);
+    if (end == p || st < 0 || st > 3) {
+        return false;
+    }
+
+    *index = (int)idx;
+    switch (st) {
+    case 0:  *stat = CPE_SMS_STAT_UNREAD; break;
+    case 1:  *stat = CPE_SMS_STAT_READ; break;
+    case 2:  *stat = CPE_SMS_STAT_UNSENT; break;
+    default: *stat = CPE_SMS_STAT_SENT; break;
+    }
+    return true;
+}
+
+/* Decode the accumulated hex into `m`; on failure keep the hex so the record
+ * can still be shown and deleted. */
+static void finish_cmgl_pdu(cpe_sms_msg_t *m, const char *hex)
+{
+    cpe_sms_pdu_status_t status = cpe_sms_pdu_decode_deliver(hex, m);
+    if (status != CPE_SMS_PDU_OK) {
+        m->from[0] = '\0';
+        m->time[0] = '\0';
+        m->uid = 0;
+        m->part_seq = 1;
+        m->part_total = 1;
+        size_t n = strlen(hex);
+        if (n >= sizeof(m->body)) {
+            n = sizeof(m->body) - 1;
+        }
+        memcpy(m->body, hex, n);
+        m->body[n] = '\0';
+        m->truncated = true;
+    }
+}
+
+bool cpe_sms_parse_cmgl_pdu(const char *raw, cpe_sms_list_t *out)
 {
     if (raw == NULL || out == NULL) {
         return false;
@@ -189,44 +183,45 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
     out->storage_used = -1;
     out->storage_capacity = -1;
 
-    const char *p = raw;
-    cpe_sms_msg_t *cur = NULL;
-    char hex[CPE_SMS_MAX_BODY_HEX];
+    char line[CPE_SMS_PDU_MAX_HEX + 1];
+    char hex[CPE_SMS_PDU_MAX_HEX + 1];
     size_t hex_len = 0;
+    cpe_sms_msg_t *cur = NULL;
+    const char *p = raw;
 
     while (p != NULL && *p != '\0') {
         const char *eol = strstr(p, "\r\n");
         size_t len = eol != NULL ? (size_t)(eol - p) : strlen(p);
-
-        char line[CPE_SMS_MAX_BODY_HEX];
         size_t cl = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
         memcpy(line, p, cl);
         line[cl] = '\0';
 
         if (strncmp(line, "+CMGL:", 6) == 0) {
             if (cur != NULL) {
-                cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
+                finish_cmgl_pdu(cur, hex);
+                cur = NULL;
             }
             if (out->count >= CPE_SMS_MAX_MESSAGES) {
                 out->truncated = true;
                 return true;
             }
+            int index;
+            cpe_sms_stat_t stat;
+            if (!parse_cmgl_pdu_header(line, &index, &stat)) {
+                p = eol != NULL ? eol + 2 : NULL;
+                continue;
+            }
             cur = &out->items[out->count];
             memset(cur, 0, sizeof(*cur));
-            parse_cmgl_header(line, cur);
-            cur->part_total = 1;
-            cur->index_count = 1;
-            cur->indexes[0] = cur->index;
+            cur->index = index;
+            cur->stat = stat;
+            out->count++;
             hex[0] = '\0';
             hex_len = 0;
-            out->count++;
         } else if (cur != NULL && is_terminal_line(line)) {
-            cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
+            finish_cmgl_pdu(cur, hex);
             cur = NULL;
         } else if (cur != NULL && line[0] != '\0') {
-            /* Body line: accumulate the raw hex. A body with an embedded newline
-             * is emitted across several lines, so keep appending until the next
-             * header or terminal line. */
             size_t alen = strlen(line);
             if (hex_len + alen + 1 < sizeof(hex)) {
                 memcpy(hex + hex_len, line, alen + 1);
@@ -238,7 +233,7 @@ bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)
     }
 
     if (cur != NULL) {
-        cpe_sms_ucs2_decode(hex, cur->body, sizeof(cur->body));
+        finish_cmgl_pdu(cur, hex);
     }
     return true;
 }
@@ -289,64 +284,6 @@ bool cpe_sms_parse_cpms(const char *resp, int *used, int *total)
     return true;
 }
 
-bool cpe_sms_parse_qcmgr_seg(const char *line, int *uid, int *seg, int *total)
-{
-    if (line == NULL) {
-        return false;
-    }
-    const char *p = strstr(line, "+QCMGR:");
-    if (p == NULL) {
-        return false;
-    }
-    /* The tail is always ",<uid>,<seg>,<total>"; the SCTS field may itself
-     * contain a comma, so walk back from the end of the header line instead of
-     * splitting fields. Only the header is considered: a body line may contain
-     * anything. */
-    const char *end = p;
-    while (*end != '\0' && *end != '\r' && *end != '\n') {
-        end++;
-    }
-    const char *comma[3] = { NULL, NULL, NULL };
-    int found = 0;
-    for (const char *q = end - 1; q >= p && found < 3; q--) {
-        if (*q == ',') {
-            comma[found++] = q;
-        }
-    }
-    if (found < 3) {
-        return false;
-    }
-    char *e = NULL;
-    long v_uid = strtol(comma[2] + 1, &e, 10);
-    if (e == comma[2] + 1 || v_uid < 0) {
-        return false;
-    }
-    long v_seg = strtol(comma[1] + 1, &e, 10);
-    if (e == comma[1] + 1 || v_seg < 1) {
-        return false;
-    }
-    long v_total = strtol(comma[0] + 1, &e, 10);
-    if (e == comma[0] + 1 || v_total < 1 || v_seg > v_total) {
-        return false;
-    }
-    while (e < end && *e == ' ') {
-        e++;
-    }
-    if (e != end) { /* a single message's SCTS tail, not a segment triple */
-        return false;
-    }
-    if (uid != NULL) {
-        *uid = (int)v_uid;
-    }
-    if (seg != NULL) {
-        *seg = (int)v_seg;
-    }
-    if (total != NULL) {
-        *total = (int)v_total;
-    }
-    return true;
-}
-
 /* Append `src` to dst+*len, stopping at a UTF-8 boundary when it no longer
  * fits. Returns false (and leaves any partial code point out) when cut. */
 static bool append_utf8(char *dst, size_t cap, size_t *len, const char *src)
@@ -369,7 +306,7 @@ static bool append_utf8(char *dst, size_t cap, size_t *len, const char *src)
             dst[*len] = '\0';
             return false;
         }
-        memcpy(dst + *len, src, clen);
+        memmove(dst + *len, src, clen);
         *len += clen;
         src += clen;
     }
@@ -437,10 +374,14 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list)
         size_t len = strlen(base->body);
         bool cut = false;
         bool unread = false;
+        bool part_truncated = false;
         for (size_t k = 0; k < n; k++) {
             cpe_sms_msg_t *p = &list->items[order[k]];
-            if (cpe_sms_stat_unread(p->stat)) {
+            if (p->stat == CPE_SMS_STAT_UNREAD) {
                 unread = true;
+            }
+            if (p->truncated) {
+                part_truncated = true;
             }
             if (k > 0 && !append_utf8(base->body, sizeof(base->body), &len, p->body)) {
                 cut = true;
@@ -452,9 +393,9 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list)
         drop[base_i] = false;
         base->index_count = (uint8_t)n;
         base->index = base->indexes[0];
-        base->truncated = cut || n < (size_t)base->part_total || base->truncated;
+        base->truncated = cut || part_truncated || n < (size_t)base->part_total;
         if (unread) {
-            snprintf(base->stat, sizeof(base->stat), "REC UNREAD");
+            base->stat = CPE_SMS_STAT_UNREAD;
         }
     }
 

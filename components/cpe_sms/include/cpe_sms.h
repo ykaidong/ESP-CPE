@@ -24,9 +24,9 @@ esp_err_t cpe_sms_init(void);
 
 cpe_sms_state_t cpe_sms_state(void);
 
-/** List stored messages into `out` (caller allocates; ~22 KB, use heap).
- *  Concatenated parts are merged into one entry when the modem answers
- *  AT+QCMGR; otherwise each storage record is returned separately.
+/** List stored messages into `out` (caller allocates; ~50 KB, use heap).
+ *  Received over AT+CMGL=4 in PDU mode; concatenated parts are merged into one
+ *  entry using the UDH. Records that cannot be decoded keep their raw hex.
  *  `out->storage_used/capacity` report AT+CPMS (-1 when unknown).
  *  Blocks up to `timeout_ms`. */
 esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms);

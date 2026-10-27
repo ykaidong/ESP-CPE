@@ -1,0 +1,26 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Yang Kaidong
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * SMS-DELIVER PDU decoding (3GPP TS 23.040), independent of the AT layers.
+ */
+#pragma once
+
+#include "cpe_sms_parse.h"
+
+typedef enum {
+    CPE_SMS_PDU_OK = 0,
+    CPE_SMS_PDU_MALFORMED,   /* structurally invalid or truncated */
+    CPE_SMS_PDU_UNSUPPORTED, /* valid but not text we can decode (8-bit, ...) */
+} cpe_sms_pdu_status_t;
+
+/* Decode one SMS-DELIVER PDU (SMSC address included, as `AT+CMGL=4` returns it)
+ * into `out`. The caller zero-initializes `out`; `stat` is left untouched.
+ *
+ * Fills `from`, `time`, `body`, `truncated` and the concatenation fields
+ * (`uid`, `part_seq`, `part_total`; 1/1 for a single message). `body` is left
+ * empty on failure so the caller can keep the raw hex instead.
+ *
+ * Returns CPE_SMS_PDU_OK when the text (possibly empty) was decoded. */
+cpe_sms_pdu_status_t cpe_sms_pdu_decode_deliver(const char *hex, cpe_sms_msg_t *out);
