@@ -39,7 +39,7 @@ static const char *TAG = "cpe_sms";
 #define CPE_SMS_LIST_TIMEOUT_MS    20000
 #define CPE_SMS_SEND_TIMEOUT_MS    60000
 #define CPE_SMS_DELETE_TIMEOUT_MS  10000
-/* Worst case is a full inbox of 24 records: each PDU is at most 306 hex chars
+/* Worst case is a full inbox of 24 records: each PDU is at most 352 hex chars
  * on one line plus a ~40-char header. */
 #define CPE_SMS_RAW_CAP            20480
 #define CPE_SMS_CMD_RESP           128

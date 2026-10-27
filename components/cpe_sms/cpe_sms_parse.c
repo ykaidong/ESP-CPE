@@ -15,8 +15,8 @@
 
 _Static_assert(CPE_SMS_MAX_BODY >= CPE_SMS_MAX_PARTS * 201 + 1,
                "body buffer must hold one full UCS2 segment per part");
-_Static_assert(CPE_SMS_PDU_MAX_HEX >= 2 * (12 + 1 + 140),
-               "PDU hex buffer must hold an SMSC address plus a full TPDU");
+_Static_assert(CPE_SMS_PDU_MAX_HEX >= 2 * (1 + 12 + 163),
+               "PDU hex buffer must hold an SMSC field plus a full TPDU");
 
 bool cpe_sms_number_valid(const char *num)
 {

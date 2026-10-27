@@ -14,7 +14,11 @@
 
 #include "cpe_sms_pdu.h"
 
-#define PDU_OCTET_MAX   (1 + 12 + 1 + 140) /* SCA length + SCA + TPDU */
+/* SCA length octet + SCA (12) + the longest TPDU: FO, a 20-digit originator
+ * (12), PID, DCS, SCTS, UDL and a full 140-octet user data field. A long
+ * message segment fills all 140 octets, so sizing this for the body alone
+ * would reject exactly the PDUs that need concatenation. */
+#define PDU_OCTET_MAX   (1 + 12 + 163)
 #define PDU_REPLACEMENT 0xFFFD
 
 /* GSM 7-bit default alphabet, 3GPP TS 23.038 6.2.1. 0x1B is the escape. */

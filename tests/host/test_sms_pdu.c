@@ -38,6 +38,31 @@
 #define PDU_WITH_SCA \
     "07919730071111F0040D91683108108300F000005201520100002302C834"
 
+/* Full 140-octet user data (a concatenation segment of 16-bit reference). */
+#define PDU_FULL_UCS2_CONCAT \
+    "00440D91683108108300F00008520152010000238D0608041234030100410041" \
+    "0041004100410041004100410041004100410041004100410041004100410041" \
+    "0041004100410041004100410041004100410041004100410041004100410041" \
+    "0041004100410041004100410041004100410041004100410041004100410041" \
+    "0041004100410041004100410041004100410041004100410041004100410041" \
+    "005A"
+/* Longest possible PDU: 12-octet SMSC, 20-digit originator, 140-octet body. */
+#define PDU_MAX_SIZE \
+    "0C912B2B2B2B2B2B2B2B2B2B2B04149121436587092143658709000852015201" \
+    "0000238C00420042004200420042004200420042004200420042004200420042" \
+    "0042004200420042004200420042004200420042004200420042004200420042" \
+    "0042004200420042004200420042004200420042004200420042004200420042" \
+    "0042004200420042004200420042004200420042004200420042004200420042" \
+    "00420042004200420042004200420043"
+/* 160 septets, no UDH, still 140 octets once packed. */
+#define PDU_FULL_7BIT \
+    "00040D91683108108300F0000052015201000023A0783C1E8FC7E3F1783C1E8F" \
+    "C7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F178" \
+    "3C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7" \
+    "E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C" \
+    "1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3F1783C1E8FC7E3" \
+    "F3"
+
 static void decode_ok(const char *hex, cpe_sms_msg_t *m)
 {
     memset(m, 0, sizeof(*m));
@@ -108,6 +133,37 @@ static void test_concat_header(void)
     HT_CHECK_INT(m.part_seq, 1);
     HT_CHECK_INT(m.part_total, 3);
     HT_CHECK_STR(m.body, "\xe4\xb8\xad\xe6\x96\x87");
+}
+
+/* A segment of a long message fills its whole 140-octet user data field, so
+ * its PDU is longer than any single-part message and still has to decode. */
+static void test_full_length_pdus(void)
+{
+    static char expect[CPE_SMS_MAX_BODY];
+    cpe_sms_msg_t m;
+
+    decode_ok(PDU_FULL_UCS2_CONCAT, &m);
+    memset(expect, 'A', 66);
+    expect[66] = 'Z';
+    expect[67] = '\0';
+    HT_CHECK_STR(m.body, expect);
+    HT_CHECK_INT(m.uid, 0x1234);
+    HT_CHECK_INT(m.part_seq, 1);
+    HT_CHECK_INT(m.part_total, 3);
+    HT_CHECK(!m.truncated);
+
+    decode_ok(PDU_MAX_SIZE, &m);
+    HT_CHECK_STR(m.from, "+12345678901234567890");
+    memset(expect, 'B', 69);
+    expect[69] = 'C';
+    expect[70] = '\0';
+    HT_CHECK_STR(m.body, expect);
+
+    decode_ok(PDU_FULL_7BIT, &m);
+    memset(expect, 'x', 159);
+    expect[159] = 'y';
+    expect[160] = '\0';
+    HT_CHECK_STR(m.body, expect);
 }
 
 static void test_merge_decoded_parts(void)
@@ -310,6 +366,7 @@ void test_sms_pdu(void)
     test_7bit_body();
     test_sender_and_time();
     test_concat_header();
+    test_full_length_pdus();
     test_merge_decoded_parts();
     test_empty_body();
     test_malformed();

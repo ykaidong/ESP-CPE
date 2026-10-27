@@ -45,11 +45,11 @@ static const char *TAG = "cpe_at";
 #define AT_RETRY_MS            5000
 #define AT_MAX_FAILURES        3
 /* Sized for the largest response the AT port sees: a full AT+CMGL=4 list (24
- * records, each PDU at most 306 hex characters). Too small and the CDC driver
+ * records, each PDU at most 352 hex characters). Too small and the CDC driver
  * drops bytes ("CDC in ringbuf is full"), truncating the list. */
 #define AT_RINGBUF_SIZE        16384
-/* One assembled response or URC line. A 140-octet PDU in a +CMGL answer is
- * 306 hex characters plus a short +CMGL header. */
+/* One assembled response or URC line. A longest-case PDU in a +CMGL answer is
+ * 352 hex characters plus a short +CMGL header. */
 #define AT_LINE_MAX            1024
 #define AT_TRANSFER_SIZE       512
 /* Writing a command line to the CDC port. */

@@ -24,7 +24,8 @@
 #define CPE_SMS_MAX_BODY     2048
 /* UCS2 hex used to encode a phone number for AT+CMGS (21 chars -> 84 digits). */
 #define CPE_SMS_MAX_ADDR_HEX 88
-/* A PDU is at most 140 octets plus a 12-octet SMSC address; hex doubles that. */
+/* A PDU is at most 176 octets: a 13-octet SMSC field plus a 163-octet TPDU
+ * whose user data fills all 140 octets. Hex doubles that. */
 #define CPE_SMS_PDU_MAX_HEX  400
 
 typedef enum {
