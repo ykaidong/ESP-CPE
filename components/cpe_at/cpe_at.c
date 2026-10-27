@@ -62,6 +62,9 @@ static const char *TAG = "cpe_at";
 /* How long a timed-out caller waits for the abandoned session body to finish
  * touching its context before returning anyway. */
 #define AT_SESSION_CANCEL_WAIT_MS 1000
+/* Idle URC poll: only runs while the registry has subscribers. Telemetry keeps
+ * its own CONFIG_CPE_AT_POLL_INTERVAL_S cadence. */
+#define AT_URC_POLL_MS         100
 /* USB device event registration: the CDC driver is installed by the WAN link
  * manager, which may still be starting. Retry once per second at first, then
  * report the degradation and slow down instead of spinning forever. */
@@ -112,6 +115,8 @@ static uint32_t s_generation;
 static usbh_cdc_port_handle_t s_port;
 static uint32_t s_port_generation;
 static int s_failures;
+/* Owned by the AT task. */
+static TickType_t s_next_poll_tick;
 
 /* Serialized session slot: exactly one body may run at a time, on the AT task.
  * `s_session_done` is a binary semaphore created in cpe_at_start(); completion
@@ -1273,6 +1278,7 @@ static void at_try_connect(void)
              * UCS2 decoder in at_parse_cops() covers firmware that ignores it. */
             (void)at_command("AT+CSCS=\"GSM\"", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
             (void)at_command("ATE0", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
+            s_next_poll_tick = 0;
             at_read_identity();
             return;
         }
@@ -1294,6 +1300,7 @@ static void at_release_port(bool close)
     s_port = NULL;
     s_port_generation = 0;
     s_failures = 0;
+    s_next_poll_tick = 0;
     at_line_reset();
     at_clear_status();
 }
@@ -1423,6 +1430,7 @@ static void at_task(void *arg)
 
         if (at_reset_pending()) {
             at_reset_service();
+            s_next_poll_tick = 0;
             continue;
         }
 
@@ -1431,22 +1439,45 @@ static void at_task(void *arg)
             continue;
         }
 
-        esp_err_t poll = at_poll();
-        if (at_reset_pending()) {
-            /* The poll was abandoned for the reset: never count it as an AT
-             * failure, and service the request at the top of the loop. */
-            continue;
-        }
-        if (poll == ESP_OK) {
-            s_failures = 0;
-        } else if (++s_failures >= AT_MAX_FAILURES) {
-            ESP_LOGW(TAG, "AT port stopped responding, reopening it");
-            /* If the device went away meanwhile, the CDC driver owns the close. */
-            at_release_port(at_generation() == s_port_generation);
-            continue;
+        bool urc_active = cpe_at_urc_has_subscribers();
+        if (urc_active) {
+            at_rx_drain(NULL);
         }
 
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CONFIG_CPE_AT_POLL_INTERVAL_S * 1000U));
+        if (s_next_poll_tick == 0 ||
+            (int32_t)(xTaskGetTickCount() - s_next_poll_tick) >= 0) {
+            esp_err_t poll = at_poll();
+            if (at_reset_pending()) {
+                /* The poll was abandoned for the reset: never count it as an
+                 * AT failure, and service the request at the top of the
+                 * loop. */
+                s_next_poll_tick = 0;
+                continue;
+            }
+            if (poll == ESP_OK) {
+                s_failures = 0;
+            } else if (++s_failures >= AT_MAX_FAILURES) {
+                ESP_LOGW(TAG, "AT port stopped responding, reopening it");
+                /* If the device went away meanwhile, the CDC driver owns the
+                 * close. */
+                at_release_port(at_generation() == s_port_generation);
+                continue;
+            }
+            s_next_poll_tick = xTaskGetTickCount() +
+                               pdMS_TO_TICKS(CONFIG_CPE_AT_POLL_INTERVAL_S * 1000U);
+        }
+
+        uint32_t wait_ms = CONFIG_CPE_AT_POLL_INTERVAL_S * 1000U;
+        if (urc_active) {
+            wait_ms = AT_URC_POLL_MS;
+        } else {
+            int32_t left = (int32_t)(s_next_poll_tick - xTaskGetTickCount());
+            uint32_t left_ms = left > 0 ? (uint32_t)left * portTICK_PERIOD_MS : 0;
+            if (left_ms < wait_ms) {
+                wait_ms = left_ms;
+            }
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
     }
 }
 
