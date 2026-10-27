@@ -33,7 +33,6 @@ typedef enum {
     CPE_SMS_STAT_READ,
     CPE_SMS_STAT_UNSENT,
     CPE_SMS_STAT_SENT,
-    CPE_SMS_STAT_UNKNOWN,
 } cpe_sms_stat_t;
 
 typedef struct {
@@ -43,7 +42,7 @@ typedef struct {
     int uid;                          /* concatenation reference, 0 if single */
     uint8_t part_seq;                 /* 1-based segment number */
     uint8_t part_total;               /* 1 when the message is not concatenated */
-    bool truncated;                   /* text cut, a part missing, or not decodable */
+    bool truncated;                   /* text cut, or a part missing */
     cpe_sms_stat_t stat;
     char from[CPE_SMS_MAX_ADDR];
     char time[CPE_SMS_MAX_TIME];
@@ -60,8 +59,9 @@ typedef struct {
 
 /* Parse a raw AT+CMGL=4 (PDU mode) response into `out`. Each record is decoded
  * with cpe_sms_pdu_decode(); a record that cannot be decoded is kept with its
- * raw hex as `body` and `truncated` set. Returns false only for a NULL
- * argument. */
+ * raw hex as `body` (and an empty sender), without setting `truncated`, which
+ * only marks text that was actually cut or parts that are missing. Returns
+ * false only for a NULL argument. */
 bool cpe_sms_parse_cmgl_pdu(const char *raw, cpe_sms_list_t *out);
 
 /* Parse a `+CPMS: "ME",<used>,<total>,"ME",...` response (or the equivalent

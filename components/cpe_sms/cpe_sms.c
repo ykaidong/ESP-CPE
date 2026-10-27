@@ -39,8 +39,10 @@ static const char *TAG = "cpe_sms";
 #define CPE_SMS_LIST_TIMEOUT_MS    20000
 #define CPE_SMS_SEND_TIMEOUT_MS    60000
 #define CPE_SMS_DELETE_TIMEOUT_MS  10000
-/* Worst case is a full inbox of 24 records: each PDU is at most 352 hex chars
- * on one line plus a ~40-char header. */
+/* The whole CMGL response is captured before parsing, and a modem can report
+ * more slots than CPE_SMS_MAX_MESSAGES keeps: one record is at most 352 hex
+ * chars on one line plus a ~40-char header, so 24 records need ~10 KB and 48
+ * need ~19 KB. */
 #define CPE_SMS_RAW_CAP            20480
 #define CPE_SMS_CMD_RESP           128
 #define CPE_SMS_SEND_MIN_INTERVAL_MS 5000
@@ -52,8 +54,8 @@ static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_op_lock;
 static int64_t s_last_send_us;
 static TaskHandle_t s_task;
-/* Bumped for every change the console must notice (a +CMTI, a prune delete).
- * The console polls this instead of re-reading the whole list each time. */
+/* Bumped for every change to the stored messages (a +CMTI, a send, a delete,
+ * a prune). The console polls this instead of re-reading the whole list. */
 static uint32_t s_inbox_gen;
 
 static void sms_touch_inbox(void)
@@ -159,15 +161,22 @@ static esp_err_t sms_probe_body(const cpe_at_io_t *io, void *arg)
     return ESP_OK;
 }
 
-/* Returns false when another SMS operation owns the AT session; the caller
- * retries later. */
+/* Returns false when the probe could not conclude anything: another SMS
+ * operation owns the session, or the port is busy/resetting. A body failure is
+ * the modem's answer and parks the probe; an inconclusive run must not, or a
+ * reset in the middle of booting would disable SMS for CPE_SMS_REPROBE_MS. */
 static bool sms_probe(void)
 {
     if (!sms_op_begin(0)) {
         return false;
     }
-    esp_err_t r = cpe_at_session(sms_probe_body, NULL, CPE_SMS_CMD_TIMEOUT_MS + 1000);
+    esp_err_t r = cpe_at_session(sms_probe_body, NULL,
+                                 3 * CPE_SMS_CMD_TIMEOUT_MS + 1000);
     sms_op_end();
+    if (r == ESP_ERR_INVALID_STATE || r == ESP_ERR_TIMEOUT) {
+        ESP_LOGD(TAG, "SMS probe deferred (%s)", esp_err_to_name(r));
+        return false;
+    }
     sms_set_state(r == ESP_OK ? CPE_SMS_READY : CPE_SMS_UNSUPPORTED);
     ESP_LOGI(TAG, "SMS capability %s", r == ESP_OK ? "ready" : "unsupported");
     return true;
@@ -176,10 +185,11 @@ static bool sms_probe(void)
 /* -------------------------------- list ---------------------------------- */
 
 typedef struct {
-    cpe_sms_list_t *out;
     char *raw;
     size_t cap;
-} sms_list_ctx_t;
+    int used;
+    int total;
+} sms_fetch_ctx_t;
 
 static bool sms_cpms_query(const cpe_at_io_t *io, int *used, int *total)
 {
@@ -194,9 +204,12 @@ static bool sms_cpms_query(const cpe_at_io_t *io, int *used, int *total)
 }
 
 /* PDU mode returns the concatenation UDH with the text, so one list command is
- * enough: no per-record round trips and no vendor-private command. */
-static esp_err_t sms_fetch(const cpe_at_io_t *io, sms_list_ctx_t *ctx)
+ * enough: no per-record round trips and no vendor-private command. This body
+ * only performs I/O; the response is decoded by the caller, off the AT task's
+ * 4 KB stack. */
+static esp_err_t sms_fetch_body(const cpe_at_io_t *io, void *arg)
 {
+    sms_fetch_ctx_t *ctx = arg;
     char resp[CPE_SMS_CMD_RESP];
 
     if (io->send_line("AT+CMGF=0") != ESP_OK) {
@@ -219,18 +232,22 @@ static esp_err_t sms_fetch(const cpe_at_io_t *io, sms_list_ctx_t *ctx)
     if (strstr(ctx->raw, "ERROR") != NULL) {
         return ESP_FAIL;
     }
-    if (!cpe_sms_parse_cmgl_pdu(ctx->raw, ctx->out)) {
-        return ESP_FAIL;
-    }
 
-    cpe_sms_merge_parts(ctx->out);
-    (void)sms_cpms_query(io, &ctx->out->storage_used, &ctx->out->storage_capacity);
+    ctx->used = -1;
+    ctx->total = -1;
+    (void)sms_cpms_query(io, &ctx->used, &ctx->total);
     return ESP_OK;
 }
 
-static esp_err_t sms_list_body(const cpe_at_io_t *io, void *arg)
+static esp_err_t sms_parse_fetched(const sms_fetch_ctx_t *ctx, cpe_sms_list_t *out)
 {
-    return sms_fetch(io, arg);
+    if (!cpe_sms_parse_cmgl_pdu(ctx->raw, out)) {
+        return ESP_FAIL;
+    }
+    cpe_sms_merge_parts(out);
+    out->storage_used = ctx->used;
+    out->storage_capacity = ctx->total;
+    return ESP_OK;
 }
 
 esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms)
@@ -250,9 +267,12 @@ esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms)
         sms_op_end();
         return ESP_ERR_NO_MEM;
     }
-    sms_list_ctx_t ctx = { .out = out, .raw = raw, .cap = CPE_SMS_RAW_CAP };
-    esp_err_t err = cpe_at_session(sms_list_body, &ctx,
+    sms_fetch_ctx_t ctx = { .raw = raw, .cap = CPE_SMS_RAW_CAP, .used = -1, .total = -1 };
+    esp_err_t err = cpe_at_session(sms_fetch_body, &ctx,
                                    sms_remaining_ms(start_us, timeout_ms));
+    if (err == ESP_OK) {
+        err = sms_parse_fetched(&ctx, out);
+    }
     free(raw);
     sms_op_end();
     return err;
@@ -408,6 +428,9 @@ esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_st
     sms_op_end();
     if (err == ESP_OK) {
         sms_mark_sent();
+        /* The modem stores the submitted message, so other consoles must
+         * notice the new record even though no +CMTI was raised. */
+        sms_touch_inbox();
     }
     return err;
 }
@@ -419,25 +442,39 @@ typedef struct {
     size_t count;
 } sms_del_ctx_t;
 
+/* Every index is an independent record, so a failure (an index already gone,
+ * for instance) must not leave the remaining parts of the message behind. The
+ * first error is still reported once everything was attempted. */
 static esp_err_t sms_del_body(const cpe_at_io_t *io, void *arg)
 {
     sms_del_ctx_t *ctx = arg;
     char resp[64];
+    esp_err_t first_err = ESP_OK;
+    size_t deleted = 0;
     for (size_t i = 0; i < ctx->count; i++) {
         char cmd[32];
         snprintf(cmd, sizeof(cmd), "AT+CMGD=%d", ctx->indexes[i]);
         if (io->send_line(cmd) != ESP_OK) {
-            return ESP_FAIL;
+            first_err = ESP_FAIL;
+            break;
         }
         esp_err_t r = io->read_until(NULL, 0, CPE_SMS_DELETE_TIMEOUT_MS, resp, sizeof(resp));
         if (r != ESP_OK) {
-            return r;
+            first_err = r;
+            break;
         }
         if (strstr(resp, "ERROR") != NULL) {
-            return ESP_FAIL;
+            if (first_err == ESP_OK) {
+                first_err = ESP_FAIL;
+            }
+            continue;
         }
+        deleted++;
     }
-    return ESP_OK;
+    if (deleted > 0) {
+        sms_touch_inbox();
+    }
+    return first_err;
 }
 
 esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout_ms)
@@ -466,20 +503,36 @@ esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout
 
 /* ------------------------------ maintenance ----------------------------- */
 
+typedef struct {
+    int used;
+    int total;
+} sms_storage_t;
+
+/* Occupancy only: one short command, so a full list is fetched only when the
+ * inbox really is full. */
+static esp_err_t sms_storage_body(const cpe_at_io_t *io, void *arg)
+{
+    sms_storage_t *st = arg;
+    st->used = -1;
+    st->total = -1;
+    return sms_cpms_query(io, &st->used, &st->total) ? ESP_OK : ESP_FAIL;
+}
+
 /* Keep reception alive when the inbox is full: the modem rejects new messages
  * once <mem3> has no free slot and the SMSC only retries for the validity
- * period. Free one complete old read message (all of its parts) so the next
- * retry lands. Unread messages are never touched. */
-static esp_err_t sms_prune_body(const cpe_at_io_t *io, void *arg)
+ * period. Free one complete old message (all of its parts) so the next retry
+ * lands. Records still flagged unread are skipped, but listing them marks them
+ * read on the modem, so a full inbox of unread records drains one per
+ * maintenance cycle instead of never. */
+static bool sms_prune(void)
 {
-    (void)arg;
-    int used = -1;
-    int total = -1;
-    if (!sms_cpms_query(io, &used, &total) || used < 0 || total <= 0) {
-        return ESP_FAIL;
+    sms_storage_t st = { .used = -1, .total = -1 };
+    esp_err_t err = cpe_at_session(sms_storage_body, &st, 2 * CPE_SMS_CMD_TIMEOUT_MS);
+    if (err == ESP_ERR_INVALID_STATE) {
+        return false;
     }
-    if (used < total) {
-        return ESP_OK;
+    if (err != ESP_OK || st.used < 0 || st.total <= 0 || st.used < st.total) {
+        return true;
     }
 
     char *raw = malloc(CPE_SMS_RAW_CAP);
@@ -487,15 +540,19 @@ static esp_err_t sms_prune_body(const cpe_at_io_t *io, void *arg)
     if (raw == NULL || list == NULL) {
         free(raw);
         free(list);
-        return ESP_ERR_NO_MEM;
+        return true;
     }
 
-    sms_list_ctx_t ctx = { .out = list, .raw = raw, .cap = CPE_SMS_RAW_CAP };
-    esp_err_t err = sms_fetch(io, &ctx);
+    sms_fetch_ctx_t ctx = { .raw = raw, .cap = CPE_SMS_RAW_CAP, .used = -1, .total = -1 };
+    err = cpe_at_session(sms_fetch_body, &ctx,
+                         CPE_SMS_LIST_TIMEOUT_MS + 2 * CPE_SMS_CMD_TIMEOUT_MS);
+    if (err == ESP_OK) {
+        err = sms_parse_fetched(&ctx, list);
+    }
     if (err != ESP_OK) {
         free(raw);
         free(list);
-        return err;
+        return true;
     }
 
     int oldest = -1;
@@ -516,28 +573,28 @@ static esp_err_t sms_prune_body(const cpe_at_io_t *io, void *arg)
     }
 
     if (oldest < 0) {
-        ESP_LOGW(TAG, "SMS storage full (%d/%d) but every message is unread", used, total);
+        ESP_LOGW(TAG, "SMS storage full (%d/%d), every record was unread before this scan;"
+                      " retrying next cycle", st.used, st.total);
         free(raw);
         free(list);
-        return ESP_OK;
+        return true;
     }
 
     cpe_sms_msg_t *victim = &list->items[oldest];
-    sms_del_ctx_t del = { .indexes = victim->indexes, .count = victim->index_count };
-    err = sms_del_body(io, &del);
+    size_t parts = victim->index_count > 0 ? victim->index_count : 1;
+    sms_del_ctx_t del = { .indexes = victim->indexes, .count = parts };
+    err = cpe_at_session(sms_del_body, &del,
+                         (uint32_t)CPE_SMS_DELETE_TIMEOUT_MS * (uint32_t)parts);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to delete SMS index %d", victim->index);
-        free(raw);
-        free(list);
-        return err;
+    } else {
+        ESP_LOGI(TAG, "SMS storage full (%d/%d), deleted oldest read message (%u part(s))",
+                 st.used, st.total, (unsigned)parts);
     }
-    ESP_LOGI(TAG, "SMS storage full (%d/%d), deleted oldest read message (%u part(s))",
-             used, total, (unsigned)victim->index_count);
-    sms_touch_inbox();
 
     free(raw);
     free(list);
-    return ESP_OK;
+    return true;
 }
 
 /* Returns false when the AT session is busy; the task retries on its next
@@ -547,9 +604,9 @@ static bool sms_maintain(void)
     if (!sms_op_begin(0)) {
         return false;
     }
-    (void)cpe_at_session(sms_prune_body, NULL, CPE_SMS_LIST_TIMEOUT_MS * 3);
+    bool ran = sms_prune();
     sms_op_end();
-    return true;
+    return ran;
 }
 
 /* -------------------------------- task ---------------------------------- */

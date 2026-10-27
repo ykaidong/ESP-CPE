@@ -320,7 +320,8 @@ static void test_parse_cmgl_pdu(void)
 static void test_parse_cmgl_pdu_undecodable(void)
 {
     /* A malformed PDU and an 8-bit message are both kept with their raw hex so
-     * they can still be listed and deleted. The response ends at "OK\r". */
+     * they can still be listed and deleted. `truncated` stays clear: it marks
+     * cut text, not a record that never decoded. The response ends at "OK\r". */
     const char *raw =
         "AT+CMGL=4\r\n"
         "+CMGL: 5,1,,5\r\n"
@@ -336,12 +337,12 @@ static void test_parse_cmgl_pdu_undecodable(void)
     HT_CHECK_INT(list.items[0].stat, CPE_SMS_STAT_READ);
     HT_CHECK_STR(list.items[0].from, "");
     HT_CHECK_STR(list.items[0].body, "00DEADBEEF");
-    HT_CHECK(list.items[0].truncated);
+    HT_CHECK(!list.items[0].truncated);
 
     HT_CHECK_INT(list.items[1].index, 6);
     HT_CHECK_INT(list.items[1].stat, CPE_SMS_STAT_UNREAD);
     HT_CHECK_STR(list.items[1].body, PDU_8BIT);
-    HT_CHECK(list.items[1].truncated);
+    HT_CHECK(!list.items[1].truncated);
 }
 
 static void test_parse_cmgl_pdu_merge(void)

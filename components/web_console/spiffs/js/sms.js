@@ -2,10 +2,12 @@
  * SMS page. Device data is rendered with textContent only, never innerHTML.
  * Polling is two-tier while the page is visible: a cheap notification endpoint
  * (no AT session) carries a generation counter, and only a changed counter
- * triggers the full listing, which runs CMGL over the modem. Rows are reused
- * between listings so the table no longer flickers, and an in-flight guard
- * stops a slow CMGL from overlapping with the next poll (the AT port rejects
- * concurrent calls).
+ * triggers the full listing, which runs CMGL over the modem. A full listing
+ * also runs on a slow timer, because a +CMTI indication can be lost (URC queue
+ * overflow, modem reset) and the counter would then never move again. Rows are
+ * reused between listings so the table no longer flickers, and an in-flight
+ * guard stops a slow CMGL from overlapping with the next poll (the AT port
+ * rejects concurrent calls).
  */
 'use strict';
 
@@ -15,6 +17,7 @@
     var SEND_URL = '/api/sms/send';
     var DELETE_URL = '/api/sms/delete';
     var POLL_MS = 10000;
+    var FALLBACK_LIST_MS = 300000;
 
     var timer = null;
     var inFlight = false;
@@ -25,8 +28,12 @@
      * then, so the first poll always lists. */
     var lastGeneration = null;
     var lastReady = null;
-    /* Set by refreshNow(): list even when the generation did not move (a sent
-     * or deleted message changes storage without raising an indication). */
+    var lastListMs = 0;
+    /* Set while the "module has no SMS" banner is up, so recovery clears that
+     * message without touching a send result. */
+    var unsupportedShown = false;
+    /* Set by refreshNow(): list right away instead of waiting for the next
+     * poll to notice the generation this tab's own action produced. */
     var forceList = false;
 
     function byId(id) {
@@ -172,7 +179,15 @@
         CPE.syncRows(body, order);
 
         var empty = byId('sms-empty');
-        if (empty) empty.textContent = list.length === 0 ? '暂无短信' : '';
+        if (empty) {
+            if (list.length === 0) {
+                empty.textContent = '暂无短信';
+            } else if (data.truncated) {
+                empty.textContent = '短信过多，仅显示前 ' + list.length + ' 条';
+            } else {
+                empty.textContent = '';
+            }
+        }
     }
 
     function scheduleNext() {
@@ -193,6 +208,7 @@
         return CPE.getJson(LIST_URL).then(function (data) {
             lastGeneration = generation;
             lastReady = ready;
+            lastListMs = performance.now();
             setFormEnabled(true);
             /* A successful read only retires a connection error; an explicit
              * result message ("发送成功") must stay until the next action. */
@@ -220,9 +236,16 @@
                 lastReady = false;
                 setFormEnabled(false);
                 setBanner('当前模组不支持短信功能（4G 数据不受影响）。', 'status-banner-info');
+                unsupportedShown = true;
                 return;
             }
-            if (!forceList && lastReady === true && lastGeneration === generation) {
+            if (unsupportedShown) {
+                unsupportedShown = false;
+                setBanner('');
+            }
+            var stale = performance.now() - lastListMs >= FALLBACK_LIST_MS;
+            if (!forceList && !stale && lastReady === true &&
+                lastGeneration === generation) {
                 setFormEnabled(true);
                 return;
             }

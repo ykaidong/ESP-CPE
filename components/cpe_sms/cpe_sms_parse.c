@@ -154,7 +154,8 @@ static bool parse_cmgl_pdu_header(const char *line, int *index, cpe_sms_stat_t *
 }
 
 /* Decode the accumulated hex into `m`; on failure keep the hex so the record
- * can still be shown and deleted. */
+ * can still be shown and deleted. `truncated` stays clear: it means readable
+ * text was cut off, and appending an ellipsis to undecoded hex would say that. */
 static void finish_cmgl_pdu(cpe_sms_msg_t *m, const char *hex)
 {
     cpe_sms_pdu_status_t status = cpe_sms_pdu_decode(hex, m);
@@ -170,7 +171,6 @@ static void finish_cmgl_pdu(cpe_sms_msg_t *m, const char *hex)
         }
         memcpy(m->body, hex, n);
         m->body[n] = '\0';
-        m->truncated = true;
     }
 }
 

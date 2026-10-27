@@ -24,9 +24,9 @@ esp_err_t cpe_sms_init(void);
 
 cpe_sms_state_t cpe_sms_state(void);
 
-/** Monotonic counter bumped whenever the stored messages change without this
- *  device asking (a +CMTI indication or the storage-full prune). Lets the
- *  console decide whether a full list is worth an AT session. */
+/** Monotonic counter bumped whenever the stored messages change: a +CMTI
+ *  indication, a send, a delete, or the storage-full prune. Lets the console
+ *  decide whether a full list is worth an AT session. */
 uint32_t cpe_sms_inbox_generation(void);
 
 /** List stored messages into `out` (caller allocates; ~50 KB, use heap).
@@ -37,7 +37,7 @@ uint32_t cpe_sms_inbox_generation(void);
 esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms);
 
 /** Send one SMS. On failure `*err_str` (when non-NULL) receives a static
- *  error code string ("sms_bad_number", "sms_text_too_long",
+ *  error code string ("sms_bad_number", "sms_bad_text", "sms_text_too_long",
  *  "sms_rate_limited", "sms_busy", "sms_no_prompt", "sms_send_timeout",
  *  "sms_send_failed"). */
 esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_str,

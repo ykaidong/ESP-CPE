@@ -51,6 +51,18 @@ esp_err_t api_sms_notify_get_handler(httpd_req_t *req)
 
 /* --------------------------------- list ---------------------------------- */
 
+/* A busy AT port or a timeout says "try again", not "the device broke". */
+static const char *sms_error_code(esp_err_t err)
+{
+    switch (err) {
+    case ESP_ERR_NOT_SUPPORTED:   return "sms_not_supported";
+    case ESP_ERR_TIMEOUT:
+    case ESP_ERR_INVALID_STATE:   return "sms_busy";
+    case ESP_ERR_NO_MEM:          return "out_of_memory";
+    default:                      return "internal_error";
+    }
+}
+
 /* Storage status as the UI needs it: unread styling and the direction of the
  * message (2 and 3 are stored submits, i.e. written from this device). */
 static const char *sms_stat_name(cpe_sms_stat_t stat)
@@ -86,7 +98,7 @@ static void sms_list_task(void *arg)
     esp_err_t err = cpe_sms_list(list, SMS_LIST_TIMEOUT_MS);
     if (err != ESP_OK) {
         free(list);
-        cpe_web_send_error(req, err == ESP_ERR_NOT_SUPPORTED ? "sms_not_supported" : "internal_error");
+        cpe_web_send_error(req, sms_error_code(err));
         httpd_req_async_handler_complete(req);
         vTaskDelete(NULL);
         return;
@@ -99,12 +111,16 @@ static void sms_list_task(void *arg)
         bool near_full = (int64_t)list->storage_used * 10 >=
                          (int64_t)list->storage_capacity * 9;
         cpe_web_sbuf_appendf(&sb,
-                             "\"used\":%d,\"capacity\":%d,\"near_full\":%s},\"messages\":[",
+                             "\"used\":%d,\"capacity\":%d,\"near_full\":%s},",
                              list->storage_used, list->storage_capacity,
                              near_full ? "true" : "false");
     } else {
-        cpe_web_sbuf_append(&sb, "\"used\":-1,\"capacity\":-1,\"near_full\":false},\"messages\":[");
+        cpe_web_sbuf_append(&sb, "\"used\":-1,\"capacity\":-1,\"near_full\":false},");
     }
+    /* Only the first CPE_SMS_MAX_MESSAGES records are listed; the console says
+     * so rather than pretending the inbox is complete. */
+    cpe_web_sbuf_appendf(&sb, "\"truncated\":%s,\"messages\":[",
+                         list->truncated ? "true" : "false");
     for (size_t i = 0; i < list->count; i++) {
         cpe_sms_msg_t *m = &list->items[i];
         if (i > 0) {
@@ -244,7 +260,7 @@ static void sms_delete_task(void *arg)
         cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"message\":\"sms_deleted\"}");
         cpe_web_send_sbuf_json(job->req, HTTPD_200, &sb, false);
     } else {
-        cpe_web_send_error(job->req, err == ESP_ERR_NOT_SUPPORTED ? "sms_not_supported" : "internal_error");
+        cpe_web_send_error(job->req, sms_error_code(err));
     }
 
     httpd_req_async_handler_complete(job->req);
