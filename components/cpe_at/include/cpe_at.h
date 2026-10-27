@@ -69,7 +69,7 @@ typedef struct {
      *  +CMS ERROR) or one of the `extra` tokens appears. Copies the collected
      *  text (NUL-terminated, truncated to resp_size-1) into resp. Returns
      *  ESP_ERR_TIMEOUT, ESP_ERR_INVALID_SIZE or ESP_ERR_INVALID_STATE (reset
-     *  preempted). */
+     *  preempted, or the session was abandoned after its caller timed out). */
     esp_err_t (*read_until)(const char *const *extra, size_t n_extra,
                             uint32_t timeout_ms, char *resp, size_t resp_size);
 } cpe_at_io_t;
@@ -79,7 +79,9 @@ typedef esp_err_t (*cpe_at_session_body_t)(const cpe_at_io_t *io, void *arg);
 /** Run `body` on the AT task while the port is ready and no reset is pending.
  *  Blocks the caller for up to `timeout_ms`. Returns ESP_ERR_INVALID_STATE when
  *  the port is not ready, a session is already in flight, or a reset is
- *  pending; ESP_ERR_TIMEOUT when the body did not finish in time. */
+ *  pending; ESP_ERR_TIMEOUT when the body did not finish in time. On timeout
+ *  the body is asked to stop and the call waits briefly for it to return, so
+ *  the caller's context is not used afterwards. */
 esp_err_t cpe_at_session(const cpe_at_session_body_t body, void *arg,
                          uint32_t timeout_ms);
 

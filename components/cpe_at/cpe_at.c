@@ -59,6 +59,9 @@ static const char *TAG = "cpe_at";
 /* Drain window after flushing the RX ring buffer: a USB transfer that was
  * already in flight can still land right after the flush. */
 #define AT_FLUSH_SETTLE_MS     30
+/* How long a timed-out caller waits for the abandoned session body to finish
+ * touching its context before returning anyway. */
+#define AT_SESSION_CANCEL_WAIT_MS 1000
 /* USB device event registration: the CDC driver is installed by the WAN link
  * manager, which may still be starting. Retry once per second at first, then
  * report the degradation and slow down instead of spinning forever. */
@@ -124,6 +127,12 @@ static at_session_slot_t s_session_slot;
 static SemaphoreHandle_t s_session_done;
 static bool s_session_active;
 static uint32_t s_session_seq;
+/* Set by a caller whose session ran out of time so the AT task abandons the
+ * body before the caller's stack context disappears. Stores seq + 1 so 0
+ * means "none". */
+static volatile uint32_t s_session_cancel_seq;
+/* Owned by the AT task: sequence number of the body it is running, 0 idle. */
+static uint32_t s_session_running_seq;
 /* Slack for the longest strings a modem answers with: model/firmware revisions
  * grow with build suffixes and the IMEI may come as a 16 digit IMEISV. */
 static char s_model[40];
@@ -133,6 +142,12 @@ static char s_imei[20];
 static bool at_reset_pending(void)
 {
     return __atomic_load_n(&s_reset_state, __ATOMIC_ACQUIRE) == AT_RESET_PENDING;
+}
+
+static bool at_session_cancelled(void)
+{
+    uint32_t cancel = __atomic_load_n(&s_session_cancel_seq, __ATOMIC_ACQUIRE);
+    return cancel != 0 && cancel == s_session_running_seq + 1;
 }
 
 static void at_set_reset_state(at_reset_state_t state)
@@ -514,7 +529,7 @@ static esp_err_t at_rx_collect(at_rx_target_t *t, uint32_t timeout_ms)
     TickType_t start = xTaskGetTickCount();
 
     for (;;) {
-        if (at_reset_pending()) {
+        if (at_reset_pending() || at_session_cancelled()) {
             return ESP_ERR_INVALID_STATE;
         }
         at_rx_drain(t);
@@ -1290,10 +1305,12 @@ static bool at_session_service(void)
     bool active = s_session_active;
     cpe_at_session_body_t body = s_session_slot.body;
     void *arg = s_session_slot.arg;
+    uint32_t seq = s_session_seq;
     xSemaphoreGive(s_lock);
     if (!active) {
         return false;
     }
+    s_session_running_seq = seq;
 
     esp_err_t r;
     if (s_port == NULL || at_reset_pending()) {
@@ -1306,6 +1323,8 @@ static bool at_session_service(void)
     s_session_slot.result = r;
     s_session_active = false;
     s_session_seq++;
+    s_session_running_seq = 0;
+    __atomic_store_n(&s_session_cancel_seq, 0, __ATOMIC_RELEASE);
     xSemaphoreGive(s_lock);
     xSemaphoreGive(s_session_done);
     return true;
@@ -1474,6 +1493,39 @@ esp_err_t cpe_at_modem_reset(uint32_t timeout_ms)
     }
 }
 
+/* Ask the AT task to abandon a body whose caller ran out of time, and wait for
+ * the body to finish: until then it may still touch the caller's context. */
+static void at_session_abort(uint32_t seq)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool running = s_session_active && s_session_seq == seq;
+    if (running) {
+        __atomic_store_n(&s_session_cancel_seq, seq + 1, __ATOMIC_RELEASE);
+    }
+    xSemaphoreGive(s_lock);
+    if (!running) {
+        return;
+    }
+
+    TickType_t start = xTaskGetTickCount();
+    for (;;) {
+        TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= pdMS_TO_TICKS(AT_SESSION_CANCEL_WAIT_MS)) {
+            return;
+        }
+        if (xSemaphoreTake(s_session_done,
+                           pdMS_TO_TICKS(AT_SESSION_CANCEL_WAIT_MS) - elapsed) != pdTRUE) {
+            return;
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool finished = s_session_seq != seq;
+        xSemaphoreGive(s_lock);
+        if (finished) {
+            return;
+        }
+    }
+}
+
 esp_err_t cpe_at_session(const cpe_at_session_body_t body, void *arg,
                          uint32_t timeout_ms)
 {
@@ -1500,9 +1552,11 @@ esp_err_t cpe_at_session(const cpe_at_session_body_t body, void *arg,
     for (;;) {
         TickType_t elapsed = xTaskGetTickCount() - start;
         if (elapsed >= limit) {
+            at_session_abort(seq);
             return ESP_ERR_TIMEOUT;
         }
         if (xSemaphoreTake(s_session_done, limit - elapsed) != pdTRUE) {
+            at_session_abort(seq);
             return ESP_ERR_TIMEOUT;
         }
         xSemaphoreTake(s_lock, portMAX_DELAY);
