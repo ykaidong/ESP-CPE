@@ -29,6 +29,7 @@
 #include "esp_log.h"
 
 #include "cpe_at.h"
+#include "cpe_at_urc_internal.h"
 #include "cpe_at_urc_match.h"
 #include "cpe_status.h"
 #include "iot_usbh_cdc.h"
@@ -400,7 +401,9 @@ static void at_extra_check(at_rx_target_t *t)
 }
 
 /* Returns true when the completed line belongs in the response text, which
- * also means its terminator belongs there. */
+ * also means its terminator belongs there. A subscribed URC is delivered
+ * instead of being appended; after the final line everything except further
+ * URCs is dropped. */
 static bool at_line_complete(at_rx_target_t *t)
 {
     if (s_line_truncated) {
@@ -412,6 +415,11 @@ static bool at_line_complete(at_rx_target_t *t)
     }
 
     cpe_at_line_kind_t kind = cpe_at_urc_line_kind(s_line, s_line_len);
+    if (kind == CPE_AT_LINE_OTHER && cpe_at_urc_dispatch(s_line, s_line_len)) {
+        at_line_reset();
+        return false;
+    }
+
     bool done = at_rx_target_done(t);
     if (!done) {
         at_resp_append(t, s_line, s_line_len);
@@ -487,6 +495,20 @@ static void at_rx_drain(at_rx_target_t *t)
     }
 }
 
+/* Drop what is already queued before a command without losing a URC: complete
+ * subscribed URCs are dispatched, and a partial line is kept only when it can
+ * still become one. A USB transfer in flight may land right after the first
+ * drain, so settle and drain again. */
+static void at_rx_discard_stale(void)
+{
+    at_rx_drain(NULL);
+    vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
+    at_rx_drain(NULL);
+    if (!cpe_at_urc_partial_subscribed(s_line, s_line_len)) {
+        at_line_reset();
+    }
+}
+
 static esp_err_t at_rx_collect(at_rx_target_t *t, uint32_t timeout_ms)
 {
     TickType_t start = xTaskGetTickCount();
@@ -516,10 +538,7 @@ static esp_err_t at_io_send_line(const char *cmd)
     if (len < 0 || len >= (int)sizeof(line)) {
         return ESP_ERR_INVALID_SIZE;
     }
-    (void)usbh_cdc_flush_rx_buffer(s_port);
-    vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
-    (void)usbh_cdc_flush_rx_buffer(s_port);
-    at_line_reset();
+    at_rx_discard_stale();
     return usbh_cdc_write_bytes(s_port, (const uint8_t *)line, (size_t)len,
                                 pdMS_TO_TICKS(AT_WRITE_TIMEOUT_MS));
 }
@@ -557,13 +576,7 @@ static at_final_t at_command(const char *cmd, char *resp, size_t resp_size,
     if (s_port == NULL || at_reset_pending()) {
         return AT_FINAL_NONE;
     }
-    (void)usbh_cdc_flush_rx_buffer(s_port);
-    /* The flush only drops bytes already queued in the ring buffer; a USB
-     * transfer that was in flight can still land right after it. Drain once
-     * more so a late answer is not taken for this command's response. */
-    vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
-    (void)usbh_cdc_flush_rx_buffer(s_port);
-    at_line_reset();
+    at_rx_discard_stale();
     if (at_send_line(cmd) != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send %s", cmd);
         return AT_FINAL_NONE;
@@ -1544,6 +1557,11 @@ esp_err_t cpe_at_start(void)
         vSemaphoreDelete(s_lock);
         s_lock = NULL;
         return ESP_ERR_NO_MEM;
+    }
+    esp_err_t urc_err = cpe_at_urc_init();
+    if (urc_err != ESP_OK) {
+        /* URC delivery is optional: telemetry and sessions still work. */
+        ESP_LOGW(TAG, "URC delivery unavailable (%s)", esp_err_to_name(urc_err));
     }
     s_started = true;
     ESP_LOGI(TAG, "AT telemetry started (poll every %d s)", CONFIG_CPE_AT_POLL_INTERVAL_S);
