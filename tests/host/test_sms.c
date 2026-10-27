@@ -288,6 +288,29 @@ static void test_parse_qcmgr_seg(void)
     HT_CHECK_INT(total, 3);
 }
 
+static void test_parse_cmti(void)
+{
+    int index = -1;
+
+    HT_CHECK(cpe_sms_parse_cmti("+CMTI: \"ME\",5", &index));
+    HT_CHECK_INT(index, 5);
+
+    index = -1;
+    HT_CHECK(cpe_sms_parse_cmti("+CMTI: \"SM\",23", &index));
+    HT_CHECK_INT(index, 23);
+
+    index = -1;
+    HT_CHECK(cpe_sms_parse_cmti("+CMTI: \"ME\", 7\r\n", &index));
+    HT_CHECK_INT(index, 7);
+
+    HT_CHECK(!cpe_sms_parse_cmti("+CMTI: \"ME\"", &index));
+    HT_CHECK(!cpe_sms_parse_cmti("+CMT: \"+8613800138000\",,\"25/10/25\"", &index));
+    HT_CHECK(!cpe_sms_parse_cmti("+CMTI: \"ME\",abc", &index));
+    HT_CHECK(!cpe_sms_parse_cmti("+CMTI: \"ME\",-1", &index));
+    HT_CHECK(!cpe_sms_parse_cmti(NULL, &index));
+    HT_CHECK(!cpe_sms_parse_cmti("+CMTI: \"ME\",1", NULL));
+}
+
 static void add_part(cpe_sms_list_t *list, int index, const char *from,
                      int uid, int seq, int total, const char *body)
 {
@@ -377,4 +400,5 @@ void test_sms(void)
     test_parse_cpms();
     test_parse_qcmgr_seg();
     test_merge_parts();
+    test_parse_cmti();
 }

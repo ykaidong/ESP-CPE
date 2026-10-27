@@ -470,3 +470,41 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list)
     }
     list->count = w;
 }
+
+bool cpe_sms_parse_cmti(const char *line, int *index)
+{
+    if (line == NULL || index == NULL || strncmp(line, "+CMTI:", 6) != 0) {
+        return false;
+    }
+
+    const char *comma = strrchr(line, ',');
+    if (comma == NULL) {
+        return false;
+    }
+
+    const char *p = comma + 1;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p < '0' || *p > '9') {
+        return false;
+    }
+
+    int value = 0;
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10 + (*p - '0');
+        if (value > 1000000) {
+            return false;
+        }
+        p++;
+    }
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+        p++;
+    }
+    if (*p != '\0') {
+        return false;
+    }
+
+    *index = value;
+    return true;
+}

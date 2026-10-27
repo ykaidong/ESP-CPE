@@ -25,6 +25,7 @@
 #include "sdkconfig.h"
 
 #include "cpe_at.h"
+#include "cpe_at_urc.h"
 #include "cpe_sms.h"
 #include "cpe_sms_parse.h"
 #include "cpe_sms_ucs2.h"
@@ -141,6 +142,15 @@ static esp_err_t sms_probe_body(const cpe_at_io_t *io, void *arg)
         io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK ||
         strstr(resp, "OK") == NULL) {
         ESP_LOGW(TAG, "AT+CPMS ME rejected; keeping modem default storage");
+    }
+
+    /* Route new messages as +CMTI indications while keeping them in storage;
+     * the body is fetched by the regular list operation. Indications are an
+     * optimisation only, so a modem that rejects the setting stays usable. */
+    if (io->send_line("AT+CNMI=2,1,0,0,0") != ESP_OK ||
+        io->read_until(NULL, 0, CPE_SMS_CMD_TIMEOUT_MS, resp, sizeof(resp)) != ESP_OK ||
+        strstr(resp, "OK") == NULL) {
+        ESP_LOGW(TAG, "AT+CNMI rejected; new-message indications unavailable");
     }
     return ESP_OK;
 }
@@ -596,6 +606,24 @@ static bool sms_maintain(void)
 
 /* -------------------------------- task ---------------------------------- */
 
+/* New-message indications name the storage slot only; the body is fetched by
+ * the regular list operation. */
+static void sms_urc_new_message(const char *line, void *ctx)
+{
+    (void)ctx;
+    int index = 0;
+    if (cpe_sms_parse_cmti(line, &index)) {
+        ESP_LOGI(TAG, "New SMS at storage index %d", index);
+    }
+}
+
+static const cpe_at_urc_subscription_t s_urc_sub = {
+    .prefixes = { "+CMTI:" },
+    .prefix_count = 1,
+    .handler = sms_urc_new_message,
+    .ctx = NULL,
+};
+
 static void sms_task(void *arg)
 {
     (void)arg;
@@ -662,6 +690,10 @@ esp_err_t cpe_sms_init(void)
         s_op_lock = NULL;
         s_task = NULL;
         return ESP_ERR_NO_MEM;
+    }
+    esp_err_t urc_err = cpe_at_urc_subscribe(&s_urc_sub);
+    if (urc_err != ESP_OK) {
+        ESP_LOGW(TAG, "Cannot subscribe to +CMTI (%s)", esp_err_to_name(urc_err));
     }
     return ESP_OK;
 }

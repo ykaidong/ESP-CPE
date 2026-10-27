@@ -64,6 +64,11 @@ bool cpe_sms_parse_cpms(const char *resp, int *used, int *total);
  * positive integers. */
 bool cpe_sms_parse_qcmgr_seg(const char *line, int *uid, int *seg, int *total);
 
+/* Parse the storage index from a `+CMTI: "ME",<index>` indication. Returns
+ * false when the line is not a CMTI indication or the index is not a
+ * non-negative integer. */
+bool cpe_sms_parse_cmti(const char *line, int *index);
+
 /* Merge concatenated parts in `list` in place: entries sharing from+uid+total
  * become one message ordered by part_seq, with all their storage indexes
  * collected in `indexes`. Entries whose metadata is missing (part_total <= 1)
