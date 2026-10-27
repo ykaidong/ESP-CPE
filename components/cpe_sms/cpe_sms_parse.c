@@ -166,12 +166,18 @@ static void parse_cmgl_header(const char *line, cpe_sms_msg_t *m)
     snprintf(m->time, sizeof(m->time), "%s", small);
 }
 
-/* A line that ends the list, not part of any message body. */
+/* A line that ends the list, not part of any message body. The response reader
+ * may stop at the "\r" of the final line, so a trailing "\r" is allowed. */
 static bool is_terminal_line(const char *line)
 {
-    return strcmp(line, "OK") == 0 || strcmp(line, "ERROR") == 0 ||
-           strncmp(line, "+CME ERROR:", 11) == 0 ||
-           strncmp(line, "+CMS ERROR:", 11) == 0;
+    size_t len = strlen(line);
+    if (len > 0 && line[len - 1] == '\r') {
+        len--;
+    }
+    return (len == 2 && strncmp(line, "OK", 2) == 0) ||
+           (len == 5 && strncmp(line, "ERROR", 5) == 0) ||
+           (len >= 11 && (strncmp(line, "+CME ERROR:", 11) == 0 ||
+                          strncmp(line, "+CMS ERROR:", 11) == 0));
 }
 
 bool cpe_sms_parse_cmgl(const char *raw, cpe_sms_list_t *out)

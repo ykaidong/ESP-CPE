@@ -29,6 +29,7 @@
 #include "esp_log.h"
 
 #include "cpe_at.h"
+#include "cpe_at_urc_match.h"
 #include "cpe_status.h"
 #include "iot_usbh_cdc.h"
 #include "iot_usbh_cdc_type.h"
@@ -46,6 +47,9 @@ static const char *TAG = "cpe_at";
  * 20 messages, each body up to 160 UCS2 chars -> 640 hex bytes). Too small and
  * the CDC driver drops bytes ("CDC in ringbuf is full"), truncating the list. */
 #define AT_RINGBUF_SIZE        16384
+/* One assembled response or URC line. A 160-character UCS2 body in a +CMGL or
+ * +QCMGR answer is 640 hex characters plus a short header. */
+#define AT_LINE_MAX            1024
 #define AT_TRANSFER_SIZE       512
 /* Writing a command line to the CDC port. */
 #define AT_WRITE_TIMEOUT_MS    1000
@@ -306,76 +310,203 @@ typedef enum {
     AT_FINAL_ERROR,
 } at_final_t;
 
-/* Only complete result lines terminate a command. Matching "OK" anywhere in
- * the buffer can pick up an unrelated token or a late answer to the previous
- * command and truncate the current response. */
-static at_final_t at_final_line(const char *buf)
-{
-    at_final_t result = AT_FINAL_NONE;
-    const char *p = buf;
+/* Response collection state for one read. Complete lines are written here;
+ * everything after the final line is discarded so a late answer cannot leak
+ * into the next command. */
+typedef struct {
+    char *buf;
+    size_t size;
+    size_t used;
+    const char *const *extra;
+    size_t n_extra;
+    bool final_ok;
+    bool final_error;
+    bool extra_seen;
+    bool overflow;
+} at_rx_target_t;
 
-    while (*p != '\0') {
-        const char *eol = p;
-        while (*eol != '\0' && *eol != '\r' && *eol != '\n') {
-            eol++;
-        }
-        size_t len = (size_t)(eol - p);
-        if (len == 2 && strncmp(p, "OK", 2) == 0) {
-            result = AT_FINAL_OK;
-        } else if ((len == 5 && strncmp(p, "ERROR", 5) == 0) ||
-                   (len >= 11 && (strncmp(p, "+CME ERROR:", 11) == 0 ||
-                                  strncmp(p, "+CMS ERROR:", 11) == 0))) {
-            result = AT_FINAL_ERROR;
-        }
-        if (*eol == '\0') {
-            break;
-        }
-        p = eol + 1;
+/* Terminator state: "\r\n" arrives as two bytes, and a final line stops the
+ * read at "\r". Remember whether that "\r" was kept so its "\n" is kept too,
+ * and drop the "\n" that follows a discarded line. */
+typedef enum {
+    AT_CR_NONE = 0,
+    AT_CR_KEEP,
+    AT_CR_DROP,
+} at_cr_t;
+
+/* Assembly buffer for the line currently being received. */
+static char s_line[AT_LINE_MAX];
+static size_t s_line_len;
+static bool s_line_truncated;
+static at_cr_t s_cr;
+
+static void at_line_reset(void)
+{
+    s_line_len = 0;
+    s_line[0] = '\0';
+    s_line_truncated = false;
+    s_cr = AT_CR_NONE;
+}
+
+static void at_resp_append(at_rx_target_t *t, const char *data, size_t len)
+{
+    if (t == NULL || t->buf == NULL || t->size == 0) {
+        return;
     }
-    return result;
+    if (t->used + 1 >= t->size) {
+        t->overflow = true;
+        return;
+    }
+    size_t room = t->size - 1 - t->used;
+    size_t n = len < room ? len : room;
+    memcpy(t->buf + t->used, data, n);
+    t->used += n;
+    t->buf[t->used] = '\0';
+    if (n < len) {
+        t->overflow = true;
+    }
 }
 
-static bool at_response_complete(const char *buf)
+static bool at_rx_target_done(const at_rx_target_t *t)
 {
-    return at_final_line(buf) != AT_FINAL_NONE;
+    return t != NULL &&
+           (t->final_ok || t->final_error || t->extra_seen || t->overflow);
 }
 
-static esp_err_t at_read_response(char *buf, size_t size, uint32_t timeout_ms)
+static void at_extra_check(at_rx_target_t *t)
 {
-    size_t used = 0;
+    if (t == NULL || t->extra == NULL || t->extra_seen) {
+        return;
+    }
+    for (size_t i = 0; i < t->n_extra; i++) {
+        const char *tok = t->extra[i];
+        if (tok == NULL || tok[0] == '\0') {
+            continue;
+        }
+        if (t->buf != NULL && strstr(t->buf, tok) != NULL) {
+            t->extra_seen = true;
+            return;
+        }
+        if (s_line_len > 0 && strstr(s_line, tok) != NULL) {
+            /* A prompt (">") has no terminator, so the token can show up in a
+             * partial line. Keep it in the response text: callers look for
+             * tokens such as "+CMGS:" there. */
+            at_resp_append(t, s_line, s_line_len);
+            at_line_reset();
+            t->extra_seen = true;
+            return;
+        }
+    }
+}
+
+/* Returns true when the completed line belongs in the response text, which
+ * also means its terminator belongs there. */
+static bool at_line_complete(at_rx_target_t *t)
+{
+    if (s_line_truncated) {
+        if (t != NULL && !at_rx_target_done(t)) {
+            t->overflow = true;
+        }
+        at_line_reset();
+        return false;
+    }
+
+    cpe_at_line_kind_t kind = cpe_at_urc_line_kind(s_line, s_line_len);
+    bool done = at_rx_target_done(t);
+    if (!done) {
+        at_resp_append(t, s_line, s_line_len);
+        if (t != NULL) {
+            if (kind == CPE_AT_LINE_FINAL_OK) {
+                t->final_ok = true;
+            } else if (kind == CPE_AT_LINE_FINAL_ERROR) {
+                t->final_error = true;
+            }
+        }
+    }
+    at_line_reset();
+    return !done && t != NULL;
+}
+
+static void at_rx_feed(at_rx_target_t *t, const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        char c = (char)data[i];
+        if (c == '\r') {
+            bool keep = at_line_complete(t);
+            if (keep) {
+                at_resp_append(t, &c, 1);
+            }
+            s_cr = keep ? AT_CR_KEEP : AT_CR_DROP;
+            at_extra_check(t);
+        } else if (c == '\n') {
+            if (s_line_len == 0 && s_cr != AT_CR_NONE) {
+                if (s_cr == AT_CR_KEEP) {
+                    at_resp_append(t, &c, 1);
+                }
+                s_cr = AT_CR_NONE;
+                continue;
+            }
+            s_cr = AT_CR_NONE;
+            bool keep = at_line_complete(t);
+            if (keep) {
+                at_resp_append(t, &c, 1);
+            }
+            at_extra_check(t);
+        } else {
+            s_cr = AT_CR_NONE;
+            if (s_line_len + 1 < AT_LINE_MAX) {
+                s_line[s_line_len++] = c;
+                s_line[s_line_len] = '\0';
+            } else {
+                s_line_truncated = true;
+            }
+            at_extra_check(t);
+        }
+    }
+}
+
+/* Move everything the CDC ring buffer holds into the line pump. Bytes that
+ * arrive after the final line are classified too: subscribed URCs are
+ * delivered, other output is dropped. Draining past the final line also
+ * consumes the "\n" that may follow the "\r" it stopped at. */
+static void at_rx_drain(at_rx_target_t *t)
+{
+    uint8_t chunk[64];
+
+    for (;;) {
+        size_t avail = 0;
+        if (usbh_cdc_get_rx_buffer_size(s_port, &avail) != ESP_OK || avail == 0) {
+            return;
+        }
+        size_t want = avail < sizeof(chunk) ? avail : sizeof(chunk);
+        size_t len = want;
+        if (usbh_cdc_read_bytes(s_port, chunk, &len, 0) != ESP_OK || len == 0) {
+            return;
+        }
+        at_rx_feed(t, chunk, len);
+    }
+}
+
+static esp_err_t at_rx_collect(at_rx_target_t *t, uint32_t timeout_ms)
+{
     TickType_t start = xTaskGetTickCount();
-    buf[0] = '\0';
 
     for (;;) {
         if (at_reset_pending()) {
-            break;  /* Abandon the telemetry command for the modem reset. */
+            return ESP_ERR_INVALID_STATE;
         }
-        size_t avail = 0;
-        if (usbh_cdc_get_rx_buffer_size(s_port, &avail) == ESP_OK && avail > 0) {
-            if (used + 1 < size) {
-                size_t want = size - 1 - used;
-                if (want > avail) {
-                    want = avail;
-                }
-                size_t len = want;
-                if (usbh_cdc_read_bytes(s_port, (uint8_t *)buf + used, &len, 0) == ESP_OK) {
-                    used += len;
-                    buf[used] = '\0';
-                }
-            }
-            if (at_response_complete(buf)) {
-                return ESP_OK;
-            }
-            if (used + 1 >= size) {
-                break;  /* Response does not fit the buffer */
-            }
+        at_rx_drain(t);
+        if (t->final_ok || t->final_error || t->extra_seen) {
+            return ESP_OK;
+        }
+        if (t->overflow) {
+            return ESP_ERR_INVALID_SIZE;
         }
         if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS >= timeout_ms) {
-            break;
+            return ESP_ERR_TIMEOUT;
         }
         vTaskDelay(pdMS_TO_TICKS(AT_RESPONSE_POLL_MS));
     }
-    return at_response_complete(buf) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 static esp_err_t at_io_send_line(const char *cmd)
@@ -388,6 +519,7 @@ static esp_err_t at_io_send_line(const char *cmd)
     (void)usbh_cdc_flush_rx_buffer(s_port);
     vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
     (void)usbh_cdc_flush_rx_buffer(s_port);
+    at_line_reset();
     return usbh_cdc_write_bytes(s_port, (const uint8_t *)line, (size_t)len,
                                 pdMS_TO_TICKS(AT_WRITE_TIMEOUT_MS));
 }
@@ -401,44 +533,14 @@ static esp_err_t at_io_write(const uint8_t *data, size_t len)
 static esp_err_t at_io_read_until(const char *const *extra, size_t n_extra,
                                   uint32_t timeout_ms, char *resp, size_t resp_size)
 {
-    size_t used = 0;
-    TickType_t start = xTaskGetTickCount();
+    at_rx_target_t target = {
+        .buf = resp,
+        .size = resp_size,
+        .extra = extra,
+        .n_extra = n_extra,
+    };
     resp[0] = '\0';
-
-    for (;;) {
-        if (at_reset_pending()) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        size_t avail = 0;
-        if (usbh_cdc_get_rx_buffer_size(s_port, &avail) == ESP_OK && avail > 0) {
-            if (used + 1 < resp_size) {
-                size_t want = avail;
-                if (want > resp_size - 1 - used) {
-                    want = resp_size - 1 - used;
-                }
-                size_t len = want;
-                if (usbh_cdc_read_bytes(s_port, (uint8_t *)resp + used, &len, 0) == ESP_OK) {
-                    used += len;
-                    resp[used] = '\0';
-                }
-            }
-            if (at_final_line(resp) != AT_FINAL_NONE) {
-                return ESP_OK;
-            }
-            for (size_t i = 0; i < n_extra; i++) {
-                if (strstr(resp, extra[i]) != NULL) {
-                    return ESP_OK;
-                }
-            }
-            if (used + 1 >= resp_size) {
-                return ESP_ERR_INVALID_SIZE;
-            }
-        }
-        if ((xTaskGetTickCount() - start) * portTICK_PERIOD_MS >= timeout_ms) {
-            return ESP_ERR_TIMEOUT;
-        }
-        vTaskDelay(pdMS_TO_TICKS(AT_RESPONSE_POLL_MS));
-    }
+    return at_rx_collect(&target, timeout_ms);
 }
 
 static const cpe_at_io_t s_at_io = {
@@ -447,12 +549,13 @@ static const cpe_at_io_t s_at_io = {
     .read_until = at_io_read_until,
 };
 
-static bool at_command(const char *cmd, char *resp, size_t resp_size, uint32_t timeout_ms)
+static at_final_t at_command(const char *cmd, char *resp, size_t resp_size,
+                             uint32_t timeout_ms)
 {
     /* A pending reset preempts telemetry; the reset command itself runs in the
      * RUNNING state, so it is not blocked by its own request. */
     if (s_port == NULL || at_reset_pending()) {
-        return false;
+        return AT_FINAL_NONE;
     }
     (void)usbh_cdc_flush_rx_buffer(s_port);
     /* The flush only drops bytes already queued in the ring buffer; a USB
@@ -460,16 +563,21 @@ static bool at_command(const char *cmd, char *resp, size_t resp_size, uint32_t t
      * more so a late answer is not taken for this command's response. */
     vTaskDelay(pdMS_TO_TICKS(AT_FLUSH_SETTLE_MS));
     (void)usbh_cdc_flush_rx_buffer(s_port);
+    at_line_reset();
     if (at_send_line(cmd) != ESP_OK) {
         ESP_LOGW(TAG, "Failed to send %s", cmd);
-        return false;
+        return AT_FINAL_NONE;
     }
-    if (at_read_response(resp, resp_size, timeout_ms) != ESP_OK) {
+    at_rx_target_t target = { .buf = resp, .size = resp_size };
+    if (at_rx_collect(&target, timeout_ms) != ESP_OK) {
         ESP_LOGD(TAG, "No complete response to %s", cmd);
-        return false;
+        return AT_FINAL_NONE;
     }
     ESP_LOGD(TAG, "AT %s -> %s", cmd, resp);
-    return at_final_line(resp) == AT_FINAL_OK;
+    if (target.final_ok) {
+        return AT_FINAL_OK;
+    }
+    return target.final_error ? AT_FINAL_ERROR : AT_FINAL_NONE;
 }
 
 /*------------------------------------ Parsing --------------------------------------*/
@@ -985,10 +1093,10 @@ static void at_clear_status(void)
 static void at_read_identity(void)
 {
     char resp[512];
-    if (at_command("ATI", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("ATI", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         at_parse_ati(resp);
     }
-    if (at_command("AT+CGSN", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+CGSN", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         at_parse_cgsn(resp);
     }
     cpe_status_set_modem_info(s_model, s_fw, s_imei);
@@ -1015,16 +1123,16 @@ static void at_poll_sim(void)
         return;
     }
 
-    bool ok = at_command("AT+CNUM", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
+    at_final_t cnum = at_command("AT+CNUM", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
     char number[24] = { 0 };
-    if (ok) {
+    if (cnum == AT_FINAL_OK) {
         /* OK without a +CNUM line: the SIM has no MSISDN programmed. */
         if (at_parse_cnum(resp, number, sizeof(number))) {
             cpe_status_set_phone_number(number);
         } else {
             cpe_status_set_phone_number("");
         }
-    } else if (at_final_line(resp) == AT_FINAL_ERROR) {
+    } else if (cnum == AT_FINAL_ERROR) {
         cpe_status_set_phone_number("");
     }
 }
@@ -1032,25 +1140,25 @@ static void at_poll_sim(void)
 static esp_err_t at_poll(void)
 {
     char resp[256];
-    bool csq_ok = at_command("AT+CSQ", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
+    bool csq_ok = at_command("AT+CSQ", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK;
     if (!csq_ok) {
         /* Distinguish "no AT port" from a modem that simply rejects CSQ: the
          * latter must not tear the session down. */
-        if (!at_command("AT", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+        if (at_command("AT", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) != AT_FINAL_OK) {
             return ESP_FAIL;
         }
     } else {
         at_parse_csq(resp);
     }
 
-    if (at_command("AT+COPS?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+COPS?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         at_parse_cops(resp);
     }
 
-    if (at_command("AT+CEREG?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+CEREG?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         if (strstr(resp, "+CEREG:") != NULL) {
             at_parse_registration(resp, "+CEREG:");
-        } else if (at_command("AT+CREG?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) &&
+        } else if (at_command("AT+CREG?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK &&
                    strstr(resp, "+CREG:") != NULL) {
             at_parse_registration(resp, "+CREG:");
         }
@@ -1058,16 +1166,16 @@ static esp_err_t at_poll(void)
 
     /* Packet switched attach and PDP state: LTE metrics are only meaningful
      * once the modem has a data context. All commands are read-only. */
-    if (at_command("AT+CGATT?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+CGATT?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         at_parse_cgatt(resp);
     }
-    if (at_command("AT+CGACT?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+CGACT?", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         at_parse_cgact(resp);
     }
-    if (at_command("AT+QCSQ", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+QCSQ", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         at_parse_qcsq(resp);
     }
-    if (at_command("AT+QTEMP", resp, sizeof(resp), AT_CMD_TIMEOUT_MS)) {
+    if (at_command("AT+QTEMP", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK) {
         int temp_c = 0;
         if (at_parse_qtemp(resp, &temp_c)) {
             cpe_status_set_modem_temp(temp_c, true);
@@ -1120,7 +1228,7 @@ static void at_try_connect(void)
         }
 
         char resp[64];
-        bool answered = at_command("AT", resp, sizeof(resp), AT_PROBE_TIMEOUT_MS);
+        bool answered = at_command("AT", resp, sizeof(resp), AT_PROBE_TIMEOUT_MS) == AT_FINAL_OK;
         if (at_generation() != generation) {
             /* The device is gone: the CDC driver closes its ports itself, so
              * just forget the handle instead of closing it again. */
@@ -1158,6 +1266,7 @@ static void at_release_port(bool close)
     s_port = NULL;
     s_port_generation = 0;
     s_failures = 0;
+    at_line_reset();
     at_clear_status();
 }
 
@@ -1245,7 +1354,7 @@ static void at_reset_service(void)
         ESP_LOGW(TAG, "Restarting the modem with AT+CFUN=1,1");
         /* The modem may drop the link before it answers, so a missing OK is
          * logged but never treated as a failure of the restart path. */
-        ok = at_command("AT+CFUN=1,1", resp, sizeof(resp), AT_CMD_TIMEOUT_MS);
+        ok = at_command("AT+CFUN=1,1", resp, sizeof(resp), AT_CMD_TIMEOUT_MS) == AT_FINAL_OK;
         if (ok) {
             ESP_LOGW(TAG, "Modem acknowledged the reset");
         } else {

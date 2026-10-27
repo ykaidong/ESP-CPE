@@ -218,6 +218,23 @@ static void test_parse_cmgl_limit(void)
     HT_CHECK_INT(list.items[CPE_SMS_MAX_MESSAGES - 1].index, CPE_SMS_MAX_MESSAGES);
 }
 
+/* The response reader may stop at the "\r" of the final line, so the raw text
+ * can end with "OK\r" and no "\n". The last message must not absorb it. */
+static void test_parse_cmgl_cr_final(void)
+{
+    const char *raw =
+        "AT+CMGL=\"ALL\"\r\n"
+        "\r\n"
+        "+CMGL: 1,\"REC UNREAD\",\"0031\",,\"25/10/25,10:00:00+32\"\r\n"
+        "0041\r\n"
+        "OK\r";
+
+    cpe_sms_list_t list;
+    HT_CHECK(cpe_sms_parse_cmgl(raw, &list));
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_STR(list.items[0].body, "A");
+}
+
 static void test_parse_cpms(void)
 {
     int used = -1;
@@ -356,6 +373,7 @@ void test_sms(void)
     test_parse_cmgl_long();
     test_parse_cmgl_multiline();
     test_parse_cmgl_limit();
+    test_parse_cmgl_cr_final();
     test_parse_cpms();
     test_parse_qcmgr_seg();
     test_merge_parts();
