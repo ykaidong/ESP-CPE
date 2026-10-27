@@ -15,6 +15,7 @@ void test_json_util(void);
 void test_station_names(void);
 void test_config_validate(void);
 void test_sms(void);
+void test_at_urc(void);
 
 int main(void)
 {
@@ -23,5 +24,6 @@ int main(void)
     ht_run_suite("station_names: MAC parsing, nickname whitelist", test_station_names);
     ht_run_suite("cpe_config: configuration validation", test_config_validate);
     ht_run_suite("cpe_sms: UCS2, CMGL/QCMGR/CPMS parsing, concatenation", test_sms);
+    ht_run_suite("cpe_at: result line classification, URC prefix matching", test_at_urc);
     return ht_report();
 }
