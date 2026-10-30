@@ -7,15 +7,17 @@ menu "CPE Web Console"
             Specify the mount point in VFS.
 
     config CPE_WEB_HTTP_LOG
-        bool "Log every HTTP request (method, URI, client IP, duration)"
+        bool "Log every HTTP request (method, URI, client IP, duration, free heap)"
         default n
         help
             Print one line when a request enters a handler and one line when it
-            returns, with the client address and the time the handler took.
+            returns, with the client address, the time the handler took and the
+            free heap after the response.
 
             Useful to tell "the request never reached the device" (Wi-Fi/ARP
             problem) apart from "the device was busy" (httpd blocked) and from
-            "the handler is slow". Keep it off in normal operation: the status
-            page polls every few seconds and each poll produces two lines.
+            "the handler is slow"; the free-heap value shows which request
+            consumes memory. Keep it off in normal operation: the status page
+            polls every few seconds and each poll produces two lines.
 
 endmenu

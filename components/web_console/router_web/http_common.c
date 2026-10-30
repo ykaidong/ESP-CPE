@@ -15,6 +15,7 @@
 #include <stdio.h>
 
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
 #endif
@@ -104,9 +105,10 @@ static esp_err_t http_log_handler(httpd_req_t *req)
     esp_err_t err = route->handler(req);
     req->user_ctx = route;
 
-    ESP_LOGI(TAG, "HTTP <-- %s %s %s (%lld ms)", method, req->uri,
+    ESP_LOGI(TAG, "HTTP <-- %s %s %s (%lld ms, free=%u)", method, req->uri,
              err == ESP_OK ? "ok" : esp_err_to_name(err),
-             (long long)((esp_timer_get_time() - start_us) / 1000));
+             (long long)((esp_timer_get_time() - start_us) / 1000),
+             (unsigned)esp_get_free_heap_size());
     return err;
 }
 

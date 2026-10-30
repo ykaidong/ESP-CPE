@@ -19,6 +19,26 @@ CONFIG_COMPILER_ORPHAN_SECTIONS_PLACE=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_LOG_COLORS=y
 
+# ---- PSRAM: 8MB octal on the S3 R8 module -------------------------------
+# Internal RAM alone cannot hold the MQTT TLS session (~49 KB) next to a full
+# page load (four httpd connections: 8 KB stack + up to 16 KB TCP send buffer
+# each), which exhausted the heap and stalled every transfer. With malloc()
+# backed by PSRAM, allocations above SPIRAM_MALLOC_ALWAYSINTERNAL (the 16 KB
+# TLS input buffer) move out of internal RAM; the USB and Wi-Fi DMA buffers
+# stay internal because they are smaller than that threshold.
+# IGNORE_NOTFOUND keeps a mis-sized module (e.g. 2MB quad) bootable: the
+# firmware then runs with internal RAM only instead of panicking.
+# 80MHz is the rated speed of the octal chip; if the memory test becomes
+# unstable, falling back to 40MHz is the first thing to try.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
 # ---- Wi-Fi buffers (CPE AP with several clients) ------------------------
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
@@ -32,8 +52,12 @@ CONFIG_LWIP_IP_FORWARD=y
 CONFIG_LWIP_IPV4_NAPT=y
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
 CONFIG_LWIP_IPV6=n
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
-CONFIG_LWIP_TCP_WND_DEFAULT=65535
+# Forwarded traffic is NAPT at the IP layer and never touches these windows;
+# they only bound connections the device itself opens (console, MQTT, OTA).
+# lwIP allocates pbufs from the system heap, so 64 KB per connection was the
+# main reason an ECM receive packet could not get 1360 bytes.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=16384
+CONFIG_LWIP_TCP_WND_DEFAULT=16384
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
 # Sockets are shared by the console, SNTP and the MQTT client. The IDF default

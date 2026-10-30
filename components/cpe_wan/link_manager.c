@@ -62,6 +62,10 @@ static const char *TAG = "cpe_link";
  * most disruptive step and must not turn into a restart loop of its own. */
 #define LM_MODEM_RESET_COOLDOWN_MS  60000
 
+/* Periodic heap watermark, so a slow leak shows up as a steadily falling
+ * free/min pair long before an allocation starts failing. */
+#define LM_HEAP_LOG_PERIOD_US   (60LL * 1000 * 1000)
+
 /* Stack and priority of the link manager task. */
 #define LM_TASK_STACK           4096
 #define LM_TASK_PRIO            6
@@ -73,13 +77,16 @@ static volatile bool s_ecm_rebuild_req;
 
 /* Heap watermark helper: free heap alone is not enough to spot a leak or
  * fragmentation, so also log the historical minimum and the largest internal
- * block. Only called on link transitions and once at boot. */
+ * block. Called on link transitions and periodically from the link manager
+ * task. */
 void cpe_wan_log_heap(const char *reason)
 {
-    ESP_LOGI(TAG, "heap (%s): free=%u min=%u largest_internal=%u",
+    ESP_LOGI(TAG,
+             "heap (%s): free=%u internal=%u min_internal=%u largest_internal=%u",
              reason,
              (unsigned)esp_get_free_heap_size(),
-             (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
 
@@ -734,10 +741,16 @@ static void link_manager_task(void *arg)
 {
     (void)arg;
     lm_ctx_t ctx = { .phase = LM_PHASE_BOOT };
+    int64_t next_heap_log_us = esp_timer_get_time() + LM_HEAP_LOG_PERIOD_US;
 
     cpe_status_set_state(CPE_STATE_BOOT, "starting usb modem support");
 
     for (;;) {
+        int64_t now_us = esp_timer_get_time();
+        if (now_us >= next_heap_log_us) {
+            next_heap_log_us = now_us + LM_HEAP_LOG_PERIOD_US;
+            cpe_wan_log_heap(lm_phase_name(ctx.phase));
+        }
         if (lm_tick(&ctx) == LM_TICK_IDLE) {
             vTaskDelay(pdMS_TO_TICKS(LM_IDLE_TICK_MS));
         }
