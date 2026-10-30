@@ -299,7 +299,7 @@ var CPE = (function () {
         sms_not_supported: '当前模组不支持短信功能',
         sms_bad_number: '号码格式不正确（可含 +，3~20 位数字）',
         sms_bad_text: '短信内容包含无法编码的字符，请检查后重试',
-        sms_text_too_long: '短信内容过长（ASCII 最多 160 字符，中文最多 70 字）',
+        sms_text_too_long: '短信内容过长（ASCII 最多 160，扩展符号按 2 个计；中文最多 70 字）',
         sms_rate_limited: '发送过于频繁，请稍后再试',
         sms_send_failed: '短信发送失败，请检查 SIM 卡与短信中心',
         sms_send_timeout: '短信发送超时，请重试',

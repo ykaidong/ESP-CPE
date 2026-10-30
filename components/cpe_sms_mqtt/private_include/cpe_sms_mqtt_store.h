@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Persistence of the forwarding configuration and the duplicate ring. Only
+ * Persistence of the forwarding configuration and the duplicate rings. Only
  * cpe_sms_mqtt.c uses these helpers; the web API goes through the public
  * functions so a save always triggers a reconnect.
  */
@@ -17,9 +17,6 @@
 
 #include "cpe_sms_mqtt.h"
 
-/** Fill `cfg` with the factory defaults. */
-void cpe_sms_mqtt_store_defaults(cpe_sms_mqtt_config_t *cfg);
-
 /** Read the stored configuration. Returns ESP_ERR_NVS_NOT_FOUND when nothing
  *  has been saved yet (*cfg is then left as the caller set it). A stored
  *  configuration that no longer validates is returned with `enabled` cleared. */
@@ -29,6 +26,11 @@ esp_err_t cpe_sms_mqtt_store_save(const cpe_sms_mqtt_config_t *cfg);
 
 void cpe_sms_mqtt_store_ring_load(cpe_sms_mqtt_ring_t *ring);
 esp_err_t cpe_sms_mqtt_store_ring_save(const cpe_sms_mqtt_ring_t *ring);
+
+/** Downlink command ids already executed, so a broker redelivery across a
+ *  reboot is answered instead of sending the SMS again. */
+void cpe_sms_mqtt_store_cmd_load(cpe_sms_mqtt_ring_t *ring);
+esp_err_t cpe_sms_mqtt_store_cmd_save(const cpe_sms_mqtt_ring_t *ring);
 
 /** Read the installed CA certificate into a new heap buffer, or NULL when none
  *  is installed (or the stored copy no longer parses as PEM). The caller owns

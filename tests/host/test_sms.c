@@ -57,6 +57,31 @@ static void test_text_measure(void)
     long_ascii[161] = '\0';
     HT_CHECK(!cpe_sms_text_measure(long_ascii, &ascii, &units));
 
+    /* GSM 03.38 extension characters occupy two septets each. */
+    HT_CHECK(cpe_sms_text_measure("^{}[]~|\\", &ascii, &units));
+    HT_CHECK(ascii);
+    HT_CHECK_INT(units, 16);
+
+    char ext_ok[81];
+    memset(ext_ok, '{', 80);
+    ext_ok[80] = '\0';
+    HT_CHECK(cpe_sms_text_measure(ext_ok, &ascii, &units));
+    HT_CHECK_INT(units, 160);
+
+    char ext_over[82];
+    memset(ext_over, '{', 81);
+    ext_over[81] = '\0';
+    HT_CHECK(!cpe_sms_text_measure(ext_over, &ascii, &units));
+    HT_CHECK_INT(units, 162);
+
+    /* 159 plain characters plus one extension character exceed the budget. */
+    char mixed[161];
+    memset(mixed, 'a', 159);
+    mixed[159] = '{';
+    mixed[160] = '\0';
+    HT_CHECK(!cpe_sms_text_measure(mixed, &ascii, &units));
+    HT_CHECK_INT(units, 161);
+
     HT_CHECK(cpe_sms_text_measure("\xe4\xb8\xad\xe6\x96\x87", &ascii, &units));
     HT_CHECK(!ascii);
     HT_CHECK_INT(units, 2);

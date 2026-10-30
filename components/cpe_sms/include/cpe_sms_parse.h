@@ -96,5 +96,6 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list);
 bool cpe_sms_number_valid(const char *num);
 
 /* True when text is non-empty and fits a single SMS; sets *is_ascii and *units
- * (budget 160 for ASCII, 70 for UCS2 code units). */
+ * (budget 160 septets for ASCII, where the GSM 03.38 extension characters
+ * count 2; 70 code units for UCS2). */
 bool cpe_sms_text_measure(const char *text, bool *is_ascii, int *units);

@@ -27,7 +27,9 @@ extern "C" {
 #define CPE_SMS_MQTT_NUMBER_MAX     21
 #define CPE_SMS_MQTT_TEXT_MAX       512
 #define CPE_SMS_MQTT_ID_MAX         64
-#define CPE_SMS_MQTT_RING_SIZE      16
+/* Larger than the inbox (24): a hash may only be evicted once the message it
+ * stands for is long gone, or the full scan would publish it again. */
+#define CPE_SMS_MQTT_RING_SIZE      32
 /* Room for a root CA plus an intermediate. The whole PEM is kept in NVS. */
 #define CPE_SMS_MQTT_PEM_MAX        3900
 
@@ -50,9 +52,10 @@ typedef struct {
     char text[CPE_SMS_MQTT_TEXT_MAX + 1];
 } cpe_sms_mqtt_cmd_t;
 
-/* Recent message hashes, persisted so a reboot does not re-push the inbox.
- * An entry is only a 32-bit FNV hash; the collision risk over 16 entries is
- * negligible and a false positive can only skip one message. */
+/* Recent message and command hashes, persisted so a reboot neither re-pushes
+ * the inbox nor executes a downlink command twice. An entry is only a 32-bit
+ * FNV hash; the collision risk over 32 entries is negligible and a false
+ * positive can only skip one message. */
 typedef struct {
     uint32_t hash[CPE_SMS_MQTT_RING_SIZE];
     uint8_t next;
@@ -89,7 +92,10 @@ bool cpe_sms_mqtt_normalize_number(const char *in,
  *  fields are required: `id` is the caller's correlation key, used for the
  *  acknowledgement and to suppress a redelivery of the same command. Returns
  *  false and sets *err (when non-NULL) to "invalid_command",
- *  "sms_bad_number" or "sms_text_too_long". A `len` of 0 means strlen. */
+ *  "sms_bad_number" or "sms_text_too_long". A `len` of 0 means strlen. When the
+ *  command is rejected because of `to` or `text`, `out->id` still holds the
+ *  parsed id so the caller can address the acknowledgement; it is empty when
+ *  the JSON or the id itself was unusable. */
 bool cpe_sms_mqtt_cmd_parse(const char *json, size_t len, cpe_sms_mqtt_cmd_t *out,
                             const char **err);
 

@@ -60,15 +60,26 @@
         if (btn) btn.disabled = !enabled;
     }
 
-    /* The server applies 160 UCS2 units for pure ASCII and 70 otherwise; JS
-     * strings are UTF-16, so text.length is already the unit count. */
-    function textLimit(value) {
+    var GSM_EXTENDED = '^{}[]~|\\\f';
+
+    /* The server counts septets for pure ASCII (a GSM 03.38 extension
+     * character takes two) and UTF-8 code points otherwise; JS strings are
+     * UTF-16, so a non-ASCII string is measured by its code units. */
+    function textUnits(value) {
+        var ascii = true;
+        var units = 0;
         for (var i = 0; i < value.length; i++) {
-            if (value.charCodeAt(i) >= 128) {
-                return 70;
+            var c = value.charCodeAt(i);
+            if (c >= 128) {
+                ascii = false;
+                break;
             }
+            units += GSM_EXTENDED.indexOf(value.charAt(i)) >= 0 ? 2 : 1;
         }
-        return 160;
+        if (!ascii) {
+            units = value.length;
+        }
+        return { units: units, limit: ascii ? 160 : 70 };
     }
 
     function updateCount() {
@@ -76,16 +87,14 @@
         var count = byId('sms-count');
         if (!text || !count) return;
 
-        var value = text.value;
-        var limit = textLimit(value);
-        var units = value.length;
+        var measure = textUnits(text.value);
         /* Follow the active limit so the field stops accepting text instead of
          * letting the server reject it; a paste can still overshoot. */
-        if (text.maxLength !== limit) {
-            text.maxLength = limit;
+        if (text.maxLength !== measure.limit) {
+            text.maxLength = measure.limit;
         }
-        count.textContent = units + ' / ' + limit;
-        count.className = units > limit ? 'sms-count over' : 'sms-count';
+        count.textContent = measure.units + ' / ' + measure.limit;
+        count.className = measure.units > measure.limit ? 'sms-count over' : 'sms-count';
     }
 
     function makeCell(text, cls) {
@@ -195,11 +204,15 @@
         timer = setTimeout(poll, POLL_MS);
     }
 
-    function refreshNow() {
+    function pollNow() {
         if (timer) clearTimeout(timer);
         timer = null;
-        forceList = true;
         poll();
+    }
+
+    function refreshNow() {
+        forceList = true;
+        pollNow();
     }
 
     /* Full listing. Resolves only on success, so the caller keeps the old
@@ -276,8 +289,10 @@
             setBanner('号码和内容都不能为空。', 'status-banner-warn');
             return;
         }
-        if (text.value.length > textLimit(text.value)) {
-            setBanner('短信内容过长（ASCII 最多 160 字符，中文最多 70 字）。', 'status-banner-warn');
+        var measure = textUnits(text.value);
+        if (measure.units > measure.limit) {
+            setBanner('短信内容过长（ASCII 最多 160，扩展符号按 2 个计；中文最多 70 字）。',
+                      'status-banner-warn');
             return;
         }
         sending = true;
@@ -294,7 +309,15 @@
             setFormEnabled(true);
             refreshNow();
         }).catch(function (error) {
-            setBanner(CPE.errorText(error), 'status-banner-warn');
+            var code = error && (error.code || error.message);
+            if (code === 'network_error' || code === 'sms_send_timeout') {
+                /* The modem may already have sent it; retrying blindly could
+                 * bill the user twice. */
+                setBanner('发送结果未知，请稍后在短信列表中确认是否已发送。',
+                          'status-banner-warn');
+            } else {
+                setBanner(CPE.errorText(error), 'status-banner-warn');
+            }
             sending = false;
             setFormEnabled(true);
             scheduleNext();
@@ -310,10 +333,11 @@
         if (text) text.addEventListener('input', updateCount);
         setFormEnabled(false);
 
-        /* Background tabs throttle timers; refresh as soon as the page is
-         * visible again so a long-paused list does not stay stale. */
+        /* Background tabs throttle timers, so poll once more on becoming
+         * visible; the generation check decides whether a full listing is
+         * actually needed. */
         document.addEventListener('visibilitychange', function () {
-            if (!document.hidden) refreshNow();
+            if (!document.hidden) pollNow();
         });
 
         CPE.guardSession().then(function () {

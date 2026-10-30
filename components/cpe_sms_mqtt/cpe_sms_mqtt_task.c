@@ -57,9 +57,14 @@ static const char *TAG = "sms_mqtt";
 #define LIST_TIMEOUT_MS       20000
 #define SEND_TIMEOUT_MS       65000
 #define PENDING_MAX           8
+/* A QoS 1 publish the broker never acknowledges would otherwise hold a slot
+ * forever and stop the forwarding. */
+#define PENDING_TIMEOUT_MS    60000
 #define CMD_QUEUE_DEPTH       4
-#define CMD_SEEN_SIZE         16
 #define PAYLOAD_MAX           6144
+/* Certificate checks need a sane clock; wait this long after the WAN comes up
+ * before starting the client even if NTP stays unreachable. */
+#define SNTP_GRACE_MS         30000
 #define SNTP_SERVER           "cn.pool.ntp.org"
 /* Anything below this is the 1970 epoch plus a few days: the clock has not been
  * set, so the timestamps are only good for ordering. */
@@ -68,6 +73,7 @@ static const char *TAG = "sms_mqtt";
 typedef struct {
     int msg_id;
     uint32_t hash;
+    int64_t at_ms;
 } pending_t;
 
 typedef struct {
@@ -100,9 +106,8 @@ static pending_t s_pending[PENDING_MAX];
 static uint8_t s_pending_count;
 static volatile bool s_ring_dirty;
 
-static uint32_t s_cmd_seen[CMD_SEEN_SIZE];
-static uint8_t s_cmd_seen_next;
-static uint8_t s_cmd_seen_count;
+static cpe_sms_mqtt_ring_t s_cmd_ring;
+static volatile bool s_cmd_dirty;
 
 static cpe_sms_mqtt_status_t s_status;
 
@@ -143,6 +148,25 @@ static void pending_clear(void)
     xSemaphoreGive(s_state_lock);
 }
 
+/* Drop entries the broker has not acknowledged in time. The hash never made it
+ * into the ring, so the next scan publishes the message again. */
+static bool pending_expire(void)
+{
+    bool dropped = false;
+    int64_t now = esp_timer_get_time() / 1000;
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    for (uint8_t i = 0; i < s_pending_count;) {
+        if (now - s_pending[i].at_ms < PENDING_TIMEOUT_MS) {
+            i++;
+            continue;
+        }
+        s_pending[i] = s_pending[--s_pending_count];
+        dropped = true;
+    }
+    xSemaphoreGive(s_state_lock);
+    return dropped;
+}
+
 static bool seen_or_in_flight(uint32_t hash)
 {
     if (cpe_sms_mqtt_ring_contains(&s_ring, hash)) {
@@ -154,29 +178,6 @@ static bool seen_or_in_flight(uint32_t hash)
         }
     }
     return false;
-}
-
-static bool command_seen(uint32_t hash)
-{
-    for (uint8_t i = 0; i < s_cmd_seen_count; i++) {
-        if (s_cmd_seen[i] == hash) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void command_remember(uint32_t hash)
-{
-    if (command_seen(hash)) {
-        return;
-    }
-    if (s_cmd_seen_count < CMD_SEEN_SIZE) {
-        s_cmd_seen[s_cmd_seen_count++] = hash;
-        return;
-    }
-    s_cmd_seen[s_cmd_seen_next] = hash;
-    s_cmd_seen_next = (uint8_t)((s_cmd_seen_next + 1) % CMD_SEEN_SIZE);
 }
 
 /* Publish at QoS 1 and remember the hash until the broker acknowledges it, so a
@@ -195,6 +196,7 @@ static bool publish_sms(const cpe_sms_mqtt_config_t *cfg, const char *payload,
         if (msg_id >= 0) {
             s_pending[s_pending_count].msg_id = msg_id;
             s_pending[s_pending_count].hash = hash;
+            s_pending[s_pending_count].at_ms = esp_timer_get_time() / 1000;
             s_pending_count++;
             ok = true;
         }
@@ -449,9 +451,11 @@ static bool message_wanted(const cpe_sms_msg_t *msg)
 }
 
 /* Returns true when the inbox was actually listed, so the caller only resets
- * its scan timers then: a busy AT port must not suppress the next attempt. */
-static bool scan_and_publish(const cpe_sms_mqtt_config_t *cfg)
+ * its scan timers then: a busy AT port must not suppress the next attempt.
+ * *more reports that the pending window filled up with messages still to go. */
+static bool scan_and_publish(const cpe_sms_mqtt_config_t *cfg, bool *more)
 {
+    *more = false;
     cpe_sms_list_t *list = calloc(1, sizeof(*list));
     char *payload = malloc(PAYLOAD_MAX);
     if (list == NULL || payload == NULL) {
@@ -471,6 +475,10 @@ static bool scan_and_publish(const cpe_sms_mqtt_config_t *cfg)
     }
 
     uint8_t sent = 0;
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    uint8_t room = (uint8_t)(PENDING_MAX - s_pending_count);
+    xSemaphoreGive(s_state_lock);
+
     for (size_t i = 0; i < list->count; i++) {
         const cpe_sms_msg_t *msg = &list->items[i];
         if (!message_wanted(msg)) {
@@ -484,6 +492,11 @@ static bool scan_and_publish(const cpe_sms_mqtt_config_t *cfg)
         if (skip) {
             continue;
         }
+        if (sent >= room) {
+            /* The window is full; the caller comes back once it drains. */
+            *more = true;
+            break;
+        }
 
         size_t len = cpe_sms_mqtt_build_sms(payload, PAYLOAD_MAX, msg->from, msg->body,
                                             msg->time, msg->part_total, hash);
@@ -493,9 +506,6 @@ static bool scan_and_publish(const cpe_sms_mqtt_config_t *cfg)
         }
         if (publish_sms(cfg, payload, len, hash)) {
             sent++;
-        }
-        if (sent >= PENDING_MAX) {
-            break;
         }
     }
     cpe_sms_list_clear(list);
@@ -515,23 +525,41 @@ static void watch_task(void *arg)
     int64_t gen_changed_at = 0;
     int64_t last_scan = esp_timer_get_time() / 1000;
     int64_t last_try = 0;
+    bool more_pending = false;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(WATCH_PERIOD_MS));
 
-        if (s_ring_dirty) {
-            cpe_sms_mqtt_ring_t copy;
+        if (s_ring_dirty || s_cmd_dirty) {
+            cpe_sms_mqtt_ring_t ring_copy;
+            cpe_sms_mqtt_ring_t cmd_copy;
+            bool ring_dirty;
+            bool cmd_dirty;
             xSemaphoreTake(s_state_lock, portMAX_DELAY);
-            copy = s_ring;
+            ring_copy = s_ring;
+            cmd_copy = s_cmd_ring;
+            ring_dirty = s_ring_dirty;
+            cmd_dirty = s_cmd_dirty;
             s_ring_dirty = false;
+            s_cmd_dirty = false;
             xSemaphoreGive(s_state_lock);
-            (void)cpe_sms_mqtt_store_ring_save(&copy);
+            if (ring_dirty) {
+                (void)cpe_sms_mqtt_store_ring_save(&ring_copy);
+            }
+            if (cmd_dirty) {
+                (void)cpe_sms_mqtt_store_cmd_save(&cmd_copy);
+            }
         }
 
         if (!s_connected) {
             gen_seen = cpe_sms_rx_generation();
             gen_done = gen_seen;
+            more_pending = false;
             continue;
+        }
+        if (pending_expire()) {
+            /* Those messages never reached the broker; re-read the inbox. */
+            s_force_scan = true;
         }
         xSemaphoreTake(s_state_lock, portMAX_DELAY);
         uint8_t pending = s_pending_count;
@@ -546,6 +574,11 @@ static void watch_task(void *arg)
         if (!cfg.enabled) {
             continue;
         }
+        if (cpe_sms_state() != CPE_SMS_READY) {
+            /* Listing fails at once without SMS support; retrying on the short
+             * timer would only churn two heap blocks every couple of seconds. */
+            continue;
+        }
 
         int64_t now = esp_timer_get_time() / 1000;
         uint32_t gen = cpe_sms_rx_generation();
@@ -554,18 +587,21 @@ static void watch_task(void *arg)
             gen_changed_at = now;
         }
 
-        bool due = s_force_scan || (gen != gen_done && now - gen_changed_at >= RX_DEBOUNCE_MS) ||
+        bool due = more_pending || s_force_scan ||
+                   (gen != gen_done && now - gen_changed_at >= RX_DEBOUNCE_MS) ||
                    (now - last_scan >= FULL_SCAN_MS);
         if (!due || now - last_try < SCAN_RETRY_MS) {
             continue;
         }
         last_try = now;
-        if (scan_and_publish(&cfg)) {
+        bool more = false;
+        if (scan_and_publish(&cfg, &more)) {
             s_force_scan = false;
             last_scan = now;
             /* The listing marks records read, so the generation will not move
              * again on its own; remember what was covered. */
             gen_done = gen;
+            more_pending = more;
         }
     }
 }
@@ -581,7 +617,10 @@ static void handle_command(const char *payload, size_t len)
     const char *err = NULL;
     if (!cpe_sms_mqtt_cmd_parse(payload, len, &cmd, &err)) {
         ESP_LOGW(TAG, "Rejected a downlink command: %s", err != NULL ? err : "invalid");
-        publish_ack(&cfg, cmd.id, false, err != NULL ? err : "invalid_command");
+        /* Without a usable id there is nobody to address the answer to. */
+        if (cmd.id[0] != '\0') {
+            publish_ack(&cfg, cmd.id, false, err != NULL ? err : "invalid_command");
+        }
         return;
     }
     if (!cfg.enabled) {
@@ -592,8 +631,11 @@ static void handle_command(const char *payload, size_t len)
         return;
     }
     uint32_t id_hash = cpe_sms_mqtt_msg_hash(cmd.id, "", "");
-    if (command_seen(id_hash)) {
-        /* Broker redelivery after a reconnect: acknowledge, do not resend. */
+    xSemaphoreTake(s_state_lock, portMAX_DELAY);
+    bool seen = cpe_sms_mqtt_ring_contains(&s_cmd_ring, id_hash);
+    xSemaphoreGive(s_state_lock);
+    if (seen) {
+        /* Broker redelivery, even across a reboot: acknowledge, do not resend. */
         publish_ack(&cfg, cmd.id, true, NULL);
         return;
     }
@@ -601,7 +643,10 @@ static void handle_command(const char *payload, size_t len)
     const char *send_err = NULL;
     esp_err_t err_send = cpe_sms_send(cmd.to, cmd.text, &send_err, SEND_TIMEOUT_MS);
     if (err_send == ESP_OK) {
-        command_remember(id_hash);
+        xSemaphoreTake(s_state_lock, portMAX_DELAY);
+        cpe_sms_mqtt_ring_add(&s_cmd_ring, id_hash);
+        s_cmd_dirty = true;
+        xSemaphoreGive(s_state_lock);
         ESP_LOGI(TAG, "Remote send accepted");
         publish_ack(&cfg, cmd.id, true, NULL);
     } else {
@@ -630,12 +675,19 @@ static void ctrl_task(void *arg)
 {
     (void)arg;
     int64_t next_start_ms = 0;
+    int64_t online_since_ms = 0;
     for (;;) {
         cpe_status_t st;
         cpe_status_get(&st);
         bool online = st.state == CPE_STATE_ONLINE;
         bool synced = time(NULL) >= TIME_SANE_EPOCH;
         int64_t now = esp_timer_get_time() / 1000;
+
+        if (!online) {
+            online_since_ms = 0;
+        } else if (online_since_ms == 0) {
+            online_since_ms = now;
+        }
 
         if (online && !s_sntp_started) {
             if (esp_netif_sntp_start() == ESP_OK) {
@@ -662,7 +714,11 @@ static void ctrl_task(void *arg)
                 client_stop();
             }
             status_set_state(CPE_SMS_MQTT_IDLE, NULL);
-        } else if (s_client == NULL && now >= next_start_ms) {
+        } else if (s_client == NULL && now >= next_start_ms &&
+                   /* Before the clock is set every certificate looks not yet
+                    * valid, so the handshake can only fail. A blocked NTP must
+                    * not keep forwarding off forever, hence the grace period. */
+                   (synced || now - online_since_ms >= SNTP_GRACE_MS)) {
             /* A client that cannot even be created (no memory) should not be
              * retried on every tick. */
             if (client_start(&cfg) != ESP_OK) {
@@ -710,12 +766,12 @@ static void factory_reset_hook(void)
     cpe_sms_mqtt_config_defaults(&s_cfg);
     xSemaphoreGive(s_cfg_lock);
     xSemaphoreTake(s_state_lock, portMAX_DELAY);
-    cpe_sms_mqtt_ring_init(&s_ring);
-    s_ring_dirty = false;
-    /* An id remembered before the reset must not swallow a command published
+    /* Ids remembered before the reset must not swallow commands published
      * afterwards. */
-    s_cmd_seen_count = 0;
-    s_cmd_seen_next = 0;
+    cpe_sms_mqtt_ring_init(&s_ring);
+    cpe_sms_mqtt_ring_init(&s_cmd_ring);
+    s_ring_dirty = false;
+    s_cmd_dirty = false;
     xSemaphoreGive(s_state_lock);
     s_reload = true;
 }
@@ -738,6 +794,7 @@ esp_err_t cpe_sms_mqtt_init(void)
     cpe_sms_mqtt_config_defaults(&s_cfg);
     (void)cpe_sms_mqtt_store_load(&s_cfg);
     cpe_sms_mqtt_store_ring_load(&s_ring);
+    cpe_sms_mqtt_store_cmd_load(&s_cmd_ring);
     ca_reload();
 
     memset(&s_status, 0, sizeof(s_status));

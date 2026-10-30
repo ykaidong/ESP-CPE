@@ -53,7 +53,6 @@ static cpe_sms_state_t s_state = CPE_SMS_UNSUPPORTED;
 static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_op_lock;
 static int64_t s_last_send_us;
-static TaskHandle_t s_task;
 /* Bumped for every change to the stored messages (a +CMTI, a send, a delete,
  * a prune). The console polls this instead of re-reading the whole list. */
 static uint32_t s_inbox_gen;
@@ -696,12 +695,11 @@ esp_err_t cpe_sms_init(void)
         }
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(sms_task, "cpe_sms", 3072, NULL, 3, &s_task) != pdPASS) {
+    if (xTaskCreate(sms_task, "cpe_sms", 3072, NULL, 3, NULL) != pdPASS) {
         vSemaphoreDelete(s_lock);
         vSemaphoreDelete(s_op_lock);
         s_lock = NULL;
         s_op_lock = NULL;
-        s_task = NULL;
         return ESP_ERR_NO_MEM;
     }
     esp_err_t urc_err = cpe_at_urc_subscribe(&s_urc_sub);

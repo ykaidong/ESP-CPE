@@ -70,6 +70,27 @@ static size_t utf8_codepoints(const char *s)
     return n;
 }
 
+/* GSM 03.38 escape characters: the modem sends them as two septets, so they
+ * take twice the room of a plain ASCII character. The euro sign is the same
+ * case, but it is not ASCII and goes through the UCS2 branch instead. */
+static bool gsm_extension_char(unsigned char c)
+{
+    switch (c) {
+    case '\f':
+    case '^':
+    case '{':
+    case '}':
+    case '\\':
+    case '[':
+    case '~':
+    case ']':
+    case '|':
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool cpe_sms_text_measure(const char *text, bool *is_ascii, int *units)
 {
     if (text == NULL || text[0] == '\0') {
@@ -86,11 +107,14 @@ bool cpe_sms_text_measure(const char *text, bool *is_ascii, int *units)
         *is_ascii = ascii;
     }
     if (ascii) {
-        size_t len = strlen(text);
-        if (units != NULL) {
-            *units = (int)len;
+        int septets = 0;
+        for (const unsigned char *p = (const unsigned char *)text; *p != '\0'; p++) {
+            septets += gsm_extension_char(*p) ? 2 : 1;
         }
-        return len <= 160;
+        if (units != NULL) {
+            *units = septets;
+        }
+        return septets <= 160;
     }
     size_t cp = utf8_codepoints(text);
     if (units != NULL) {

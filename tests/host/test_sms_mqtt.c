@@ -194,14 +194,19 @@ static void test_cmd_parse(void)
     HT_CHECK_STR(cmd.to, "13800138000");
 
     parse_cmd("{\"to\":\"13800138000\",\"text\":\"hi\"}", false, "invalid_command", &cmd);
+    HT_CHECK_STR(cmd.id, "");
     parse_cmd("{\"id\":\"\",\"to\":\"13800138000\",\"text\":\"hi\"}", false,
               "invalid_command", &cmd);
-    parse_cmd("{\"id\":\"x\",\"to\":\"nope\",\"text\":\"hi\"}", false,
+    HT_CHECK_STR(cmd.id, "");
+    /* A rejected command still carries its id so the ack can be addressed. */
+    parse_cmd("{\"id\":\"keep-me\",\"to\":\"nope\",\"text\":\"hi\"}", false,
               "sms_bad_number", &cmd);
+    HT_CHECK_STR(cmd.id, "keep-me");
     parse_cmd("{\"id\":\"x\",\"to\":\"13800138000\"}", false, "invalid_command", &cmd);
     parse_cmd("{\"id\":\"x\",\"to\":\"13800138000\",\"text\":\"\"}", false,
               "invalid_command", &cmd);
     parse_cmd("not json", false, "invalid_command", &cmd);
+    HT_CHECK_STR(cmd.id, "");
 
     char long_text[CPE_SMS_MQTT_TEXT_MAX + 64];
     size_t o = (size_t)snprintf(long_text, sizeof(long_text),
@@ -212,6 +217,7 @@ static void test_cmd_parse(void)
     long_text[o++] = '}';
     long_text[o] = '\0';
     parse_cmd(long_text, false, "sms_text_too_long", &cmd);
+    HT_CHECK_STR(cmd.id, "x");
 
     char id[CPE_SMS_MQTT_ID_MAX + 64];
     o = (size_t)snprintf(id, sizeof(id), "{\"id\":\"");
@@ -219,6 +225,7 @@ static void test_cmd_parse(void)
     o += CPE_SMS_MQTT_ID_MAX + 1;
     snprintf(id + o, sizeof(id) - o, "\",\"to\":\"13800138000\",\"text\":\"hi\"}");
     parse_cmd(id, false, "invalid_command", &cmd);
+    HT_CHECK_STR(cmd.id, "");
 }
 
 static void test_build_sms(void)

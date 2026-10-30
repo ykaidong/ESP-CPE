@@ -223,6 +223,9 @@ bool cpe_sms_mqtt_cmd_parse(const char *json, size_t len, cpe_sms_mqtt_cmd_t *ou
     bool ok = false;
     if (cJSON_IsString(id) && id->valuestring != NULL &&
         id->valuestring[0] != '\0' && strlen(id->valuestring) <= CPE_SMS_MQTT_ID_MAX) {
+        /* Kept even when the rest is rejected: it is the only field the peer
+         * can use to match the acknowledgement. */
+        memcpy(out->id, id->valuestring, strlen(id->valuestring) + 1);
         char number[CPE_SMS_MQTT_NUMBER_MAX + 1];
         if (!cJSON_IsString(to) || to->valuestring == NULL ||
             !cpe_sms_mqtt_normalize_number(to->valuestring, number)) {
@@ -233,7 +236,6 @@ bool cpe_sms_mqtt_cmd_parse(const char *json, size_t len, cpe_sms_mqtt_cmd_t *ou
         } else if (strlen(text->valuestring) > CPE_SMS_MQTT_TEXT_MAX) {
             e = "sms_text_too_long";
         } else {
-            memcpy(out->id, id->valuestring, strlen(id->valuestring) + 1);
             memcpy(out->to, number, sizeof(number));
             memcpy(out->text, text->valuestring, strlen(text->valuestring) + 1);
             ok = true;
@@ -241,7 +243,6 @@ bool cpe_sms_mqtt_cmd_parse(const char *json, size_t len, cpe_sms_mqtt_cmd_t *ou
     }
     cJSON_Delete(root);
     if (!ok) {
-        memset(out, 0, sizeof(*out));
         goto fail;
     }
     return true;

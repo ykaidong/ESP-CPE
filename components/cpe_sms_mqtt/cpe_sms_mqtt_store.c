@@ -27,12 +27,8 @@ static const char *TAG = "sms_mqtt";
 #define K_TOPIC_UP  "up"
 #define K_TOPIC_DN  "dn"
 #define K_RING      "ring"
+#define K_CMD       "cmd"
 #define K_CA        "ca"
-
-void cpe_sms_mqtt_store_defaults(cpe_sms_mqtt_config_t *cfg)
-{
-    cpe_sms_mqtt_config_defaults(cfg);
-}
 
 esp_err_t cpe_sms_mqtt_store_load(cpe_sms_mqtt_config_t *cfg)
 {
@@ -119,11 +115,8 @@ esp_err_t cpe_sms_mqtt_store_save(const cpe_sms_mqtt_config_t *cfg)
     return err;
 }
 
-void cpe_sms_mqtt_store_ring_load(cpe_sms_mqtt_ring_t *ring)
+static void ring_load_key(const char *key, cpe_sms_mqtt_ring_t *ring)
 {
-    if (ring == NULL) {
-        return;
-    }
     cpe_sms_mqtt_ring_init(ring);
     cpe_kv_t kv;
     if (cpe_kv_open(&kv, CPE_KV_NS_SMS_MQTT, false) != ESP_OK) {
@@ -131,7 +124,7 @@ void cpe_sms_mqtt_store_ring_load(cpe_sms_mqtt_ring_t *ring)
     }
     cpe_sms_mqtt_ring_t stored;
     size_t len = sizeof(stored);
-    esp_err_t err = cpe_kv_get_blob(&kv, K_RING, &stored, &len);
+    esp_err_t err = cpe_kv_get_blob(&kv, key, &stored, &len);
     cpe_kv_close(&kv);
     if (err != ESP_OK || len != sizeof(stored) ||
         stored.count > CPE_SMS_MQTT_RING_SIZE ||
@@ -141,25 +134,52 @@ void cpe_sms_mqtt_store_ring_load(cpe_sms_mqtt_ring_t *ring)
     *ring = stored;
 }
 
-esp_err_t cpe_sms_mqtt_store_ring_save(const cpe_sms_mqtt_ring_t *ring)
+static esp_err_t ring_save_key(const char *key, const cpe_sms_mqtt_ring_t *ring)
 {
-    if (ring == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
     cpe_kv_t kv;
     esp_err_t err = cpe_kv_open(&kv, CPE_KV_NS_SMS_MQTT, true);
     if (err != ESP_OK) {
         return err;
     }
-    err = cpe_kv_set_blob(&kv, K_RING, ring, sizeof(*ring));
+    err = cpe_kv_set_blob(&kv, key, ring, sizeof(*ring));
     if (err == ESP_OK) {
         err = cpe_kv_commit(&kv);
     }
     cpe_kv_close(&kv);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to save the duplicate ring: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Failed to save %s: %s", key, esp_err_to_name(err));
     }
     return err;
+}
+
+void cpe_sms_mqtt_store_ring_load(cpe_sms_mqtt_ring_t *ring)
+{
+    if (ring != NULL) {
+        ring_load_key(K_RING, ring);
+    }
+}
+
+esp_err_t cpe_sms_mqtt_store_ring_save(const cpe_sms_mqtt_ring_t *ring)
+{
+    if (ring == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ring_save_key(K_RING, ring);
+}
+
+void cpe_sms_mqtt_store_cmd_load(cpe_sms_mqtt_ring_t *ring)
+{
+    if (ring != NULL) {
+        ring_load_key(K_CMD, ring);
+    }
+}
+
+esp_err_t cpe_sms_mqtt_store_cmd_save(const cpe_sms_mqtt_ring_t *ring)
+{
+    if (ring == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ring_save_key(K_CMD, ring);
 }
 
 char *cpe_sms_mqtt_store_cert_load(void)

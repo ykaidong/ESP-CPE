@@ -33,7 +33,7 @@
     };
 
     var timer = null;
-    var supported = true;
+    var formEnabled = false;
 
     function byId(id) {
         return CPE.byId(id);
@@ -123,12 +123,19 @@
 
     function applyData(data, fill) {
         if (!data) return;
-        supported = data.supported !== false;
-        if (!supported) {
+        if (data.supported === false) {
             setEnabled(false);
+            formEnabled = false;
             setState('当前固件未启用短信转发功能。');
             setNote('');
             return;
+        }
+        if (!formEnabled) {
+            /* A poll can succeed after the first load failed; unlock the form
+             * then, but leave the widgets alone once it is live so a poll does
+             * not undo the disabled state of a save in progress. */
+            setEnabled(true);
+            formEnabled = true;
         }
         if (fill) {
             fillForm(data.config);
@@ -264,9 +271,6 @@
         });
 
         load(true).then(function () {
-            if (supported) {
-                setEnabled(true);
-            }
             scheduleNext();
         }).catch(function (error) {
             setNote(CPE.errorText(error));
