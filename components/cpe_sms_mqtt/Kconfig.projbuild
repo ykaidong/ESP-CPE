@@ -1,0 +1,18 @@
+menu "CPE SMS Forwarding Configuration"
+
+    config CPE_SMS_MQTT_ENABLE
+        bool "Forward SMS to an MQTT broker over TLS"
+        depends on CPE_SMS_ENABLE
+        default y
+        help
+            Adds a forwarding panel to the SMS page: received messages are
+            published to the broker configured there, and downlink send
+            commands are executed when that switch is on. Such a command may
+            address any number, so the broker ACL is the only restriction on
+            who is allowed to publish one. The connection is
+            TLS only (mqtts://), verified against the built-in public CA
+            bundle, or against a CA certificate uploaded from the panel when
+            one is installed. Runs only while the WAN link is online, and an
+            unreachable broker never blocks the data path.
+
+endmenu

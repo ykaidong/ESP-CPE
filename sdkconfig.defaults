@@ -36,6 +36,10 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
 CONFIG_LWIP_TCP_WND_DEFAULT=65535
 CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
 CONFIG_LWIP_UDP_RECVMBOX_SIZE=64
+# Sockets are shared by the console, SNTP and the MQTT client. The IDF default
+# of 10 is exactly the worst case (1 listening + 7 accepted + 1 SNTP + 1 MQTT),
+# so a browser holding its connections makes the MQTT socket() fail.
+CONFIG_LWIP_MAX_SOCKETS=16
 
 # ---- mbedTLS (firmware size) -------------------------------------------
 CONFIG_MBEDTLS_GCM_SUPPORT_NON_AES_CIPHER=n

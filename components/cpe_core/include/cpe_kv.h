@@ -33,6 +33,7 @@ extern "C" {
 #define CPE_KV_NS_SYSTEM        "cpe_sys"       /* boot/recovery counters */
 #define CPE_KV_NS_MAINT         "cpe_maint"     /* maintenance policy */
 #define CPE_KV_NS_STA_NAMES     "sta_names"     /* station nicknames */
+#define CPE_KV_NS_SMS_MQTT      "cpe_mqtt"      /* SMS forwarding (MQTTS) */
 
 /** An open NVS namespace. Zero-initialise or use cpe_kv_open(). */
 typedef struct {
@@ -79,6 +80,21 @@ esp_err_t cpe_kv_get_str(const cpe_kv_t *kv, const char *key, char *out, size_t 
 
 /** Write a string value (committed by the caller). */
 esp_err_t cpe_kv_set_str(cpe_kv_t *kv, const char *key, const char *value);
+
+/**
+ * @brief Read a blob value.
+ *
+ * @param out  Destination buffer.
+ * @param len  In: size of @p out. Out: actual blob size.
+ *
+ * @return ESP_OK, ESP_ERR_NVS_INVALID_LENGTH when the stored blob is larger
+ *         than @p out, ESP_ERR_NVS_NOT_FOUND when the key is absent, or
+ *         another NVS error.
+ */
+esp_err_t cpe_kv_get_blob(const cpe_kv_t *kv, const char *key, void *out, size_t *len);
+
+/** Write a blob value (committed by the caller). */
+esp_err_t cpe_kv_set_blob(cpe_kv_t *kv, const char *key, const void *data, size_t len);
 
 #ifdef __cplusplus
 }

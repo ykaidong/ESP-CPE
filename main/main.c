@@ -33,6 +33,7 @@
 #include "cpe_maintenance.h"
 #include "cpe_ota.h"
 #include "cpe_sms.h"
+#include "cpe_sms_mqtt.h"
 #include "app_wifi.h"
 #include "cpe_web.h"
 #include "cpe_wan.h"
@@ -165,6 +166,13 @@ void app_main(void)
     err = cpe_sms_init();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "SMS not started (%s)", esp_err_to_name(err));
+    }
+
+    /* SMS forwarding over MQTTS runs on top of cpe_sms; it does nothing while
+     * the feature is switched off and never blocks the data path. */
+    err = cpe_sms_mqtt_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SMS forwarding not started (%s)", esp_err_to_name(err));
     }
 
     /* Long-press the same button to restore factory settings. */

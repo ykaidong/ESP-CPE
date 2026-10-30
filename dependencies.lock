@@ -54,6 +54,16 @@ dependencies:
     - esp32s31
     - esp32p4
     version: 3.1.5
+  espressif/mqtt:
+    component_hash: fb18bc3b65aa8c94693a9811ffc322cca8a65d92d5ec84983d3e385080e3969c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.0
   espressif/usb:
     component_hash: 99eee72ea224d9117d4c342442717a1f20bf8112e2ab5d7d7038b827874f4c92
     dependencies:
@@ -86,9 +96,10 @@ direct_dependencies:
 - espressif/cmake_utilities
 - espressif/iot_eth
 - espressif/iot_usbh_cdc
+- espressif/mqtt
 - espressif/usb
 - idf
 - iot_usbh_ecm
-manifest_hash: e9242271250660eeadf03eaa53d4975bddf7b9ff2db0dbb8ddd868e4bdcf38dc
+manifest_hash: f1b24a012708f1ff746e034ee3e5567a7e2ad0b23db39b4a0bd78c3bb3e5b3ae
 target: esp32s3
 version: 3.0.0

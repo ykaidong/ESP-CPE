@@ -145,9 +145,18 @@ static const cpe_web_error_t ERROR_SPECS[] = {
     { "sms_bad_number",           HTTPD_400,              false },
     { "sms_text_too_long",        HTTPD_400,              false },
     { "sms_rate_limited",         CPE_WEB_HTTPD_429_STR,  false },
+    /* The AT port is held by another SMS/AT user: retry, the device is fine. */
+    { "sms_busy",                 CPE_WEB_HTTPD_409_STR,  false },
     { "sms_send_failed",          CPE_WEB_HTTPD_500_STR,  false },
     { "sms_send_timeout",         CPE_WEB_HTTPD_500_STR,  false },
     { "sms_no_prompt",            CPE_WEB_HTTPD_500_STR,  false },
+    { "sms_mqtt_not_supported",   CPE_WEB_HTTPD_501_STR,  false },
+    { "invalid_mqtt_host",        HTTPD_400,              false },
+    { "invalid_mqtt_port",        HTTPD_400,              false },
+    { "invalid_mqtt_topic",       HTTPD_400,              false },
+    { "invalid_mqtt_auth",        HTTPD_400,              false },
+    { "invalid_mqtt_cert",        HTTPD_400,              false },
+    { "sms_mqtt_save_failed",     CPE_WEB_HTTPD_500_STR,  false },
 };
 
 esp_err_t cpe_web_send_error(httpd_req_t *req, const char *code)

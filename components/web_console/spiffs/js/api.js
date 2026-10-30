@@ -130,14 +130,19 @@ var CPE = (function () {
         }
     }
 
-    function request(method, url, body, timeoutMs) {
+    /* contentType undefined means a JSON body; a plain string is sent verbatim
+     * with the given type (the CA upload needs a raw PEM). */
+    function request(method, url, body, timeoutMs, contentType) {
         return new Promise(function (resolve, reject) {
             var xhr = new XMLHttpRequest();
             xhr.open(method, url, true);
             xhr.timeout = timeoutMs || REQUEST_TIMEOUT_MS;
             xhr.setRequestHeader('Accept', 'application/json');
-            if (body !== undefined && body !== null) {
-                xhr.setRequestHeader('Content-Type', 'application/json');
+            var hasBody = body !== undefined && body !== null;
+            var jsonBody = contentType === undefined;
+            if (hasBody) {
+                xhr.setRequestHeader('Content-Type',
+                                     jsonBody ? 'application/json' : contentType);
             }
             var token = getCsrf();
             if (token) {
@@ -191,7 +196,13 @@ var CPE = (function () {
                  * connection cannot keep occupying a browser connection slot. */
                 reject(new Error('network_error'));
             };
-            xhr.send(body === undefined || body === null ? null : JSON.stringify(body));
+            if (!hasBody) {
+                xhr.send(null);
+            } else if (jsonBody) {
+                xhr.send(JSON.stringify(body));
+            } else {
+                xhr.send(body);
+            }
         });
     }
 
@@ -201,6 +212,10 @@ var CPE = (function () {
 
     function postJson(url, body, timeoutMs) {
         return request('POST', url, body || {}, timeoutMs);
+    }
+
+    function postText(url, text, timeoutMs) {
+        return request('POST', url, text, timeoutMs, 'text/plain');
     }
 
     function getStatus() {
@@ -290,6 +305,13 @@ var CPE = (function () {
         sms_send_timeout: '短信发送超时，请重试',
         sms_no_prompt: '模组未就绪，无法发送短信',
         sms_busy: '模组正忙，请稍后重试',
+        sms_mqtt_not_supported: '当前固件未启用短信转发功能',
+        invalid_mqtt_host: '服务器地址不正确（仅支持域名或 IPv4，不含协议与端口）',
+        invalid_mqtt_port: '端口必须为 1~65535',
+        invalid_mqtt_topic: '主题不正确（1~128 个字符，不能包含 + 或 #）',
+        invalid_mqtt_auth: '用户名/密码不正确（设置密码时必须填写用户名，且不能包含控制字符）',
+        invalid_mqtt_cert: 'CA 证书不正确（需要 PEM 格式的证书文件，且不能包含私钥）',
+        sms_mqtt_save_failed: '转发设置保存失败，请重试',
         network_error: '网络连接失败，设备可能正在重启',
         bad_response: '设备响应异常'
     };
@@ -582,6 +604,7 @@ var CPE = (function () {
         clearCsrf: clearCsrf,
         getJson: getJson,
         postJson: postJson,
+        postText: postText,
         getStatus: getStatus,
         guardSession: guardSession,
         logout: logout,

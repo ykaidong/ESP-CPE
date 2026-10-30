@@ -17,6 +17,7 @@
 #include "cpe_kv.h"
 #include "esp_err.h"
 #include "esp_random.h"
+#include "esp_system.h"
 #include "freertos/semphr.h"
 #include "http_internal.h"
 #include "psa/crypto.h"
@@ -25,6 +26,11 @@ const char *esp_err_to_name(esp_err_t err)
 {
     (void)err;
     return "host-stub";
+}
+
+size_t esp_get_free_heap_size(void)
+{
+    return 0;
 }
 
 /* Deterministic, so a test that depends on randomness fails the same way twice. */

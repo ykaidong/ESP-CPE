@@ -13,11 +13,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "cpe_sms.h"
 #include "http_internal.h"
+
+static const char *TAG = "web_sms";
 
 #define SMS_LIST_TIMEOUT_MS   30000
 #define SMS_SEND_TIMEOUT_MS   60000
@@ -76,6 +81,20 @@ static const char *sms_stat_name(cpe_sms_stat_t stat)
     }
 }
 
+/* Send the buffered JSON as one HTTP chunk and start over. */
+static esp_err_t sms_list_flush(httpd_req_t *req, cpe_web_sbuf_t *sb)
+{
+    if (sb->failed) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (sb->len == 0) {
+        return ESP_OK;
+    }
+    esp_err_t err = httpd_resp_send_chunk(req, sb->data, sb->len);
+    sb->len = 0;
+    return err;
+}
+
 static void sms_list_task(void *arg)
 {
     httpd_req_t *req = (httpd_req_t *)arg;
@@ -89,6 +108,9 @@ static void sms_list_task(void *arg)
 
     cpe_sms_list_t *list = calloc(1, sizeof(*list));
     if (list == NULL) {
+        ESP_LOGE(TAG, "No memory for a %u byte SMS list (free=%u largest=%u)",
+                 (unsigned)sizeof(*list), (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         cpe_web_send_error(req, "out_of_memory");
         httpd_req_async_handler_complete(req);
         vTaskDelete(NULL);
@@ -97,6 +119,10 @@ static void sms_list_task(void *arg)
 
     esp_err_t err = cpe_sms_list(list, SMS_LIST_TIMEOUT_MS);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SMS list failed: %s (free=%u largest=%u)", esp_err_to_name(err),
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        cpe_sms_list_clear(list);
         free(list);
         cpe_web_send_error(req, sms_error_code(err));
         httpd_req_async_handler_complete(req);
@@ -104,24 +130,37 @@ static void sms_list_task(void *arg)
         return;
     }
 
-    cpe_web_sbuf_t sb;
-    cpe_web_sbuf_init(&sb, 512);
-    cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"storage\":{");
-    if (list->storage_capacity > 0) {
-        bool near_full = (int64_t)list->storage_used * 10 >=
-                         (int64_t)list->storage_capacity * 9;
-        cpe_web_sbuf_appendf(&sb,
-                             "\"used\":%d,\"capacity\":%d,\"near_full\":%s},",
-                             list->storage_used, list->storage_capacity,
-                             near_full ? "true" : "false");
-    } else {
-        cpe_web_sbuf_append(&sb, "\"used\":-1,\"capacity\":-1,\"near_full\":false},");
+    /* Stream the response in chunks of one message instead of building the
+     * whole JSON first, so the peak stays a few KB on top of the decoded list. */
+    esp_err_t send_err = httpd_resp_set_status(req, HTTPD_200);
+    if (send_err == ESP_OK) {
+        send_err = httpd_resp_set_type(req, HTTPD_TYPE_JSON);
     }
-    /* Only the first CPE_SMS_MAX_MESSAGES records are listed; the console says
-     * so rather than pretending the inbox is complete. */
-    cpe_web_sbuf_appendf(&sb, "\"truncated\":%s,\"messages\":[",
-                         list->truncated ? "true" : "false");
-    for (size_t i = 0; i < list->count; i++) {
+    if (send_err == ESP_OK) {
+        send_err = cpe_web_set_common_headers(req, true);
+    }
+
+    cpe_web_sbuf_t sb;
+    cpe_web_sbuf_init(&sb, 1024);
+    if (send_err == ESP_OK) {
+        cpe_web_sbuf_append(&sb, "{\"status\":\"ok\",\"storage\":{");
+        if (list->storage_capacity > 0) {
+            bool near_full = (int64_t)list->storage_used * 10 >=
+                             (int64_t)list->storage_capacity * 9;
+            cpe_web_sbuf_appendf(&sb,
+                                 "\"used\":%d,\"capacity\":%d,\"near_full\":%s},",
+                                 list->storage_used, list->storage_capacity,
+                                 near_full ? "true" : "false");
+        } else {
+            cpe_web_sbuf_append(&sb, "\"used\":-1,\"capacity\":-1,\"near_full\":false},");
+        }
+        /* Only the first CPE_SMS_MAX_MESSAGES records are listed; the console
+         * says so rather than pretending the inbox is complete. */
+        cpe_web_sbuf_appendf(&sb, "\"truncated\":%s,\"messages\":[",
+                             list->truncated ? "true" : "false");
+    }
+
+    for (size_t i = 0; send_err == ESP_OK && i < list->count; i++) {
         cpe_sms_msg_t *m = &list->items[i];
         if (i > 0) {
             cpe_web_sbuf_append(&sb, ",");
@@ -139,11 +178,29 @@ static void sms_list_task(void *arg)
         cpe_web_sbuf_append(&sb, ",\"body\":");
         cpe_web_sbuf_append_json_string(&sb, m->body);
         cpe_web_sbuf_append(&sb, "}");
+
+        if (sb.failed) {
+            send_err = ESP_ERR_NO_MEM;
+        } else if (sb.len >= 512) {
+            send_err = sms_list_flush(req, &sb);
+        }
     }
-    cpe_web_sbuf_append(&sb, "]}");
+    if (send_err == ESP_OK) {
+        cpe_web_sbuf_append(&sb, "]}");
+        send_err = sb.failed ? ESP_ERR_NO_MEM : sms_list_flush(req, &sb);
+    }
+    cpe_web_sbuf_free(&sb);
+    cpe_sms_list_clear(list);
     free(list);
 
-    cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
+    if (send_err == ESP_OK) {
+        (void)httpd_resp_send_chunk(req, NULL, 0);
+    } else {
+        /* The headers are already out, so no error body can follow: dropping
+         * the connection is the only honest way to fail. */
+        ESP_LOGW(TAG, "SMS list response aborted: %s (free=%u)",
+                 esp_err_to_name(send_err), (unsigned)esp_get_free_heap_size());
+    }
     httpd_req_async_handler_complete(req);
     vTaskDelete(NULL);
 }

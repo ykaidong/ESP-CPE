@@ -17,6 +17,7 @@ void test_config_validate(void);
 void test_sms(void);
 void test_sms_pdu(void);
 void test_at_urc(void);
+void test_sms_mqtt(void);
 
 int main(void)
 {
@@ -27,5 +28,6 @@ int main(void)
     ht_run_suite("cpe_sms: UCS2 encoding, CPMS/CMTI parsing, concatenation", test_sms);
     ht_run_suite("cpe_sms_pdu: 7-bit/UCS2, addresses, SCTS, concatenation", test_sms_pdu);
     ht_run_suite("cpe_at: result line classification, URC prefix matching", test_at_urc);
+    ht_run_suite("cpe_sms_mqtt: validation, payloads, duplicate ring", test_sms_mqtt);
     return ht_report();
 }

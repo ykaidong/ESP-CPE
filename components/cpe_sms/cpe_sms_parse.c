@@ -155,20 +155,25 @@ static bool parse_cmgl_pdu_header(const char *line, int *index, cpe_sms_stat_t *
 
 /* Decode the accumulated hex into `m`; on failure keep the hex so the record
  * can still be shown and deleted. `truncated` stays clear: it means readable
- * text was cut off, and appending an ellipsis to undecoded hex would say that. */
+ * text was cut off, and appending an ellipsis to undecoded hex would say that.
+ * `body` stays NULL when even that copy cannot be allocated. */
 static void finish_cmgl_pdu(cpe_sms_msg_t *m, const char *hex)
 {
     cpe_sms_pdu_status_t status = cpe_sms_pdu_decode(hex, m);
-    if (status != CPE_SMS_PDU_OK) {
-        m->from[0] = '\0';
-        m->time[0] = '\0';
-        m->uid = 0;
-        m->part_seq = 1;
-        m->part_total = 1;
-        size_t n = strlen(hex);
-        if (n >= sizeof(m->body)) {
-            n = sizeof(m->body) - 1;
-        }
+    if (status == CPE_SMS_PDU_OK || status == CPE_SMS_PDU_NO_MEM) {
+        return;
+    }
+    m->from[0] = '\0';
+    m->time[0] = '\0';
+    m->uid = 0;
+    m->part_seq = 1;
+    m->part_total = 1;
+    size_t n = strlen(hex);
+    if (n >= CPE_SMS_MAX_BODY) {
+        n = CPE_SMS_MAX_BODY - 1;
+    }
+    m->body = malloc(n + 1);
+    if (m->body != NULL) {
         memcpy(m->body, hex, n);
         m->body[n] = '\0';
     }
@@ -371,7 +376,14 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list)
 
         size_t base_i = order[0];
         cpe_sms_msg_t *base = &list->items[base_i];
-        size_t len = strlen(base->body);
+        char *merged = malloc(CPE_SMS_MAX_BODY);
+        if (merged == NULL) {
+            /* Keep the parts as separate entries rather than lose their text. */
+            done[i] = true;
+            continue;
+        }
+        merged[0] = '\0';
+        size_t len = 0;
         bool cut = false;
         bool unread = false;
         bool part_truncated = false;
@@ -383,12 +395,19 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list)
             if (p->truncated) {
                 part_truncated = true;
             }
-            if (k > 0 && !append_utf8(base->body, sizeof(base->body), &len, p->body)) {
+            if (p->body == NULL ||
+                !append_utf8(merged, CPE_SMS_MAX_BODY, &len, p->body)) {
                 cut = true;
             }
             base->indexes[k] = p->index;
             done[order[k]] = true;
             drop[order[k]] = true;
+        }
+        free(base->body);
+        base->body = merged;
+        for (size_t k = 1; k < n; k++) {
+            free(list->items[order[k]].body);
+            list->items[order[k]].body = NULL;
         }
         drop[base_i] = false;
         base->index_count = (uint8_t)n;
@@ -409,7 +428,27 @@ void cpe_sms_merge_parts(cpe_sms_list_t *list)
         }
         w++;
     }
+    /* Moved entries leave a stale copy of their body pointer behind; clear the
+     * vacated tail so cpe_sms_list_clear cannot free the same body twice. */
+    if (w < list->count) {
+        memset(&list->items[w], 0, (list->count - w) * sizeof(list->items[0]));
+    }
     list->count = w;
+}
+
+void cpe_sms_list_clear(cpe_sms_list_t *list)
+{
+    if (list == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < CPE_SMS_MAX_MESSAGES; i++) {
+        free(list->items[i].body);
+        list->items[i].body = NULL;
+    }
+    list->count = 0;
+    list->truncated = false;
+    list->storage_used = -1;
+    list->storage_capacity = -1;
 }
 
 bool cpe_sms_parse_cmti(const char *line, int *index)

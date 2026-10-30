@@ -29,7 +29,15 @@ cpe_sms_state_t cpe_sms_state(void);
  *  decide whether a full list is worth an AT session. */
 uint32_t cpe_sms_inbox_generation(void);
 
-/** List stored messages into `out` (caller allocates; ~50 KB, use heap).
+/** Monotonic counter bumped only by a +CMTI indication. A forwarding task that
+ *  only cares about newly received messages polls this instead of the inbox
+ *  generation, so its own sends and deletes do not trigger a listing. An
+ *  indication can be lost (URC queue overflow, modem reset), so callers still
+ *  need a slow full-list fallback. */
+uint32_t cpe_sms_rx_generation(void);
+
+/** List stored messages into `out` (caller allocates; a few KB for the struct,
+ *  plus a heap copy per body: release both with cpe_sms_list_clear and free).
  *  Received over AT+CMGL=4 in PDU mode; concatenated parts are merged into one
  *  entry using the UDH. Records that cannot be decoded keep their raw hex.
  *  `out->storage_used/capacity` report AT+CPMS (-1 when unknown).

@@ -48,7 +48,10 @@
 #define CPE_WEB_STA_LOCK_TIMEOUT_MS     100
 
 #define CPE_WEB_FILE_PATH_MAX           (ESP_VFS_PATH_MAX + 128)
-#define CPE_WEB_SCRATCH_BUFSIZE         10240
+/* Per-request file chunk. It lives on the handler's stack: httpd runs each
+ * connection in its own task, so a shared buffer in the server context would be
+ * written by every concurrent static-file response at once. */
+#define CPE_WEB_FILE_CHUNK_SIZE         1024
 
 /* A handler must return quickly, so anything that blocks runs in its own
  * one-shot task. All of them are short lived and do the same kind of work, so
@@ -78,7 +81,6 @@ typedef enum {
 
 typedef struct {
     char base_path[ESP_VFS_PATH_MAX + 1];
-    char scratch[CPE_WEB_SCRATCH_BUFSIZE];
 } cpe_web_rest_context_t;
 
 /* Growable string buffer with JSON escaping (used by the response builders). */
@@ -162,11 +164,11 @@ typedef struct {
 } cpe_web_route_t;
 
 /* httpd handler slots: one per table entry plus the catch-all static handler. */
-#define CPE_WEB_HTTPD_MAX_URI_HANDLERS  24
+#define CPE_WEB_HTTPD_MAX_URI_HANDLERS  32
 
 /* One slot per registered URI (registration repeats after every listener
  * re-creation, the table is reset beforehand). */
-#define CPE_WEB_ROUTE_LOG_MAX           24
+#define CPE_WEB_ROUTE_LOG_MAX           32
 
 /* --- http_common.c ------------------------------------------------------- */
 
@@ -302,6 +304,10 @@ esp_err_t api_sms_notify_get_handler(httpd_req_t *req);
 esp_err_t api_sms_list_get_handler(httpd_req_t *req);
 esp_err_t api_sms_send_post_handler(httpd_req_t *req);
 esp_err_t api_sms_delete_post_handler(httpd_req_t *req);
+esp_err_t api_sms_mqtt_get_handler(httpd_req_t *req);
+esp_err_t api_sms_mqtt_post_handler(httpd_req_t *req);
+esp_err_t api_sms_mqtt_ca_post_handler(httpd_req_t *req);
+esp_err_t api_sms_mqtt_ca_clear_post_handler(httpd_req_t *req);
 esp_err_t wlan_general_get_handler(httpd_req_t *req);
 esp_err_t wlan_general_post_handler(httpd_req_t *req);
 esp_err_t wlan_advance_get_handler(httpd_req_t *req);

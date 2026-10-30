@@ -117,3 +117,24 @@ esp_err_t cpe_kv_set_str(cpe_kv_t *kv, const char *key, const char *value)
     }
     return nvs_set_str(kv->handle, key, value);
 }
+
+esp_err_t cpe_kv_get_blob(const cpe_kv_t *kv, const char *key, void *out, size_t *len)
+{
+    if (kv == NULL || kv->handle == 0 || key == NULL || out == NULL || len == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t err = nvs_get_blob(kv->handle, key, out, len);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Failed to read %s/%s: %s", kv->ns ? kv->ns : "?", key,
+                 esp_err_to_name(err));
+    }
+    return err;
+}
+
+esp_err_t cpe_kv_set_blob(cpe_kv_t *kv, const char *key, const void *data, size_t len)
+{
+    if (kv == NULL || kv->handle == 0 || key == NULL || data == NULL || len == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return nvs_set_blob(kv->handle, key, data, len);
+}

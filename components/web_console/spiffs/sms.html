@@ -53,6 +53,73 @@
                     </table>
                 </div>
                 <div class="sms-empty" id="sms-empty"></div>
+
+                <div class="page-title">短信转发（MQTT）</div>
+                <div class="page-detail">
+                    <div class="sms-mqtt-state" id="mqtt-state"></div>
+                    <div class="sms-mqtt-note" id="mqtt-note"></div>
+
+                    <div class="line-base flex flex-ac">
+                        <span class="title">启用转发:</span>
+                        <div class="check-line">
+                            <input class="content-two" type="checkbox" id="mqtt-enabled">
+                            <span class="content-thr">4G 在线时把收到的短信推送到 MQTT 服务器（仅 TLS）。</span>
+                        </div>
+                    </div>
+                    <div class="line-base flex flex-ac">
+                        <span class="title">允许远程发送:</span>
+                        <div class="check-line">
+                            <input class="content-two" type="checkbox" id="mqtt-allow-send">
+                            <span class="content-thr">勾选后执行下行主题中的发送命令，目标号码不受限制。</span>
+                        </div>
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-host">服务器地址:</label>
+                        <input class="content" id="mqtt-host" maxlength="64"
+                               placeholder="mqtt.example.com 或 IPv4" autocomplete="off">
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-port">端口:</label>
+                        <input class="content" id="mqtt-port" type="number" min="1" max="65535"
+                               value="8883" autocomplete="off">
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-user">用户名:</label>
+                        <input class="content" id="mqtt-user" maxlength="64"
+                               placeholder="留空表示匿名登录" autocomplete="off">
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-pass">密码:</label>
+                        <input class="content" id="mqtt-pass" type="password" maxlength="128"
+                               placeholder="留空表示不修改" autocomplete="new-password">
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-topic-up">上行主题:</label>
+                        <input class="content" id="mqtt-topic-up" maxlength="128"
+                               placeholder="例如 cpe/sms/up" autocomplete="off">
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-topic-down">下行主题:</label>
+                        <input class="content" id="mqtt-topic-down" maxlength="128"
+                               placeholder="例如 cpe/sms/down" autocomplete="off">
+                    </div>
+                    <div class="line-base">
+                        <label class="title" for="mqtt-ca-file">CA 证书:</label>
+                        <input class="content sms-mqtt-ca-file" id="mqtt-ca-file" type="file"
+                               accept=".pem,.crt,.cer,text/plain">
+                    </div>
+                    <div class="line-base">
+                        <span class="title">证书来源:</span>
+                        <span class="sms-mqtt-ca-state" id="mqtt-ca-state"></span>
+                    </div>
+                    <div class="line-base-btn sms-mqtt-ca-actions">
+                        <button class="save-btn" type="button" id="mqtt-ca-upload">上传 CA 证书</button>
+                        <button class="save-btn" type="button" id="mqtt-ca-clear">清除 CA 证书</button>
+                    </div>
+                    <div class="line-base-btn">
+                        <button class="save-btn" type="button" id="mqtt-save">保存转发设置</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -60,5 +127,6 @@
 <script src="js/layout.js"></script>
 <script src="js/api.js"></script>
 <script src="js/sms.js"></script>
+<script src="js/sms_mqtt.js"></script>
 </body>
 </html>

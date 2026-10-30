@@ -18,6 +18,7 @@
 #include "usb/usb_helpers.h"
 #include "esp_mac.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "iot_usbh_ecm.h"
@@ -413,7 +414,12 @@ static void _usbh_ecm_recv_data_cb(usbh_cdc_port_handle_t cdc_port_handle, void 
      * a fresh allocation per packet, not a shared scratch buffer. */
     uint8_t *buf = malloc(rx_length);
     if (buf == NULL) {
-        ESP_LOGE(TAG, "Failed to allocate %u bytes for the RX packet", (unsigned)rx_length);
+        ESP_LOGE(TAG,
+                 "Failed to allocate %u bytes for the RX packet "
+                 "(internal free=%u largest=%u)",
+                 (unsigned)rx_length,
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         return;
     }
     esp_err_t ret = usbh_cdc_read_bytes(cdc_port_handle, buf, &rx_length, 0);

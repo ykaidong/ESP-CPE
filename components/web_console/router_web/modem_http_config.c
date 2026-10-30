@@ -115,7 +115,9 @@ static esp_err_t start_http_server(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = CPE_WEB_HTTPD_MAX_URI_HANDLERS;
     config.max_resp_headers = 12;
-    config.max_open_sockets = 7; /* matches the browser per-origin connection limit */
+    /* Leave lwIP quota for SNTP and the MQTT client; a browser that wants more
+     * connections than this queues instead of starving them. */
+    config.max_open_sockets = 4;
     config.recv_wait_timeout = 2;
     config.send_wait_timeout = 3;
     config.lru_purge_enable = true;

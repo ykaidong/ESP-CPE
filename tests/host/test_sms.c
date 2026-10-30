@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpe_sms_parse.h"
@@ -129,7 +130,10 @@ static void add_part(cpe_sms_list_t *list, int index, const char *from,
     m->part_total = (uint8_t)total;
     m->stat = CPE_SMS_STAT_READ;
     snprintf(m->from, sizeof(m->from), "%s", from);
-    snprintf(m->body, sizeof(m->body), "%s", body);
+    m->body = malloc(strlen(body) + 1);
+    if (m->body != NULL) {
+        strcpy(m->body, body);
+    }
 }
 
 static void test_merge_parts(void)
@@ -188,6 +192,20 @@ static void test_merge_parts(void)
     HT_CHECK_INT(list.count, 1);
     HT_CHECK_INT(strlen(list.items[0].body), CPE_SMS_MAX_BODY - 1);
     HT_CHECK(list.items[0].truncated);
+
+    /* The second segment sits at the lower storage index, so merging moves the
+     * base entry down; the vacated slot must not keep its body pointer, or
+     * clearing the list frees it twice. */
+    memset(&list, 0, sizeof(list));
+    add_part(&list, 0, "+861", 90, 2, 2, "B");
+    add_part(&list, 1, "+861", 90, 1, 2, "A");
+    cpe_sms_merge_parts(&list);
+    HT_CHECK_INT(list.count, 1);
+    HT_CHECK_STR(list.items[0].body, "AB");
+    HT_CHECK(list.items[1].body == NULL);
+    cpe_sms_list_clear(&list);
+    HT_CHECK_INT(list.count, 0);
+    HT_CHECK(list.items[0].body == NULL);
 }
 
 void test_sms(void)

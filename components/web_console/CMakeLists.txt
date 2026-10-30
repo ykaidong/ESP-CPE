@@ -6,7 +6,7 @@
 # the requirements automatically, so it is not listed here.
 set(PRIV_REQ esp_wifi esp_event esp_timer nvs_flash spiffs vfs
              lwip esp_http_server cpe_core app_wifi esp_netif cpe_at cpe_wan
-             cpe_maintenance cpe_sms)
+             cpe_maintenance cpe_sms cpe_sms_mqtt)
 
 idf_component_register(SRC_DIRS "router_web"
                 INCLUDE_DIRS "include"

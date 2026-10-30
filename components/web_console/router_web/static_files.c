@@ -169,10 +169,10 @@ static esp_err_t rest_common_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    char *chunk = context->scratch;
+    char chunk[CPE_WEB_FILE_CHUNK_SIZE];
     ssize_t read_bytes;
     do {
-        read_bytes = read(fd, chunk, CPE_WEB_SCRATCH_BUFSIZE);
+        read_bytes = read(fd, chunk, sizeof(chunk));
         if (read_bytes < 0) {
             ESP_LOGE(TAG, "Failed to read static file %s", filepath);
             close(fd);

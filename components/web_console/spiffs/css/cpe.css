@@ -1483,6 +1483,47 @@ body,
     font-size: 13px;
 }
 
+/* ---- SMS forwarding panel ----------------------------------------------- */
+.sms-mqtt-state {
+    font-size: 13px;
+    color: #4a5568;
+}
+
+.sms-mqtt-state.ok {
+    color: #237804;
+}
+
+.sms-mqtt-state.error {
+    color: #cf1322;
+}
+
+.sms-mqtt-note {
+    min-height: 18px;
+    margin: 4px 0 10px;
+    font-size: 12px;
+    color: #d46b08;
+}
+
+.line-base .sms-mqtt-ca-file {
+    height: auto;
+    min-height: 34px;
+    padding: 4px 10px;
+    font-size: 13px;
+}
+
+.sms-mqtt-ca-state {
+    font-size: 12px;
+    color: #888888;
+    line-height: 1.5;
+}
+
+/* Two buttons in one row, aligned under the fields like the other panels. */
+.sms-mqtt-ca-actions {
+    display: flex;
+    margin-top: 0;
+    margin-bottom: 20px;
+}
+
 /* ---- SMS page on phones: full-width form, one card per message --------- */
 @media (max-width: 720px) {
     .sms-send-form {

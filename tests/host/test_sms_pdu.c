@@ -233,7 +233,7 @@ static void test_malformed(void)
     HT_CHECK_INT(cpe_sms_pdu_decode(
                      "00040D91683108108300F000005201520100002306C8329BFD0E", &m),
                  CPE_SMS_PDU_MALFORMED);
-    HT_CHECK_STR(m.body, "");
+    HT_CHECK(m.body == NULL);
 
     /* UCS2 with an odd byte count cannot be decoded. */
     memset(&m, 0, sizeof(m));
@@ -249,7 +249,7 @@ static void test_unsupported(void)
     /* 8-bit user data is not SMS text; the caller keeps the raw hex. */
     memset(&m, 0, sizeof(m));
     HT_CHECK_INT(cpe_sms_pdu_decode(PDU_8BIT, &m), CPE_SMS_PDU_UNSUPPORTED);
-    HT_CHECK_STR(m.body, "");
+    HT_CHECK(m.body == NULL);
 
     /* Compressed user data (DCS bit 5) is not decoded either. */
     memset(&m, 0, sizeof(m));

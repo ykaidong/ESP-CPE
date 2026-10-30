@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpe_sms_pdu.h"
@@ -353,6 +354,7 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode(const char *hex, cpe_sms_msg_t *out)
     if (hex == NULL || out == NULL) {
         return CPE_SMS_PDU_MALFORMED;
     }
+    out->body = NULL;
     if (!hex_to_octets(hex, pdu, &n)) {
         return CPE_SMS_PDU_MALFORMED;
     }
@@ -473,7 +475,17 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode(const char *hex, cpe_sms_msg_t *out)
                 return CPE_SMS_PDU_MALFORMED;
             }
         }
-        decode_7bit(ud, bit_off, septets, out->body, sizeof(out->body), &truncated);
+        /* Every septet expands to at most three UTF-8 bytes. */
+        size_t body_cap = 3 * septets + 1;
+        if (body_cap > CPE_SMS_MAX_BODY) {
+            body_cap = CPE_SMS_MAX_BODY;
+        }
+        out->body = malloc(body_cap);
+        if (out->body == NULL) {
+            return CPE_SMS_PDU_NO_MEM;
+        }
+        out->body[0] = '\0';
+        decode_7bit(ud, bit_off, septets, out->body, body_cap, &truncated);
     } else {
         size_t data_len;
         const uint8_t *text = ud;
@@ -494,7 +506,18 @@ cpe_sms_pdu_status_t cpe_sms_pdu_decode(const char *hex, cpe_sms_msg_t *out)
         if ((size_t)udl > avail || (data_len & 1) != 0) {
             return CPE_SMS_PDU_MALFORMED;
         }
-        decode_ucs2(text, data_len, out->body, sizeof(out->body), &truncated);
+        /* A UTF-16 unit becomes at most three UTF-8 bytes (surrogate pairs
+         * become four, i.e. two bytes per unit). */
+        size_t body_cap = 3 * (data_len / 2) + 1;
+        if (body_cap > CPE_SMS_MAX_BODY) {
+            body_cap = CPE_SMS_MAX_BODY;
+        }
+        out->body = malloc(body_cap);
+        if (out->body == NULL) {
+            return CPE_SMS_PDU_NO_MEM;
+        }
+        out->body[0] = '\0';
+        decode_ucs2(text, data_len, out->body, body_cap, &truncated);
     }
 
     out->truncated = truncated;

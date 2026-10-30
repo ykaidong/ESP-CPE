@@ -13,7 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_log.h"
+#include "esp_system.h"
+
 #include "http_internal.h"
+
+static const char *TAG = "web_json";
 
 /* ------------------------------------------------------------------------- */
 /* Growable string buffer with JSON escaping                                 */
@@ -159,6 +164,8 @@ esp_err_t cpe_web_send_sbuf_json(httpd_req_t *req, const char *status_line,
                                  cpe_web_sbuf_t *sb, bool close_socket)
 {
     if (sb->failed || sb->data == NULL) {
+        ESP_LOGE(TAG, "Response buffer failed at %u bytes (free=%u)",
+                 (unsigned)sb->cap, (unsigned)esp_get_free_heap_size());
         cpe_web_sbuf_free(sb);
         return cpe_web_send_error(req, "out_of_memory");
     }

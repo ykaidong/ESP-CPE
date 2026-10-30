@@ -57,6 +57,9 @@ static TaskHandle_t s_task;
 /* Bumped for every change to the stored messages (a +CMTI, a send, a delete,
  * a prune). The console polls this instead of re-reading the whole list. */
 static uint32_t s_inbox_gen;
+/* Bumped only by a +CMTI. Forwarding cares about reception alone, and the
+ * generic counter above also moves for the device's own sends and deletes. */
+static uint32_t s_rx_gen;
 
 static void sms_touch_inbox(void)
 {
@@ -551,6 +554,7 @@ static bool sms_prune(void)
     }
     if (err != ESP_OK) {
         free(raw);
+        cpe_sms_list_clear(list);
         free(list);
         return true;
     }
@@ -576,6 +580,7 @@ static bool sms_prune(void)
         ESP_LOGW(TAG, "SMS storage full (%d/%d), every record was unread before this scan;"
                       " retrying next cycle", st.used, st.total);
         free(raw);
+        cpe_sms_list_clear(list);
         free(list);
         return true;
     }
@@ -593,6 +598,7 @@ static bool sms_prune(void)
     }
 
     free(raw);
+    cpe_sms_list_clear(list);
     free(list);
     return true;
 }
@@ -619,6 +625,7 @@ static void sms_urc_new_message(const char *line, void *ctx)
     int index = 0;
     if (cpe_sms_parse_cmti(line, &index)) {
         ESP_LOGI(TAG, "New SMS at storage index %d", index);
+        (void)__atomic_add_fetch(&s_rx_gen, 1, __ATOMIC_RELAXED);
         sms_touch_inbox();
     }
 }
@@ -714,6 +721,11 @@ uint32_t cpe_sms_inbox_generation(void)
     return __atomic_load_n(&s_inbox_gen, __ATOMIC_RELAXED);
 }
 
+uint32_t cpe_sms_rx_generation(void)
+{
+    return __atomic_load_n(&s_rx_gen, __ATOMIC_RELAXED);
+}
+
 #else /* !(CONFIG_CPE_SMS_ENABLE && CONFIG_CPE_AT_ENABLE) */
 
 esp_err_t cpe_sms_init(void) { return ESP_OK; }
@@ -725,5 +737,6 @@ esp_err_t cpe_sms_send(const char *number, const char *text, const char **err_st
 esp_err_t cpe_sms_delete_many(const int *indexes, size_t count, uint32_t timeout_ms)
 { (void)indexes; (void)count; (void)timeout_ms; return ESP_ERR_NOT_SUPPORTED; }
 uint32_t cpe_sms_inbox_generation(void) { return 0; }
+uint32_t cpe_sms_rx_generation(void) { return 0; }
 
 #endif /* CONFIG_CPE_SMS_ENABLE */

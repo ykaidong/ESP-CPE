@@ -58,6 +58,16 @@ static const cpe_web_route_t s_routes[] = {
     { .uri = "/api/sms/delete", .method = HTTP_POST,
       .handler = api_sms_delete_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
 
+    /* SMS forwarding */
+    { .uri = "/api/sms/mqtt", .method = HTTP_GET,
+      .handler = api_sms_mqtt_get_handler, .auth = CPE_WEB_AUTH_SESSION },
+    { .uri = "/api/sms/mqtt", .method = HTTP_POST,
+      .handler = api_sms_mqtt_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
+    { .uri = "/api/sms/mqtt/ca", .method = HTTP_POST,
+      .handler = api_sms_mqtt_ca_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
+    { .uri = "/api/sms/mqtt/ca/clear", .method = HTTP_POST,
+      .handler = api_sms_mqtt_ca_clear_post_handler, .auth = CPE_WEB_AUTH_MUTABLE },
+
     /* SoftAP configuration */
     { .uri = "/wlan_general", .method = HTTP_GET,
       .handler = wlan_general_get_handler, .auth = CPE_WEB_AUTH_SESSION },
