@@ -29,9 +29,9 @@
     var lastGeneration = null;
     var lastReady = null;
     var lastListMs = 0;
-    /* Set while the "module has no SMS" banner is up, so recovery clears that
+    /* Set while the "module not ready" banner is up, so recovery clears that
      * message without touching a send result. */
-    var unsupportedShown = false;
+    var notReadyShown = false;
     /* Set by refreshNow(): list right away instead of waiting for the next
      * poll to notice the generation this tab's own action produced. */
     var forceList = false;
@@ -248,12 +248,19 @@
                 lastGeneration = generation;
                 lastReady = false;
                 setFormEnabled(false);
-                setBanner('当前模组不支持短信功能（4G 数据不受影响）。', 'status-banner-info');
-                unsupportedShown = true;
+                if (data.supported === false) {
+                    /* The modem answered and rejected the SMS commands; the
+                     * menu entry is hidden for it, so a bookmark or a stale
+                     * tab should not land on a dead page. */
+                    window.location.replace('/index.html');
+                    return;
+                }
+                setBanner('模组尚未就绪，短信功能暂不可用。', 'status-banner-info');
+                notReadyShown = true;
                 return;
             }
-            if (unsupportedShown) {
-                unsupportedShown = false;
+            if (notReadyShown) {
+                notReadyShown = false;
                 setBanner('');
             }
             var stale = performance.now() - lastListMs >= FALLBACK_LIST_MS;

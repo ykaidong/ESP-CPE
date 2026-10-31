@@ -46,11 +46,19 @@ typedef struct {
  * only pay for a full listing when there is something new. */
 esp_err_t api_sms_notify_get_handler(httpd_req_t *req)
 {
+    cpe_sms_state_t state = cpe_sms_state();
+    /* "supported" only turns false once the modem answered the probe and
+     * rejected it. A modem that is still booting or unplugged stays unknown, so
+     * the console keeps the SMS entry instead of hiding it until a reload. */
+    bool supported = state != CPE_SMS_UNSUPPORTED;
     cpe_web_sbuf_t sb;
     cpe_web_sbuf_init(&sb, 64);
-    cpe_web_sbuf_appendf(&sb, "{\"status\":\"ok\",\"generation\":%u,\"ready\":%s}",
+    cpe_web_sbuf_appendf(&sb,
+                         "{\"status\":\"ok\",\"generation\":%u,\"ready\":%s,"
+                         "\"supported\":%s}",
                          (unsigned)cpe_sms_inbox_generation(),
-                         cpe_sms_state() == CPE_SMS_READY ? "true" : "false");
+                         state == CPE_SMS_READY ? "true" : "false",
+                         supported ? "true" : "false");
     return cpe_web_send_sbuf_json(req, HTTPD_200, &sb, false);
 }
 

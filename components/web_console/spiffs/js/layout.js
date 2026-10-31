@@ -19,7 +19,9 @@
         { href: 'wlan.html', text: 'WLAN设置', pages: ['/wlan.html'] },
         { href: 'system.html', text: '系统设置', pages: ['/system.html'] },
         { href: 'upgrade.html', text: '系统升级', pages: ['/upgrade.html'] },
-        { href: 'sms.html', text: '短信', pages: ['/sms.html'] }
+        /* Some modems reject the SMS commands; the entry is hidden once the
+         * device reports that, and stays visible while the answer is unknown. */
+        { href: 'sms.html', text: '短信', pages: ['/sms.html'], optional: true }
     ];
 
     /* Single administrator account: the header exposes logout directly instead
@@ -85,12 +87,47 @@
         return null;
     }
 
+    /* The SMS entry starts hidden and is revealed by a cheap capability poll
+     * (the endpoint does not touch the AT session). Any failure reveals it:
+     * hiding a working page because the device did not answer would be worse
+     * than showing it for a module without SMS. */
+    function probeOptionalNav(element) {
+        var controller = null;
+        var timer = null;
+        function reveal() {
+            element.hidden = false;
+        }
+        try {
+            controller = new AbortController();
+            timer = setTimeout(function () { controller.abort(); }, 4000);
+        } catch (e) {
+            controller = null;
+        }
+        var options = { credentials: 'same-origin' };
+        if (controller) {
+            options.signal = controller.signal;
+        }
+        fetch('/api/sms/notify', options).then(function (resp) {
+            if (!resp.ok) {
+                return null;
+            }
+            return resp.json();
+        }).then(function (data) {
+            if (!data || data.supported !== false) {
+                reveal();
+            }
+        }).catch(reveal).then(function () {
+            if (timer) clearTimeout(timer);
+        });
+    }
+
     function renderNav(item) {
         var nav = document.getElementById('leftMenu');
         if (!nav) {
             return;
         }
         var list = document.createElement('ul');
+        var optional = [];
         NAV_ITEMS.forEach(function (entry) {
             var element = document.createElement('li');
             var link = document.createElement('a');
@@ -100,9 +137,14 @@
                 link.className = 'content';
             }
             element.appendChild(link);
+            if (entry.optional) {
+                element.hidden = true;
+                optional.push(element);
+            }
             list.appendChild(element);
         });
         nav.appendChild(list);
+        optional.forEach(probeOptionalNav);
     }
 
     /* The page title above the content is generated from the same NAV_ITEMS

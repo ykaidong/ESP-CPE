@@ -15,8 +15,9 @@ extern "C" {
 #endif
 
 typedef enum {
-    CPE_SMS_UNSUPPORTED = 0,  /* AT port absent, or SMS commands rejected */
+    CPE_SMS_UNKNOWN = 0,      /* modem offline, or capability not probed yet */
     CPE_SMS_READY,            /* capability probed and usable */
+    CPE_SMS_UNSUPPORTED,      /* modem answered but rejected the SMS commands */
 } cpe_sms_state_t;
 
 /** Start the SMS probe task. Safe to call once; a no-op afterwards. */

@@ -49,7 +49,7 @@ static const char *TAG = "cpe_sms";
 #define CPE_SMS_MAINT_INTERVAL_MS  60000
 #define CPE_SMS_REPROBE_MS         300000
 
-static cpe_sms_state_t s_state = CPE_SMS_UNSUPPORTED;
+static cpe_sms_state_t s_state = CPE_SMS_UNKNOWN;
 static SemaphoreHandle_t s_lock;
 static SemaphoreHandle_t s_op_lock;
 static int64_t s_last_send_us;
@@ -646,7 +646,7 @@ static void sms_task(void *arg)
         bool ready = cpe_at_ready();
         int64_t now = esp_timer_get_time();
         if (!ready) {
-            sms_set_state(CPE_SMS_UNSUPPORTED);
+            sms_set_state(CPE_SMS_UNKNOWN);
             last_probe_us = 0;
         } else if (!was_ready) {
             last_probe_us = sms_probe() ? now : 0;
@@ -726,6 +726,8 @@ uint32_t cpe_sms_rx_generation(void)
 
 #else /* !(CONFIG_CPE_SMS_ENABLE && CONFIG_CPE_AT_ENABLE) */
 
+/* This build has no SMS at all, so the console hides the page instead of
+ * waiting for a capability that can never appear. */
 esp_err_t cpe_sms_init(void) { return ESP_OK; }
 cpe_sms_state_t cpe_sms_state(void) { return CPE_SMS_UNSUPPORTED; }
 esp_err_t cpe_sms_list(cpe_sms_list_t *out, uint32_t timeout_ms)
