@@ -13,6 +13,11 @@
     var CA_CLEAR_URL = '/api/sms/mqtt/ca/clear';
     var CA_MAX_BYTES = 3900;
     var STATUS_MS = 30000;
+    /* Saving restarts the client on the control task's next tick and the TLS
+     * handshake takes a few more seconds. Poll quickly for a short while so the
+     * state line does not sit on the old value until the next slow refresh. */
+    var FAST_POLL_MS = 2000;
+    var FAST_POLL_WINDOW_MS = 30000;
 
     var STATE_TEXT = {
         disabled: '未启用',
@@ -34,6 +39,7 @@
 
     var timer = null;
     var formEnabled = false;
+    var fastUntil = 0;
 
     function byId(id) {
         return CPE.byId(id);
@@ -61,6 +67,7 @@
         if (!el) return;
         el.textContent = text;
         el.className = cls ? ('sms-mqtt-state ' + cls) : 'sms-mqtt-state';
+        el.title = text;
     }
 
     function setNote(text) {
@@ -89,9 +96,9 @@
         }
         renderCert(runtime.cert_installed === true);
         var state = runtime.state || 'disabled';
-        var text = '状态：' + (STATE_TEXT[state] || state);
+        var text = STATE_TEXT[state] || state;
         if (state === 'connected') {
-            text += '（待确认 ' + (runtime.pending || 0) + ' 条）';
+            text += ' · 待确认 ' + (runtime.pending || 0) + ' 条';
         }
         setState(text, state === 'error' ? 'error'
                         : (state === 'connected' ? 'ok' : ''));
@@ -149,6 +156,13 @@
         });
     }
 
+    function pollDelay() {
+        if (!document.hidden && performance.now() < fastUntil) {
+            return FAST_POLL_MS;
+        }
+        return document.hidden ? STATUS_MS * 4 : STATUS_MS;
+    }
+
     function scheduleNext() {
         if (timer) clearTimeout(timer);
         timer = setTimeout(function () {
@@ -156,7 +170,12 @@
                 load(false).catch(function () { /* keep the last view */ });
             }
             scheduleNext();
-        }, document.hidden ? STATUS_MS * 4 : STATUS_MS);
+        }, pollDelay());
+    }
+
+    function pollFaster() {
+        fastUntil = performance.now() + FAST_POLL_WINDOW_MS;
+        scheduleNext();
     }
 
     function save() {
@@ -182,8 +201,9 @@
             topic_down: f.topicDown.value
         }).then(function () {
             f.pass.value = '';
-            setNote('转发设置已保存。');
-            return load(true);
+            setNote(f.enabled.checked ? '转发设置已保存，正在重新连接…'
+                                      : '转发设置已保存。');
+            return reloadAfterRestart();
         }).catch(function (error) {
             setNote(CPE.errorText(error));
         }).then(function () {
@@ -191,13 +211,15 @@
         });
     }
 
-    /* The control task picks the new certificate up on its next tick, so an
-     * immediate refresh would still report the old state. */
-    function reloadAfterSwitch() {
+    /* The control task picks a saved configuration or certificate up on its
+     * next tick, so an immediate refresh would still report the old state. */
+    function reloadAfterRestart() {
         return new Promise(function (resolve) {
             setTimeout(resolve, 2500);
         }).then(function () {
             return load(true);
+        }).then(function () {
+            pollFaster();
         });
     }
 
@@ -208,7 +230,7 @@
             if (f.caFile) f.caFile.value = '';
             renderCert(true);
             setNote('CA 证书已上传，正在重新连接…');
-            return reloadAfterSwitch();
+            return reloadAfterRestart();
         }).catch(function (error) {
             setNote(CPE.errorText(error));
         }).then(function () {
@@ -244,7 +266,7 @@
             if (f.caFile) f.caFile.value = '';
             renderCert(false);
             setNote('已清除自定义 CA，正在重新连接…');
-            return reloadAfterSwitch();
+            return reloadAfterRestart();
         }).catch(function (error) {
             setNote(CPE.errorText(error));
         }).then(function () {

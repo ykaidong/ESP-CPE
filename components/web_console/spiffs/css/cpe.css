@@ -1484,44 +1484,298 @@ body,
 }
 
 /* ---- SMS forwarding panel ----------------------------------------------- */
-.sms-mqtt-state {
+/* One inset card with a status strip on top, then a fieldset per concern
+ * (options, server, topics, certificate) and the save action at the bottom. */
+.sms-mqtt-panel {
+    margin: 2px 0 6px;
+    padding: 18px;
+    border: 1px solid #e8eef5;
+    border-radius: 8px;
+    background-color: #fbfcfe;
+}
+
+.sms-mqtt-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #eef2f8;
+}
+
+.sms-mqtt-status-label {
     font-size: 13px;
+    color: #8c8c8c;
+}
+
+/* A pill whose dot carries the state color, so the status reads at a glance
+ * even before the text is parsed. */
+.sms-mqtt-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 20px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background-color: #eef2f7;
     color: #4a5568;
+    font-size: 12px;
+    line-height: 16px;
+}
+
+.sms-mqtt-state::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: #8c8c8c;
 }
 
 .sms-mqtt-state.ok {
+    background-color: #e9f6ec;
     color: #237804;
 }
 
+.sms-mqtt-state.ok::before {
+    background-color: #2f9e44;
+}
+
 .sms-mqtt-state.error {
+    background-color: #fdeceb;
     color: #cf1322;
 }
 
+.sms-mqtt-state.error::before {
+    background-color: #cf1322;
+}
+
 .sms-mqtt-note {
-    min-height: 18px;
-    margin: 4px 0 10px;
+    flex-basis: 100%;
     font-size: 12px;
+    line-height: 1.5;
     color: #d46b08;
 }
 
-.line-base .sms-mqtt-ca-file {
-    height: auto;
-    min-height: 34px;
-    padding: 4px 10px;
+/* setNote('') clears the element; hiding it then keeps the strip compact. */
+.sms-mqtt-note:empty {
+    display: none;
+}
+
+.sms-mqtt-group {
+    margin: 18px 0 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.sms-mqtt-legend {
+    padding: 0;
+    margin-bottom: 12px;
     font-size: 13px;
+    font-weight: 600;
+    color: #4a5568;
+}
+
+/* The send form caps its inputs at 480px; inside a grid column the field
+ * should fill the cell instead. */
+.sms-mqtt-group .sms-input {
+    max-width: none;
+}
+
+.sms-mqtt-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+}
+
+.sms-mqtt-grid + .sms-mqtt-grid {
+    margin-top: 12px;
+}
+
+.sms-mqtt-grid-host {
+    grid-template-columns: minmax(0, 2fr) minmax(110px, 1fr);
+}
+
+/* Toggle rows: the checkbox itself is hidden, the track shows the state. The
+ * whole row is a label, so the text is clickable too. */
+.sms-switch {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+    cursor: pointer;
+}
+
+.sms-switch + .sms-switch {
+    border-top: 1px dashed #eef2f8;
+}
+
+.sms-switch input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sms-switch-track {
+    position: relative;
+    flex: 0 0 38px;
+    width: 38px;
+    height: 22px;
+    margin-top: 1px;
+    border-radius: 11px;
+    background-color: #c6d0dc;
+    transition: background-color 0.2s;
+}
+
+.sms-switch-track::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background-color: #ffffff;
+    box-shadow: 0 1px 2px rgba(31, 45, 61, 0.25);
+    transition: transform 0.2s;
+}
+
+.sms-switch input:checked + .sms-switch-track {
+    background-color: #2468a9;
+}
+
+.sms-switch input:checked + .sms-switch-track::after {
+    transform: translateX(16px);
+}
+
+.sms-switch input:focus-visible + .sms-switch-track {
+    box-shadow: 0 0 0 3px rgba(36, 104, 169, 0.18);
+}
+
+.sms-switch input:disabled + .sms-switch-track {
+    opacity: 0.5;
+}
+
+.sms-switch input:disabled ~ .sms-switch-text {
+    opacity: 0.55;
+}
+
+.sms-switch-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.sms-switch-label {
+    font-size: 14px;
+    color: #1f2d3d;
+}
+
+.sms-switch-hint {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #8c8c8c;
 }
 
 .sms-mqtt-ca-state {
+    margin: 0 0 10px;
     font-size: 12px;
-    color: #888888;
-    line-height: 1.5;
+    line-height: 1.6;
+    color: #8c8c8c;
 }
 
-/* Two buttons in one row, aligned under the fields like the other panels. */
-.sms-mqtt-ca-actions {
+.sms-mqtt-ca-row {
     display: flex;
-    margin-top: 0;
-    margin-bottom: 20px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.sms-file {
+    flex: 1 1 240px;
+    min-width: 0;
+    height: 36px;
+    padding: 4px 10px;
+    box-sizing: border-box;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #4a5568;
+    font-family: inherit;
+    font-size: 13px;
+}
+
+.sms-file::file-selector-button {
+    margin-right: 10px;
+    padding: 4px 12px;
+    border: 1px solid #d9e4f0;
+    border-radius: 4px;
+    background-color: #eef4fb;
+    color: #2468a9;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.sms-btn-plain {
+    height: 36px;
+    padding: 0 16px;
+    border: 1px solid #d9d9d9;
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: #4a5568;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.sms-btn-plain:hover:not(:disabled) {
+    background-color: #f2f7fd;
+    border-color: #c4d8ec;
+}
+
+.sms-btn-plain:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.sms-mqtt-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid #eef2f8;
+}
+
+.sms-mqtt-actions .save-btn {
+    min-width: 140px;
+    height: 38px;
+    border-radius: 6px;
+}
+
+@media (max-width: 720px) {
+    .sms-mqtt-panel {
+        padding: 14px;
+    }
+
+    /* One field per row: side-by-side inputs leave too little room for the
+     * placeholders on a phone. */
+    .sms-mqtt-grid,
+    .sms-mqtt-grid-host {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sms-mqtt-ca-row .sms-btn-plain {
+        flex: 1 1 auto;
+    }
+
+    .sms-mqtt-actions .save-btn {
+        width: 100%;
+    }
 }
 
 /* ---- SMS page on phones: full-width form, one card per message --------- */
